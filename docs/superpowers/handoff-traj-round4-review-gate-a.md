@@ -6,7 +6,8 @@ Status: **PASS for the required real-file exactness and performance gates.**
 Branch: `feat/impostor-bond-mvp`.
 Starting point: `a831db46`.
 Task 9 implementation head: `483575dd`.
-Task 10 closure: the commit containing this section.
+Task 10 closure: `9cfcc6bf`.
+Final audited implementation head: `536809fe`.
 
 The ten-task exact prepared-frame pipeline is implemented. Production playback now
 prepares positions and exact bonds together, publishes only complete matching snapshots,
@@ -24,10 +25,16 @@ Task commits:
 7. `34aaaacc` — unify WebGL2 replica ownership.
 8. `44ceca5f` — share trajectory positions with the picker.
 9. `483575dd` — harden exact trajectory presentation.
-10. The commit containing this section — gate exact smooth real trajectory playback.
+10. `9cfcc6bf` — gate exact smooth real trajectory playback.
 
 Prerequisite commit `f65af723` exports the ferrox structure matcher required by the exact
 worker path.
+
+Post-task audits hardened attribute rebinding, unified ownership, transactional prefetch,
+persistent WASM sessions, renderer acknowledgement, packet-owned legacy isolation, and
+main-thread scheduling. The final performance closure snapshots the eight prepared buffer
+keys once per scheduling turn instead of regenerating 20k-atom topology fingerprints in
+every buffer callback.
 
 ### Real-file acceptance evidence
 
@@ -41,28 +48,30 @@ pnpm playwright test \
   --project=chromium --workers=1 --reporter=line
 ```
 
-Outcome: `1 passed (2.8m)`.
+Fresh final outcome at `536809fe`: `1 passed (4.4m)`.
 
 - Input SHA-256:
   `38d4554e93744b7efc53e2add4f7ef90ed8f72557b78e45f0696347434b3e41c`.
 - Shape: 100 frames × 19,968 atoms.
-- Reference sweep: 1,541.21 ms in an independent browser context.
+- Reference sweep: 1,050.85 ms in an independent browser context.
 - Exact displayed bond graphs: 100/100 hashes and counts matched the reference.
-- First four-second unique presented FPS: 28.49.
-- Steady unique presented FPS: 25.72.
+- First four-second unique presented FPS: 27.54.
+- Steady unique presented FPS: 27.16.
 - Required floor: 24 FPS; requested target: 30 FPS.
-- Cold first complete frame: 2,617.97 ms.
-- Three-frame warmup: 3,492.14 ms.
-- Frame-time p95: 50.66 ms; main-thread long tasks: 7.
-- Exact bond compute median/p95: 11.41 / 41.92 ms.
-- Presentation latency median/p95: 0.55 / 414.30 ms.
-- Position uploads: 322, exactly one per unique presented frame; 105,512,960 bytes.
+- Cold first complete-frame diagnostic: 51,288.78 ms.
+- Three-frame warmup diagnostic: 51,412.82 ms.
+- Frame-time p95: 62.31 ms; main-thread long tasks: 6.
+- Exact bond compute median/p95: 10.87 / 81.83 ms.
+- Presentation latency median/p95: 238.40 / 419.84 ms.
+- Position uploads: 301, exactly one per unique presented frame; 98,631,680 bytes.
 - Picker position uploads during passive playback: 0.
-- Renderer-scheduled topology uploads: 322; 449,757,306 live-prefix bytes.
-- Peak prepared cache: 8 frames / 11,209,888 bytes.
-- Peak total retained prepared state: 13,765,264 bytes, below 96 MiB.
-- Maximum random-seek application-state acknowledgement: 0.925 ms, below 100 ms.
+- Renderer-scheduled topology uploads: 301; 85,634,274 live-prefix bytes.
+- Peak prepared cache: 8 frames / 11,209,296 bytes.
+- Peak total retained prepared state: 21,427,136 bytes, below 96 MiB.
+- Maximum random-seek application-state acknowledgement: 2.825 ms, below 100 ms.
 - Prepared playback reported zero stale results and zero failed frames.
+- Worker backend: `rust-wasm-threads`, threading expected, 8 threads; one session
+  initialization, 341 grid-cache hits, and one grid rebuild at the end of measurement.
 - Chromium used headed hardware WebGL through:
   `ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 4060 Laptop GPU/PCIe/SSE2,
   OpenGL 4.5.0)`.
@@ -70,14 +79,15 @@ Outcome: `1 passed (2.8m)`.
 
 ### Final verification
 
-- Focused trajectory/render regression set: 132 passed, 0 failed.
-- Updated WebGPU packet-ownership contract regression: 12 passed, 0 failed.
-- `pnpm test`: 280 files passed, 1 skipped; 5,006 tests passed, 53 skipped,
+- Focused trajectory/render regression set: 117 passed, 0 failed.
+- `pnpm verify:wasm`: all scalar/threaded artifact and bridge assertions passed.
+- Rust library suite: 1,027 passed, 0 failed.
+- `pnpm test`: 284 files passed, 1 skipped; 5,093 tests passed, 53 skipped,
   0 failed.
 - `pnpm check`: 0 errors and 304 pre-existing warnings.
 - `git diff --check`: passed.
 - The plan's literal `python -m pytest` command was run. It stopped during collection
-  before project tests because this machine cannot open
+  after collecting 1,607 items because this machine cannot open
   `libnvrtc-builtins.so.13.0` while importing `scripts/test_eos_surface_energy.py`.
   The start-of-work Python baseline was already non-green and was explicitly accepted:
   1,366 passed, 49 skipped, and 85 unrelated failures. No Python source is changed by
