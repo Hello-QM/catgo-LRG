@@ -1,7 +1,7 @@
 // gpu-visual-supercell Task 4 — WebGL2 bond replica impostors (design §7.2).
 //
-// One base `BaseBondGraph` drives all replica cells: per-half attributes stay
-// 2B-sized (divisor = cell count), `instanceCount = 2B × nx·ny·nz`, and the
+// One base `BaseBondGraph` drives all replica cells: per-bond attributes stay
+// B-sized (divisor = 2 × cell count), `instanceCount = 2B × nx·ny·nz`, and the
 // flat ray-cylinder impostor shader evaluates `cell + jimage` per replica —
 // complete / stub / hide / ghost — against the CURRENT frame lattice uniform.
 // Periodic self-image edges (a === b, jimage ≠ 0) are valid and never
@@ -18,7 +18,11 @@ import {
   AtomReplicaRenderer,
   cell_count_of,
 } from '$lib/structure/gpu/webgl2/atom-replica-renderer'
+import {
+  decode_compact_bond_instance,
+} from '$lib/structure/gpu/webgl2/compact-bond-instance-layout'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import { SharedAtomColorTexture } from '$lib/structure/gpu/webgl2/shared-atom-color-texture'
 import {
   type PeriodicBond,
   resolve_periodic_edge,
@@ -112,6 +116,45 @@ function sweep_cells(
   return cells
 }
 
+describe(`compact bond instance layout`, () => {
+  test.each([
+    [1, 1, 1],
+    [2, 1, 1],
+    [2, 2, 2],
+    [3, 2, 4],
+  ] as const)(`decodes bond, half, and x-fastest cell for dims %j`, (...dims) => {
+    const cell_count = cell_count_of(dims)
+    const group_size = 2 * cell_count
+    const instance_count = BOND_COUNT * group_size
+
+    for (let instance_index = 0; instance_index < instance_count; instance_index++) {
+      const decoded = decode_compact_bond_instance(instance_index, dims)
+      const bond_index = Math.floor(instance_index / group_size)
+      const within_bond = instance_index % group_size
+      const half = Math.floor(within_bond / cell_count) as 0 | 1
+      const cell_index = within_bond % cell_count
+      expect(decoded).toEqual({
+        bond_index,
+        half,
+        cell_index,
+        cell: [
+          cell_index % dims[0],
+          Math.floor(cell_index / dims[0]) % dims[1],
+          Math.floor(cell_index / (dims[0] * dims[1])),
+        ],
+      })
+    }
+  })
+
+  test.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    `rejects invalid instance index %s`,
+    (instance_index) => {
+      expect(() => decode_compact_bond_instance(instance_index, [1, 1, 1]))
+        .toThrow(RangeError)
+    },
+  )
+})
+
 describe(`BondReplicaRenderer — mesh shape`, () => {
   test(`records topology bytes only when the renderer schedules GPU attribute uploads`, () => {
     trajectory_render_diagnostics.reset()
@@ -121,14 +164,19 @@ describe(`BondReplicaRenderer — mesh shape`, () => {
     renderer.update(packet)
     expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
       topology_uploads: 1,
-      // 2 halves per bond × (2f site + 3b image + 1f half + 3f color).
-      topology_upload_bytes: 2 * BOND_COUNT * 27,
+      topology_upload_bytes: BOND_COUNT * 11,
+      bond_main_topology_uploads: 1,
+      bond_main_topology_upload_bytes: BOND_COUNT * 11,
+      bond_main_topology_uploaded_bonds: BOND_COUNT,
     })
 
     renderer.update(packet)
     expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
       topology_uploads: 1,
-      topology_upload_bytes: 2 * BOND_COUNT * 27,
+      topology_upload_bytes: BOND_COUNT * 11,
+      bond_main_topology_uploads: 1,
+      bond_main_topology_upload_bytes: BOND_COUNT * 11,
+      bond_main_topology_uploaded_bonds: BOND_COUNT,
     })
     renderer.dispose()
   })
@@ -148,31 +196,31 @@ describe(`BondReplicaRenderer — mesh shape`, () => {
     renderer.dispose()
   })
 
-  test(`2×2×2 draws 16B instances from 2B-sized half attributes at divisor 8`, () => {
+  test(`2×2×2 draws 16B instances from B-sized bond attributes at divisor 16`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))
 
     // 2 halves per base bond × 8 replica cells = 16B.
     expect(geo(renderer.mesh).instanceCount).toBe(2 * BOND_COUNT * 8)
-    for (const name of [`a_site`, `a_jimage`, `a_half`, `a_color`]) {
-      const half_attr = attr(renderer.mesh, name)
-      // Uploaded buffers stay base-sized: one slot per HALF, not per replica.
-      expect(half_attr.count).toBe(2 * BOND_COUNT)
-      expect(half_attr.meshPerAttribute).toBe(8)
+    for (const name of [`a_site`, `a_jimage`]) {
+      const bond_attr = attr(renderer.mesh, name)
+      expect(bond_attr.count).toBe(BOND_COUNT)
+      expect(bond_attr.meshPerAttribute).toBe(16)
     }
+    expect(geo(renderer.mesh).getAttribute(`a_half`)).toBeUndefined()
+    expect(geo(renderer.mesh).getAttribute(`a_color`)).toBeUndefined()
     renderer.dispose()
   })
 
-  test(`self-image edges land in the half attributes unfiltered`, () => {
+  test(`self-image edges land in the compact bond attributes unfiltered`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))
     const site = attr(renderer.mesh, `a_site`).array as Float32Array
     const jimage = attr(renderer.mesh, `a_jimage`).array as Int8Array
-    const half = attr(renderer.mesh, `a_half`).array as Float32Array
-    // Bond 2 is the (0, 0, [0,0,1]) self-edge → half instances 4 and 5.
-    expect([site[8], site[9], site[10], site[11]]).toEqual([0, 0, 0, 0])
-    expect(Array.from(jimage.slice(12, 18))).toEqual([0, 0, 1, 0, 0, 1])
-    expect([half[4], half[5]]).toEqual([0, 1])
+    // Bond 2 is the (0, 0, [0,0,1]) self-edge: one logical record serves
+    // both halves and every replica cell.
+    expect([site[4], site[5]]).toEqual([0, 0])
+    expect(Array.from(jimage.slice(6, 9))).toEqual([0, 0, 1])
     renderer.dispose()
   })
 })
@@ -194,8 +242,6 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
     const attributes = {
       site: attr(mesh, `a_site`),
       jimage: attr(mesh, `a_jimage`),
-      half: attr(mesh, `a_half`),
-      color: attr(mesh, `a_color`),
     }
 
     renderer.update(builder.build({
@@ -214,13 +260,9 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
     // non-ANGLE GL stacks — see webgl2-replica-atom-resize.test.ts).
     expect(attr(mesh, `a_site`)).not.toBe(attributes.site)
     expect(attr(mesh, `a_jimage`)).not.toBe(attributes.jimage)
-    expect(attr(mesh, `a_half`)).not.toBe(attributes.half)
-    expect(attr(mesh, `a_color`)).not.toBe(attributes.color)
     expect(attr(mesh, `a_site`).array).toBe(attributes.site.array)
     expect(attr(mesh, `a_jimage`).array).toBe(attributes.jimage.array)
-    expect(attr(mesh, `a_half`).array).toBe(attributes.half.array)
-    expect(attr(mesh, `a_color`).array).toBe(attributes.color.array)
-    expect(attr(mesh, `a_site`).meshPerAttribute).toBe(27)
+    expect(attr(mesh, `a_site`).meshPerAttribute).toBe(54)
     expect(geometry.instanceCount).toBe(2 * BOND_COUNT * 27)
 
     const uniforms = (material as THREE.ShaderMaterial).uniforms
@@ -317,6 +359,44 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
     positions.dispose()
   })
 
+  test(`color-only topology updates the shared texture without replacing graph attributes`, () => {
+    const colors = new SharedAtomColorTexture()
+    const renderer = new BondReplicaRenderer({ colors })
+    const builder = create_render_packet_builder()
+    const structure = make_structure(3)
+    const packet = (rgb: Float32Array) => builder.build({
+      structure,
+      bond_connectivity: BONDS,
+      dims: [2, 1, 1],
+      colors: rgb,
+    })
+
+    renderer.update(packet(Float32Array.from([
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+    ])))
+    const site = attr(renderer.mesh, `a_site`)
+    const jimage = attr(renderer.mesh, `a_jimage`)
+    const color_texture = renderer.material.uniforms.uColorTex.value
+    expect(color_texture).toBe(colors.texture)
+    expect(renderer.ghost_material.uniforms.uColorTex.value).toBe(colors.texture)
+    expect(colors.stats().uploads).toBe(1)
+
+    renderer.update(packet(Float32Array.from([
+      0.2, 0.3, 0.4,
+      0.5, 0.6, 0.7,
+      0.8, 0.9, 1,
+    ])))
+
+    expect(attr(renderer.mesh, `a_site`)).toBe(site)
+    expect(attr(renderer.mesh, `a_jimage`)).toBe(jimage)
+    expect(renderer.material.uniforms.uColorTex.value).toBe(color_texture)
+    expect(colors.stats().uploads).toBe(2)
+    renderer.dispose()
+    colors.dispose()
+  })
+
   test(`GLSL3, gl_InstanceID decode, per-replica jimage policy, ray-cast depth`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))
@@ -333,7 +413,13 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
       `uPolicy`,
       `uStubScale`,
       `texelFetch`,
+      `uColorTex`,
+      `uColorTexWidth`,
+      `int group_size = 2 * uCellCount`,
+      `int half = within_bond / uCellCount`,
     ]) expect(material.vertexShader).toContain(token)
+    expect(material.vertexShader).not.toContain(`a_half`)
+    expect(material.vertexShader).not.toContain(`a_color`)
     // Flat (non-interpolated) per-instance cylinder frame + analytic ray-cast.
     expect(material.vertexShader).toContain(`flat varying`)
     expect(material.fragmentShader).toContain(`flat varying`)
@@ -536,12 +622,13 @@ describe(`BondReplicaRenderer — sparse ghost second draw`, () => {
     renderer.update(first)
     const main_geometry = geo(renderer.mesh)
     const ghost_geometry = geo(renderer.ghost_mesh)
-    const main_names = [`a_site`, `a_jimage`, `a_half`, `a_color`] as const
-    const ghost_names = [`g_site`, `g_jimage`, `g_cell`, `g_color`] as const
+    const main_names = [`a_site`, `a_jimage`] as const
+    const ghost_names = [`g_site`, `g_jimage`, `g_cell`] as const
     const main_attrs = main_names.map((name) => attr(renderer.mesh, name))
     const ghost_attrs = ghost_names.map((name) => attr(renderer.ghost_mesh, name))
     const main_arrays = main_attrs.map((attribute) => attribute.array)
     const ghost_arrays = ghost_attrs.map((attribute) => attribute.array)
+    expect(geo(renderer.ghost_mesh).getAttribute(`g_color`)).toBeUndefined()
 
     for (const dims of [
       [2, 1, 1],
@@ -672,7 +759,7 @@ describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
   // fresh-attribute install per frame costs a VAO rebuild + a new GL buffer
   // per attribute per frame (the old ones leak until GC) + full-capacity
   // uploads, which is the #534 playback regression.
-  const HALF_ATTRS = [`a_site`, `a_jimage`, `a_half`, `a_color`] as const
+  const BOND_ATTRS = [`a_site`, `a_jimage`] as const
 
   function packet_with_bonds(
     builder: ReturnType<typeof create_render_packet_builder>,
@@ -694,13 +781,13 @@ describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
     const builder = create_render_packet_builder()
     const renderer = new BondReplicaRenderer()
     renderer.update(packet_with_bonds(builder, 4))
-    const attrs0 = HALF_ATTRS.map((name) => attr(renderer.mesh, name))
+    const attrs0 = BOND_ATTRS.map((name) => attr(renderer.mesh, name))
     const arrays0 = attrs0.map((attribute) => attribute.array)
     expect(geo(renderer.mesh).instanceCount).toBe(8)
 
-    // Shrink 4 → 3 bonds: same attributes, same backing arrays, live span 6.
+    // Shrink 4 → 3 bonds: same attributes, same backing arrays, live span 3.
     renderer.update(packet_with_bonds(builder, 3))
-    HALF_ATTRS.forEach((name, idx) => {
+    BOND_ATTRS.forEach((name, idx) => {
       const attribute = attr(renderer.mesh, name)
       expect(attribute).toBe(attrs0[idx])
       expect(attribute.array).toBe(arrays0[idx])
@@ -709,7 +796,7 @@ describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
 
     // Regrow 3 → 4 bonds (fits capacity): still the same identities.
     renderer.update(packet_with_bonds(builder, 4))
-    HALF_ATTRS.forEach((name, idx) => {
+    BOND_ATTRS.forEach((name, idx) => {
       expect(attr(renderer.mesh, name)).toBe(attrs0[idx])
     })
     expect(geo(renderer.mesh).instanceCount).toBe(8)
@@ -721,14 +808,14 @@ describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(packet_with_bonds(builder, 4))
     renderer.update(packet_with_bonds(builder, 3))
-    for (const name of HALF_ATTRS) {
+    for (const name of BOND_ATTRS) {
       const attribute = attr(renderer.mesh, name)
       expect(attribute.needsUpdate || attribute.version > 0).toBe(true)
       // Ranges accumulate until the draw consumes them (#532 contract); the
-      // latest one must span the full live prefix of 6 halves.
+      // latest one must span the full live prefix of 3 logical bonds.
       const last = attribute.updateRanges.at(-1)!
       expect(last.start).toBe(0)
-      expect(last.count).toBe(6 * attribute.itemSize)
+      expect(last.count).toBe(3 * attribute.itemSize)
     }
     renderer.dispose()
   })
@@ -737,15 +824,15 @@ describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
     const builder = create_render_packet_builder()
     const renderer = new BondReplicaRenderer()
     renderer.update(packet_with_bonds(builder, 2))
-    const before = HALF_ATTRS.map((name) => attr(renderer.mesh, name))
+    const before = BOND_ATTRS.map((name) => attr(renderer.mesh, name))
     ;(geo(renderer.mesh) as unknown as { _maxInstanceCount?: number })
       ._maxInstanceCount = 4
 
     renderer.update(packet_with_bonds(builder, 8))
-    HALF_ATTRS.forEach((name, idx) => {
+    BOND_ATTRS.forEach((name, idx) => {
       const attribute = attr(renderer.mesh, name)
       expect(attribute).not.toBe(before[idx])
-      expect(attribute.array.length).toBeGreaterThanOrEqual(16 * attribute.itemSize)
+      expect(attribute.array.length).toBeGreaterThanOrEqual(8 * attribute.itemSize)
     })
     expect(geo(renderer.mesh).instanceCount).toBe(16)
     expect(

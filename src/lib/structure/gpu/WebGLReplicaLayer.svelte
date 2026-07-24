@@ -24,11 +24,13 @@
   import { AtomReplicaRenderer } from './webgl2/atom-replica-renderer'
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
   import type { SharedPositionTexture } from './webgl2/shared-position-texture'
+  import type { SharedAtomColorTexture } from './webgl2/shared-atom-color-texture'
 
   interface Props {
     packet: RenderPacket
     gpu_positions_rgba?: Float32Array | null
     position_resource: SharedPositionTexture
+    color_resource?: SharedAtomColorTexture
     /** Mount-time flags — which replica draws this layer instance owns. */
     show_atoms?: boolean
     show_bonds?: boolean
@@ -53,6 +55,7 @@
     packet,
     gpu_positions_rgba = null,
     position_resource,
+    color_resource,
     show_atoms = true,
     show_bonds = true,
     bond_radius = 0.15,
@@ -86,6 +89,7 @@
     show_bonds
       ? new BondReplicaRenderer({
         positions: position_resource,
+        colors: color_resource,
         bond_radius,
         stub_scale: incomplete_edge_length_scale,
         ambient_light,

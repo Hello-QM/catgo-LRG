@@ -4,12 +4,13 @@
  * docs/superpowers/specs/2026-07-16-trajectory-supercell-gpu-impostor-design.md).
  *
  * One plain `THREE.Mesh` over an `InstancedBufferGeometry` draws
- * `2B × nx·ny·nz` half-bond impostors from 2B-sized per-half attributes
- * (divisor = cell count) — no `instanceMatrix`, no CPU matrix compose:
+ * `2B × nx·ny·nz` half-bond impostors from B-sized per-bond attributes
+ * (divisor = twice the cell count) — no `instanceMatrix`, no CPU matrix
+ * compose:
  *
- * - `gl_InstanceID % uCellCount` decodes the replica cell; endpoint positions
- *   come from a base-sized RGBA32F texture (one texel per base atom,
- *   refreshed per frame); the CURRENT frame lattice lives in `uLattice`.
+ * - `gl_InstanceID % (2 * uCellCount)` decodes the half and replica cell;
+ *   endpoint positions and colors come from base-sized RGBA32F textures; the
+ *   CURRENT frame lattice lives in `uLattice`.
  * - Per replica the shader evaluates `cell + jimage` for the anchored half:
  *   inside → complete half to the midpoint; outside + `stub` → the
  *   configured incomplete edge; outside + `hide` → collapse; outside +
@@ -47,6 +48,8 @@ import {
   type ReplicaDims,
 } from './atom-replica-renderer'
 import { SharedPositionTexture } from './shared-position-texture'
+import { SharedAtomColorTexture } from './shared-atom-color-texture'
+import { COMPACT_BOND_TOPOLOGY_BYTES } from './compact-bond-instance-layout'
 import { trajectory_render_diagnostics } from '../../trajectory-render-diagnostics'
 
 /** Shader-side boundary-policy codes (uPolicy). */
@@ -140,7 +143,6 @@ type BondGhostPage = {
   sites: THREE.InstancedBufferAttribute
   jimages: THREE.InstancedBufferAttribute
   cells: THREE.InstancedBufferAttribute
-  colors: THREE.InstancedBufferAttribute
 }
 
 /** Enumerate ghost-side halves through the REAL T1 oracle (allocation-lean
@@ -207,6 +209,8 @@ const ALL_CHANGED: RenderPacketDiff = {
 const VERTEX_COMMON = /* glsl */ `
   uniform sampler2D uPosTex;
   uniform int uPosTexWidth;
+  uniform sampler2D uColorTex;
+  uniform int uColorTexWidth;
   uniform mat3 uLattice;
   uniform float uBondRadius;
   varying vec3 vColor;
@@ -220,6 +224,12 @@ const VERTEX_COMMON = /* glsl */ `
     int idx = int(site + 0.5);
     ivec2 uv = ivec2(idx % uPosTexWidth, idx / uPosTexWidth);
     return texelFetch(uPosTex, uv, 0).xyz;
+  }
+
+  vec3 fetchBaseColor(float site) {
+    int idx = int(site + 0.5);
+    ivec2 uv = ivec2(idx % uColorTexWidth, idx / uColorTexWidth);
+    return texelFetch(uColorTex, uv, 0).rgb;
   }
 `
 
@@ -255,14 +265,13 @@ const VERTEX_TAIL = /* glsl */ `
   vImpRadiusSq = view_r * view_r;
 `
 
-// Main replica draw: per-half base attributes at divisor = cell count;
-// gl_InstanceID decodes the replica cell; the boundary policy is evaluated
-// per (half, cell) exactly like classify_half_draw / resolve_periodic_edge.
+// Main replica draw: per-bond base attributes at divisor = 2 * cell count;
+// gl_InstanceID decodes the half and replica cell; the boundary policy is
+// evaluated per (half, cell) exactly like classify_half_draw /
+// resolve_periodic_edge.
 const REPLICA_VERTEX_SHADER = /* glsl */ `
   attribute vec2 a_site;
   attribute vec3 a_jimage;
-  attribute float a_half;
-  attribute vec3 a_color;
   uniform ivec3 uDims;
   uniform int uCellCount;
   uniform int uPolicy;     // 0 stub, 1 hide, 2 ghost-images
@@ -270,7 +279,10 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
   ${VERTEX_COMMON}
 
   void main() {
-    int cell_index = gl_InstanceID % uCellCount;
+    int group_size = 2 * uCellCount;
+    int within_bond = gl_InstanceID % group_size;
+    int half = within_bond / uCellCount;
+    int cell_index = within_bond % uCellCount;
     ivec3 cell = ivec3(
       cell_index % uDims.x,
       (cell_index / uDims.x) % uDims.y,
@@ -279,7 +291,7 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
     vec3 pa = fetchBasePosition(a_site.x);
     vec3 pb = fetchBasePosition(a_site.y);
     ivec3 jimage = ivec3(round(a_jimage));
-    bool is_b_half = a_half > 0.5;
+    bool is_b_half = half == 1;
     // Anchor endpoint lives in THIS replica cell; the partner sits at
     // cell + jimage (half A) / cell - jimage (half B).
     ivec3 probe = is_b_half ? cell - jimage : cell + jimage;
@@ -295,7 +307,7 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
     vec3 d = partner - anchor;
     vec3 tip = anchor + d * 0.5;
     if (!inside && uPolicy == 0) tip = anchor + d * (0.5 * uStubScale);
-    vColor = a_color;
+    vColor = fetchBaseColor(is_b_half ? a_site.y : a_site.x);
     ${VERTEX_TAIL}
   }
 `
@@ -309,7 +321,6 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
   attribute vec2 g_site;
   attribute vec3 g_jimage;
   attribute vec3 g_cell;
-  attribute vec3 g_color;
   ${VERTEX_COMMON}
 
   void main() {
@@ -320,7 +331,7 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
     vec3 anchor = pb;
     vec3 tip = 0.5 * (pa + pb);
     bool collapse = false;
-    vColor = g_color;
+    vColor = fetchBaseColor(g_site.y);
     ${VERTEX_TAIL}
   }
 `
@@ -444,6 +455,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 
 export type BondReplicaOptions = {
   positions?: SharedPositionTexture
+  colors?: SharedAtomColorTexture
   bond_radius?: number
   /** Stub length multiplier for the 'stub' boundary policy (VESTA 0.5). */
   stub_scale?: number
@@ -468,20 +480,20 @@ export class BondReplicaRenderer {
   #positions: SharedPositionTexture
   #release_positions: () => void
   #owns_positions: boolean
+  #colors: SharedAtomColorTexture
+  #owns_colors: boolean
 
-  // Per-half base attributes — capacity-sized CPU mirrors, grow-only.
+  // Per-bond base attributes — capacity-sized CPU mirrors, grow-only.
   // MD playback changes the bond count nearly every frame; reallocating these
-  // per count change re-installed 4 fresh attributes per frame, which cost a
-  // VAO rebuild + 4 new GL buffers (the old ones were never deleted) + full
+  // per count change re-installed fresh attributes per frame, which cost a
+  // VAO rebuild + new GL buffers (the old ones were never deleted) + full
   // capacity-size uploads on every played frame (#534). The live span is
-  // `#half_count`; `instanceCount` and update ranges cover only that prefix,
+  // `#bond_count`; `instanceCount` and update ranges cover only that prefix,
   // so a bond-count change is an in-place rewrite on stable identities.
-  #half_capacity = 0
-  #half_count = 0
+  #bond_capacity = 0
+  #bond_count = 0
   #sites = new Float32Array(0)
   #jimages = new Int8Array(0)
-  #halves = new Float32Array(0)
-  #colors = new Float32Array(0)
 
   // Fixed-capacity sparse pages retain every attribute/backing buffer identity;
   // growth appends pages instead of replacing live VBO resources.
@@ -492,6 +504,8 @@ export class BondReplicaRenderer {
     this.#owns_positions = options.positions === undefined
     this.#positions = options.positions ?? new SharedPositionTexture()
     this.#release_positions = this.#positions.register(`bond`)
+    this.#owns_colors = options.colors === undefined
+    this.#colors = options.colors ?? new SharedAtomColorTexture()
     this.#box = new THREE.BoxGeometry(2, 2, 2)
     for (const geometry of [this.#geometry, this.#ghost_geometry]) {
       geometry.setIndex(this.#box.getIndex())
@@ -502,6 +516,8 @@ export class BondReplicaRenderer {
     const shared_uniforms = {
       uPosTex: { value: this.#positions.texture },
       uPosTexWidth: { value: this.#positions.texture.image.width },
+      uColorTex: { value: this.#colors.texture },
+      uColorTexWidth: { value: this.#colors.texture.image.width },
       uLattice: { value: new THREE.Matrix3() },
       uBondRadius: { value: options.bond_radius ?? 0.15 },
       uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
@@ -598,18 +614,26 @@ export class BondReplicaRenderer {
   update(packet: RenderPacket): void {
     const prev = this.#prev
     this.#positions.update(packet.frame)
+    this.#colors.update(packet.topology)
     this.material.uniforms.uPosTexWidth.value =
       this.#positions.texture.image.width
+    this.material.uniforms.uColorTexWidth.value =
+      this.#colors.texture.image.width
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
     this.#prev = packet
 
-    const graph_changed = diff.topology_changed || diff.bond_graph_changed
+    const graph_changed = prev === null || diff.bond_graph_changed
     let topology_upload_bytes = 0
     if (graph_changed) {
-      topology_upload_bytes += this.#rebuild_half_attrs(packet)
+      const main_bytes = this.#rebuild_bond_attrs(packet)
+      topology_upload_bytes += main_bytes
+      trajectory_render_diagnostics.record_bond_main_topology_upload(
+        this.#bond_count,
+        main_bytes,
+      )
     }
     if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
     if (lattice_changed) this.#upload_lattice(packet)
@@ -654,51 +678,24 @@ export class BondReplicaRenderer {
     set_material_opacity(this.ghost_material, `uOpacity`, opacity)
   }
 
-  #rebuild_half_attrs(packet: RenderPacket): number {
+  #rebuild_bond_attrs(packet: RenderPacket): number {
     const graph = packet.topology.bond_graph
     const bond_count = graph !== undefined ? graph.pairs.length / 2 : 0
-    const half_count = bond_count * 2
-    if (half_count > this.#half_capacity) {
+    if (bond_count > this.#bond_capacity) {
       // Grow-only ×1.5: a fresh attribute install (and its one-time VAO
       // rebuild + full upload) happens O(log growth) times, never per frame.
-      this.#half_capacity = Math.max(
-        half_count,
-        Math.ceil(this.#half_capacity * 1.5),
+      this.#bond_capacity = Math.max(
+        bond_count,
+        Math.ceil(this.#bond_capacity * 1.5),
       )
-      this.#sites = new Float32Array(this.#half_capacity * 2)
-      this.#jimages = new Int8Array(this.#half_capacity * 3)
-      this.#halves = new Float32Array(this.#half_capacity)
-      this.#colors = new Float32Array(this.#half_capacity * 3)
+      this.#sites = new Float32Array(this.#bond_capacity * 2)
+      this.#jimages = new Int8Array(this.#bond_capacity * 3)
     }
-    this.#half_count = half_count
-    if (graph === undefined || half_count === 0) return 0
-    const { colors, atom_count } = packet.topology
-    const color_stride = colors.length === atom_count * 4 ? 4 : 3
-    for (let bi = 0; bi < bond_count; bi++) {
-      const a = graph.pairs[bi * 2]
-      const b = graph.pairs[bi * 2 + 1]
-      const i0 = bi * 2
-      const i1 = i0 + 1
-      this.#sites[i0 * 2] = a
-      this.#sites[i0 * 2 + 1] = b
-      this.#sites[i1 * 2] = a
-      this.#sites[i1 * 2 + 1] = b
-      const ji = bi * 3
-      for (let k = 0; k < 3; k++) {
-        this.#jimages[i0 * 3 + k] = graph.jimages[ji + k]
-        this.#jimages[i1 * 3 + k] = graph.jimages[ji + k]
-      }
-      this.#halves[i0] = 0
-      this.#halves[i1] = 1
-      // Solid per-half color from the anchor atom (hard mid-split convention).
-      const ca = a * color_stride
-      const cb = b * color_stride
-      for (let k = 0; k < 3; k++) {
-        this.#colors[i0 * 3 + k] = colors[ca + k]
-        this.#colors[i1 * 3 + k] = colors[cb + k]
-      }
-    }
-    for (const name of [`a_site`, `a_jimage`, `a_half`, `a_color`]) {
+    this.#bond_count = bond_count
+    if (graph === undefined || bond_count === 0) return 0
+    this.#sites.set(graph.pairs, 0)
+    this.#jimages.set(graph.jimages, 0)
+    for (const name of [`a_site`, `a_jimage`]) {
       const attribute = this.#geometry.getAttribute(name) as
         | THREE.InstancedBufferAttribute
         | undefined
@@ -706,22 +703,33 @@ export class BondReplicaRenderer {
       // Upload only the live prefix. Add WITHOUT clearing: three consumes and
       // clears ranges at draw time and merges overlaps, so multiple syncs
       // between draws accumulate safely (#532 contract).
-      attribute.addUpdateRange(0, half_count * attribute.itemSize)
+      attribute.addUpdateRange(0, bond_count * attribute.itemSize)
       attribute.needsUpdate = true
     }
-    // Bytes in the live prefixes scheduled above: two float site indices,
-    // three signed-byte image offsets, one float half selector, and RGB.
-    return half_count * (2 * 4 + 3 + 4 + 3 * 4)
+    return bond_count * COMPACT_BOND_TOPOLOGY_BYTES
   }
 
   #apply_replicas(packet: RenderPacket): void {
     const dims = packet.replicas.dims
     const cc = cell_count_of(dims)
-    ensure_instanced_attr(this.#geometry, `a_site`, this.#sites, 2, cc, true)
-    ensure_instanced_attr(this.#geometry, `a_jimage`, this.#jimages, 3, cc, true)
-    ensure_instanced_attr(this.#geometry, `a_half`, this.#halves, 1, cc, true)
-    ensure_instanced_attr(this.#geometry, `a_color`, this.#colors, 3, cc, true)
-    this.#geometry.instanceCount = this.#half_count * cc
+    const group_size = 2 * cc
+    ensure_instanced_attr(
+      this.#geometry,
+      `a_site`,
+      this.#sites,
+      2,
+      group_size,
+      true,
+    )
+    ensure_instanced_attr(
+      this.#geometry,
+      `a_jimage`,
+      this.#jimages,
+      3,
+      group_size,
+      true,
+    )
+    this.#geometry.instanceCount = this.#bond_count * group_size
     const dims_val = this.material.uniforms.uDims.value as Int32Array
     dims_val[0] = dims[0]
     dims_val[1] = dims[1]
@@ -746,12 +754,10 @@ export class BondReplicaRenderer {
     const sites = sparse_float_attr(2)
     const jimages = sparse_float_attr(3)
     const cells = sparse_float_attr(3)
-    const colors = sparse_float_attr(3)
     geometry.setAttribute(`g_site`, sites)
     geometry.setAttribute(`g_jimage`, jimages)
     geometry.setAttribute(`g_cell`, cells)
-    geometry.setAttribute(`g_color`, colors)
-    return { mesh, geometry, sites, jimages, cells, colors }
+    return { mesh, geometry, sites, jimages, cells }
   }
 
   #ensure_ghost_pages(count: number): void {
@@ -779,8 +785,6 @@ export class BondReplicaRenderer {
       : EMPTY_GHOST_TABLE
     const count = table.count
     this.#ensure_ghost_pages(count)
-    const { colors, atom_count } = packet.topology
-    const color_stride = colors.length === atom_count * 4 ? 4 : 3
 
     for (let page_idx = 0; page_idx < this.#ghost_pages.length; page_idx++) {
       const page = this.#ghost_pages[page_idx]
@@ -789,7 +793,6 @@ export class BondReplicaRenderer {
       const sites = page.sites.array as Float32Array
       const jimages = page.jimages.array as Float32Array
       const cells = page.cells.array as Float32Array
-      const page_colors = page.colors.array as Float32Array
       for (let local = 0; local < used; local++) {
         const idx = start + local
         sites[local * 2] = table.sites[idx * 2]
@@ -798,25 +801,19 @@ export class BondReplicaRenderer {
           jimages[local * 3 + axis] = table.jimages[idx * 3 + axis]
           cells[local * 3 + axis] = table.cells[idx * 3 + axis]
         }
-        // Ghost-side half is anchored at endpoint B's image → B's color.
-        const src = table.sites[idx * 2 + 1] * color_stride
-        page_colors[local * 3] = colors[src]
-        page_colors[local * 3 + 1] = colors[src + 1]
-        page_colors[local * 3 + 2] = colors[src + 2]
       }
       for (const attribute of [
         page.sites,
         page.jimages,
         page.cells,
-        page.colors,
       ]) commit_sparse_attr(attribute, used)
       page.geometry.instanceCount = used
       delete (page.geometry as unknown as { _maxInstanceCount?: number })
         ._maxInstanceCount
       page.mesh.visible = used > 0
     }
-    // Every live ghost prefix updates 11 Float32 values across four buffers.
-    return count * 11 * Float32Array.BYTES_PER_ELEMENT
+    // Every live ghost prefix updates 8 Float32 values across three buffers.
+    return count * 8 * Float32Array.BYTES_PER_ELEMENT
   }
 
   dispose(): void {
@@ -827,5 +824,6 @@ export class BondReplicaRenderer {
     this.ghost_material.dispose()
     this.#release_positions()
     if (this.#owns_positions) this.#positions.dispose()
+    if (this.#owns_colors) this.#colors.dispose()
   }
 }

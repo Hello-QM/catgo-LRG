@@ -33,6 +33,7 @@
     combined_packet_render_eligible,
   } from './gpu/combined-packet-render-eligible'
   import { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
+  import { SharedAtomColorTexture } from './gpu/webgl2/shared-atom-color-texture'
   import type {
     BaseBondGraph,
     BaseTopology,
@@ -208,7 +209,9 @@
   // --- GPU Picker for O(1) hover/click detection ---
   const picker = create_gpu_picker()
   const shared_position_texture = new SharedPositionTexture()
+  const shared_atom_color_texture = new SharedAtomColorTexture()
   onDestroy(() => shared_position_texture.dispose())
+  onDestroy(() => shared_atom_color_texture.dispose())
 
   // Visual T5 — packet-path unified picking: hover AND click resolve through
   // the WebGL2 replica integer-ID pass while a render packet is active (the
@@ -1285,7 +1288,7 @@
   })
 
   // Preserve the last complete CPU snapshot across a WebGL context cycle.
-  // Three.js recreates the draw consumers; the shared texture is marked for
+  // Three.js recreates the draw consumers; the shared textures are marked for
   // exactly one upload and the on-demand picker is rebuilt on its next use.
   $effect(() => {
     const renderer = threlte.renderer
@@ -1295,6 +1298,7 @@
     const handle_context_restored = () => {
       replica_picker.dispose()
       shared_position_texture.restore()
+      shared_atom_color_texture.restore()
       threlte.invalidate()
     }
     canvas.addEventListener(`webglcontextlost`, handle_context_lost)
@@ -6487,6 +6491,7 @@
               packet={manager_render_packet}
               gpu_positions_rgba={manager_gpu_positions}
               position_resource={shared_position_texture}
+              color_resource={shared_atom_color_texture}
               show_atoms={show_bulk_atoms}
               show_bonds={combined_packet_bonds_visible}
               bond_radius={bond_thickness}

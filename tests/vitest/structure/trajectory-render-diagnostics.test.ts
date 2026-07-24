@@ -61,6 +61,7 @@ describe(`trajectory render diagnostics`, () => {
     diagnostics.record_prepared(0, `hash-0`, 26_001, 18)
     diagnostics.record_position_upload(19_968 * 16)
     diagnostics.record_topology_upload(26_001 * 18)
+    diagnostics.record_bond_main_topology_upload(26_001, 26_001 * 11)
     diagnostics.record_presented(0, 7, `hash-0`, 26_001, 1_050)
     // A duplicate publication is a presentation event, but not a new
     // trajectory frame and therefore cannot inflate trajectory FPS.
@@ -70,6 +71,7 @@ describe(`trajectory render diagnostics`, () => {
     diagnostics.record_prepared(1, `hash-1`, 26_010, 20)
     diagnostics.record_position_upload(19_968 * 16)
     diagnostics.record_topology_upload(26_010 * 18)
+    diagnostics.record_bond_main_topology_upload(26_010, 26_010 * 11)
     diagnostics.record_presented(1, 8, `hash-1`, 26_010, 1_090)
     diagnostics.record(`requested`, 2, 1_100, 9)
     diagnostics.record_prepared(2, `hash-2`, 25_999, 19)
@@ -100,6 +102,9 @@ describe(`trajectory render diagnostics`, () => {
       position_upload_bytes: 2 * 19_968 * 16,
       topology_uploads: 2,
       topology_upload_bytes: (26_001 + 26_010) * 18,
+      bond_main_topology_uploads: 2,
+      bond_main_topology_upload_bytes: (26_001 + 26_010) * 11,
+      bond_main_topology_uploaded_bonds: 26_001 + 26_010,
       picker_position_uploads: 0,
       presentation_latency_ms: [40, 20, 30],
       unique_frame_fps: 25,
@@ -126,6 +131,9 @@ describe(`trajectory render diagnostics`, () => {
       graph_hash_by_frame: {},
       bond_count_by_frame: {},
       position_uploads: 0,
+      bond_main_topology_uploads: 0,
+      bond_main_topology_upload_bytes: 0,
+      bond_main_topology_uploaded_bonds: 0,
     })
   })
 

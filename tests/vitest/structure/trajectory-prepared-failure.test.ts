@@ -14,6 +14,7 @@ import {
   type PreparedTrajectoryFrame,
 } from '$lib/structure/trajectory-prepared-frame'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import { SharedAtomColorTexture } from '$lib/structure/gpu/webgl2/shared-atom-color-texture'
 
 const owner = {}
 
@@ -209,7 +210,9 @@ describe(`prepared-path failure and fallback contracts`, () => {
 
   test(`context restore re-uploads once without replacing texture identity`, () => {
     const positions = new SharedPositionTexture()
-    const texture = positions.texture
+    const colors = new SharedAtomColorTexture()
+    const position_texture = positions.texture
+    const color_texture = colors.texture
     positions.update({
       owner,
       frame_idx: 0,
@@ -217,11 +220,20 @@ describe(`prepared-path failure and fallback contracts`, () => {
       positions: Float32Array.of(1, 2, 3),
       lattice: Float32Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1),
     })
+    colors.update({
+      version: 1,
+      atom_count: 1,
+      colors: Float32Array.of(1, 1, 1),
+    })
 
     expect(positions.restore()).toBe(true)
-    expect(positions.texture).toBe(texture)
+    expect(colors.restore()).toBe(true)
+    expect(positions.texture).toBe(position_texture)
+    expect(colors.texture).toBe(color_texture)
     expect(positions.stats().uploads).toBe(2)
+    expect(colors.stats()).toMatchObject({ uploads: 1, restores: 1 })
     positions.dispose()
+    colors.dispose()
   })
 
   test(`production path never imports the cadence-era diagnostic`, () => {
@@ -231,6 +243,8 @@ describe(`prepared-path failure and fallback contracts`, () => {
     )
     expect(source).not.toContain(`trajectory-bond-legacy-diagnostic`)
     expect(source).toContain(`webglcontextrestored`)
+    expect(source).toContain(`shared_position_texture.restore()`)
+    expect(source).toContain(`shared_atom_color_texture.restore()`)
     expect(source).toContain(`prepared_pipeline.clear()`)
   })
 })

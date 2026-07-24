@@ -36,6 +36,9 @@ export type TrajectoryRenderDiagnostics = TrajectoryRetainedState & {
   position_upload_bytes: number
   topology_uploads: number
   topology_upload_bytes: number
+  bond_main_topology_uploads: number
+  bond_main_topology_upload_bytes: number
+  bond_main_topology_uploaded_bonds: number
   picker_position_uploads: number
   presentation_latency_ms: number[]
   unique_frame_fps: number
@@ -64,6 +67,7 @@ export type TrajectoryRenderDiagnosticsRecorder = {
   ): void
   record_position_upload(bytes: number): void
   record_topology_upload(bytes: number): void
+  record_bond_main_topology_upload(bond_count: number, bytes: number): void
   record_picker_position_upload(): void
   record_long_task(): void
   update_retained(state: TrajectoryRetainedState): void
@@ -150,6 +154,9 @@ function initial_state(): MutableDiagnostics {
     position_upload_bytes: 0,
     topology_uploads: 0,
     topology_upload_bytes: 0,
+    bond_main_topology_uploads: 0,
+    bond_main_topology_upload_bytes: 0,
+    bond_main_topology_uploaded_bonds: 0,
     picker_position_uploads: 0,
   }
 }
@@ -275,6 +282,11 @@ export function create_trajectory_render_diagnostics():
     record_topology_upload(bytes) {
       state.topology_uploads++
       state.topology_upload_bytes += Math.max(0, bytes)
+    },
+    record_bond_main_topology_upload(bond_count, bytes) {
+      state.bond_main_topology_uploads++
+      state.bond_main_topology_upload_bytes += Math.max(0, bytes)
+      state.bond_main_topology_uploaded_bonds += Math.max(0, bond_count)
     },
     record_picker_position_upload() {
       state.picker_position_uploads++
