@@ -2613,21 +2613,40 @@ mod tests {
         bytes
     }
 
+    fn neighbor_bytes_digest(bytes: &[u8]) -> [u64; 2] {
+        let mut first = 0xcbf29ce484222325u64;
+        let mut second = 0x9e3779b97f4a7c15u64;
+        for &byte in bytes {
+            first = (first ^ byte as u64).wrapping_mul(0x100000001b3);
+            second ^= (byte as u64)
+                .wrapping_add(0x9e3779b97f4a7c15)
+                .wrapping_add(second << 6)
+                .wrapping_add(second >> 2);
+        }
+        [first, second]
+    }
+
     #[test]
-    fn trajectory_workspace_periodic_crystal_matches_legacy_bytes_and_order() {
+    fn trajectory_workspace_periodic_crystal_matches_base_bytes_and_order() {
         let structure = make_random_structure(96, Lattice::cubic(18.0), 1.0, 0.0);
         let config = NeighborListConfig {
             cutoff: 4.0,
             cell_list_threshold: 0,
             ..Default::default()
         };
-        let expected = build_neighbor_list(&structure, &config);
-
         let mut workspace = NeighborSearchWorkspace::default();
         let actual =
             workspace.rebuild_from_fractional(&structure.frac_coords, &structure.lattice, &config);
+        let bytes = neighbor_list_bytes(actual);
 
-        assert_eq!(neighbor_list_bytes(actual), neighbor_list_bytes(&expected));
+        // Produced independently by the pre-refactor implementation at
+        // f5a97cabdbb70ec5ac7e17e700ce25cca9b4ace4 in both feature modes.
+        assert_eq!(actual.len(), 432);
+        assert_eq!(bytes.len(), 15_552);
+        assert_eq!(
+            neighbor_bytes_digest(&bytes),
+            [0xbc13c3dc9921c1c1, 0x2737ec52e96cd120]
+        );
     }
 
     #[test]
@@ -2771,26 +2790,64 @@ mod tests {
 
     #[test]
     fn trajectory_workspace_scalar_and_rayon_match_fixture_bytes() {
-        let lattice = Lattice::cubic(10.0);
-        let frac_coords = [Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.25, 0.0, 0.0)];
+        let lattice = Lattice::cubic(256.0);
+        let mut frac_coords: Vec<Vector3<f64>> = (0..130)
+            .map(|idx| {
+                Vector3::new(
+                    ((idx % 10) * 16 + 8) as f64 / 256.0,
+                    (((idx / 10) % 10) * 16 + 8) as f64 / 256.0,
+                    ((idx / 100) * 16 + 8) as f64 / 256.0,
+                )
+            })
+            .collect();
+        for (center, neighbor) in [(0, 1), (64, 65), (128, 129)] {
+            frac_coords[neighbor] = frac_coords[center] + Vector3::new(0.5 / 256.0, 0.0, 0.0);
+        }
+
+        // 130 atoms force three chunks because the Rayon chunk-size floor is
+        // 64. Each chunk has one directed pair in both center directions.
+        assert_eq!(frac_coords.len().div_ceil(64), 3);
+
+        let warmup_config = NeighborListConfig {
+            cutoff: 20.1,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
         let config = NeighborListConfig {
-            cutoff: 3.0,
+            cutoff: 1.0,
             cell_list_threshold: 0,
             ..Default::default()
         };
         let mut expected = Vec::new();
-        for (center, neighbor) in [(0u64, 1u64), (1, 0)] {
+        for (center, neighbor) in [
+            (0u64, 1u64),
+            (1, 0),
+            (64, 65),
+            (65, 64),
+            (128, 129),
+            (129, 128),
+        ] {
             expected.extend_from_slice(&center.to_le_bytes());
             expected.extend_from_slice(&neighbor.to_le_bytes());
-            expected.extend_from_slice(&2.5f64.to_bits().to_le_bytes());
+            expected.extend_from_slice(&0.5f64.to_bits().to_le_bytes());
             for image in [0i32; 3] {
                 expected.extend_from_slice(&image.to_le_bytes());
             }
         }
         let mut workspace = NeighborSearchWorkspace::default();
 
+        let warmup = workspace.rebuild_from_fractional(&frac_coords, &lattice, &warmup_config);
+        assert!(warmup.len() > 6);
         let actual = workspace.rebuild_from_fractional(&frac_coords, &lattice, &config);
 
         assert_eq!(neighbor_list_bytes(actual), expected);
+        #[cfg(feature = "rayon")]
+        assert_eq!(
+            workspace.rayon_partials[..3]
+                .iter()
+                .map(NeighborList::len)
+                .collect::<Vec<_>>(),
+            [2, 2, 2]
+        );
     }
 }
