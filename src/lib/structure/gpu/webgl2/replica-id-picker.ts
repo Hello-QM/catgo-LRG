@@ -613,6 +613,12 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
 
 // Hard ray-cylinder pick fragment — the visual renderer's proven intersection
 // math minus lighting/AA, ID color out, analytic depth.
+/**
+ * Ray-cylinder intersection adapted from OVITO Basic
+ * commit 0b2cdccef7452bf28212e15daf9df2dc7a545bcc.
+ * Copyright 2026 OVITO GmbH, Germany. Used under the MIT option.
+ * Full permission notice and CatGo modifications: THIRD_PARTY_NOTICES.md.
+ */
 const BOND_PICK_FRAGMENT_SHADER = /* glsl */ `
   uniform mat4 projectionMatrix;
   uniform mat4 uInvProjection;

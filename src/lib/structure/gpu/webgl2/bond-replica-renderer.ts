@@ -329,6 +329,12 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
 // inverse projection, cast against the half-cylinder frame (flat varyings),
 // write analytic gl_FragDepth, silhouette/cap coverage AA. The intersection
 // math is the proven recipe from the trajectory bond-impostor path.
+/**
+ * Ray-cylinder intersection adapted from OVITO Basic
+ * commit 0b2cdccef7452bf28212e15daf9df2dc7a545bcc.
+ * Copyright 2026 OVITO GmbH, Germany. Used under the MIT option.
+ * Full permission notice and CatGo modifications: THIRD_PARTY_NOTICES.md.
+ */
 const FRAGMENT_SHADER = /* glsl */ `
   uniform float uOpacity;
   uniform vec3 uLightDir;
