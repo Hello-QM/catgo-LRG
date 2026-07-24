@@ -270,6 +270,24 @@ describe(`exact prepared trajectory ownership`, () => {
     )
   })
 
+  test(`packet ownership suspends the legacy per-frame position resync`, () => {
+    const component = readFileSync(
+      `src/lib/structure/bonding/BondManagerInstances.svelte`,
+      `utf8`,
+    )
+    const effect_start = component.indexOf(
+      `  $effect(() => {\n    positions_version`,
+    )
+    const effect_end = component.indexOf(`\n  })`, effect_start)
+    const effect = component.slice(effect_start, effect_end)
+
+    expect(effect_start).toBeGreaterThan(-1)
+    expect(effect).toContain(`const packet_owned = packet_renderer_owned`)
+    expect(effect).toContain(`if (packet_owned || !renderer) return`)
+    expect(effect.indexOf(`if (packet_owned || !renderer) return`))
+      .toBeLessThan(effect.indexOf(`force_full_resync()`))
+  })
+
   test(`packet ownership mirrors bonds only through the live legacy fallback`, () => {
     const scene = readFileSync(
       `src/lib/structure/StructureScene.svelte`,

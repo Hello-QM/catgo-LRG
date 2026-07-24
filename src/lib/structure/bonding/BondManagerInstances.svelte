@@ -1280,7 +1280,11 @@
   $effect(() => {
     positions_version
     atom_positions
-    if (!renderer) return
+    // The combined packet layer already consumes this exact positions buffer.
+    // Keep packet ownership tracked so relinquishing it reruns this effect and
+    // immediately refreshes the legacy mesh from the latest positions.
+    const packet_owned = packet_renderer_owned
+    if (packet_owned || !renderer) return
     // Untracked: force_full_resync reads manager $state (version/count);
     // tracked it would re-fire this effect on every version bump on top of
     // the positions-identity dep above — a duplicate full matrix pass.
