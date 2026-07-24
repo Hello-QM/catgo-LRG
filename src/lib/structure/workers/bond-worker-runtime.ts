@@ -149,6 +149,7 @@ export interface ComputeTrajectoryFrameTypedResult
   extends ComputeBondsTypedResult {
   gpu_positions_rgba: Float32Array
   session_diagnostics: TrajectoryBondSessionDiagnostics
+  worker_timings: TrajectoryWorkerTimings
   threading_expected: boolean
 }
 

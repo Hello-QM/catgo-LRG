@@ -921,6 +921,10 @@ describe(`prepare_exact_trajectory_frame`, () => {
   })
 
   test(`small typed-worker failure uses the exact object backend and local packing`, async () => {
+    const record_bond_worker_timings = vi.spyOn(
+      trajectory_render_diagnostics,
+      `record_bond_worker_timings`,
+    )
     typed_mock.mockRejectedValue(new Error(`typed worker unavailable`))
     object_mock.mockResolvedValue([bond(0, 1, [0, 0, 0])])
     pack_mock.mockRejectedValue(new Error(`packing worker unavailable`))
@@ -931,6 +935,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(typed_mock).toHaveBeenCalledOnce()
     expect(object_mock).toHaveBeenCalledOnce()
     expect(pack_mock).toHaveBeenCalledOnce()
+    expect(record_bond_worker_timings).not.toHaveBeenCalled()
     expect([...prepared.graph.pairs]).toEqual([0, 1])
     expect([...prepared.gpu_positions_rgba]).toEqual([
       request.source.positions[0], 0, 0, 1,
@@ -943,6 +948,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       bond_worker_total_ms: [],
       bond_worker_roundtrip_ms: [],
     })
+    record_bond_worker_timings.mockRestore()
   })
 
   test(`large typed-worker failure rejects without an object or main-thread fallback`, async () => {

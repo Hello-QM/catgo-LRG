@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest'
 import {
   compute_trajectory_frame_typed,
   pack_trajectory_positions_worker,
@@ -7,8 +7,10 @@ import {
 } from '$lib/structure/workers/bond-worker-api'
 import {
   type BondWorkerHandle,
+  type ComputeTrajectoryFrameTypedResult,
   create_bond_worker_runtime,
   type TrajectoryTypedBondInput,
+  type TrajectoryWorkerTimings,
 } from '$lib/structure/workers/bond-worker-runtime'
 import {
   POSITION_TEXTURE_ROW_ATOMS,
@@ -837,6 +839,9 @@ describe(`trajectory runtime API`, () => {
     set_bond_worker_runtime_for_tests(runtime)
 
     const result = await compute_trajectory_frame_typed(trajectory_input())
+    const public_result: ComputeTrajectoryFrameTypedResult = result
+    expectTypeOf(public_result.worker_timings)
+      .toEqualTypeOf<TrajectoryWorkerTimings>()
     expect(result.backend).toBe(`rust-wasm-scalar`)
     expect(result.threading_expected).toBe(false)
     expect(result.elapsed_ms).toBe(5)
@@ -890,6 +895,12 @@ describe(`trajectory runtime API`, () => {
           grid_rebuilds: 1,
           capacity_growths: 2,
         },
+        worker_timings: {
+          wasm_compute_ms: 2,
+          position_pack_ms: 0.5,
+          table_copy_ms: 1,
+          worker_total_ms: 4,
+        },
       })),
       pack_trajectory_positions: vi.fn(async () => new Float32Array(0)),
       terminate: vi.fn(),
@@ -913,5 +924,6 @@ describe(`trajectory runtime API`, () => {
     expect(result.backend).toBe(`rust-wasm-scalar`)
     expect(result.threading_expected).toBe(true)
     expect(result.session_diagnostics.thread_count).toBe(1)
+    expect(result.worker_timings.worker_total_ms).toBe(4)
   })
 })
