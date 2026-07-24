@@ -75,10 +75,13 @@ export interface TypedBondInput {
 export interface TrajectoryTypedBondInput {
   session: {
     id: number
+    topology_fingerprint: string
     atomic_numbers: Uint8Array
+    stable_site_ids: Uint32Array | null
     pbc: [boolean, boolean, boolean] | null
     options: Record<string, number>
   }
+  frame_idx: number
   positions: Float32Array
   lattice_matrix: number[][] | null
 }

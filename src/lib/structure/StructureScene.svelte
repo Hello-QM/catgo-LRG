@@ -92,6 +92,9 @@
     type PreparedFrameKey,
   } from './trajectory-prepared-frame'
   import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
+  import {
+    trajectory_bond_topology_fingerprint,
+  } from './trajectory-bond-session'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
     AtomManager,
@@ -2780,12 +2783,21 @@
     // non-indexed trajectories may use the synchronous displayed fallback.
     const current_source = getter?.(frame_idx) ??
       (requester ? null : fallback_source)
+    const topology_fingerprint = trajectory_bond_topology_fingerprint({
+      atomic_numbers: raw_packet.topology.atomic_numbers,
+      site_ids: current_source?.stable_site_ids ?? null,
+      pbc,
+      strategy: `atom_radii`,
+      options,
+      rules_version,
+    })
     const current_key: PreparedFrameKey = {
       owner: raw_packet.frame.owner,
       frame_idx,
       positions_version: current_source?.positions_version ??
         raw_packet.frame.positions_version,
       topology_version: raw_packet.topology.version,
+      topology_fingerprint,
       rules_version,
     }
     trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)

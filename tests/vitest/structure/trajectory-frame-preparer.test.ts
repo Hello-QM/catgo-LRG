@@ -87,6 +87,7 @@ function input(
       lattice,
       positions_version: 13,
       topology_stable: true,
+      stable_site_ids: Uint32Array.from([7, 9]),
     },
     strategy: `atom_radii`,
     options: { tolerance: 0.1, max_bond_dist: 4, min_dist: 0.01 },
@@ -145,6 +146,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       lattice_matrix: request.source.lattice,
       session: expect.objectContaining({
         atomic_numbers: request.packet.topology.atomic_numbers,
+        stable_site_ids: request.source.stable_site_ids,
         pbc: request.pbc,
         options: request.options,
       }),
@@ -167,6 +169,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       frame_idx: 5,
       positions_version: 13,
       topology_version: 11,
+      topology_fingerprint: expect.any(String),
       rules_version: `rules-v2`,
     })
     expect(prepared.graph_hash).toHaveLength(40)
@@ -196,6 +199,89 @@ describe(`prepare_exact_trajectory_frame`, () => {
     )
     expect(first.packet.frame.owner).not.toBe(second.packet.frame.owner)
     expect(session_ids[0]).not.toBe(session_ids[1])
+  })
+
+  test(`segments sessions by complete topology data and reuses copied equal data`, async () => {
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const first = input()
+    const copied = input()
+    copied.packet.frame.owner = first.packet.frame.owner
+    copied.packet.topology.atomic_numbers =
+      first.packet.topology.atomic_numbers.slice()
+    copied.source.stable_site_ids = first.source.stable_site_ids?.slice()
+    copied.options = { ...first.options }
+    const changed_numbers = input()
+    changed_numbers.packet.frame.owner = first.packet.frame.owner
+    changed_numbers.packet.topology.atomic_numbers = Uint8Array.from([6, 8])
+    changed_numbers.source.stable_site_ids =
+      first.source.stable_site_ids?.slice()
+    const changed_site_ids = input()
+    changed_site_ids.packet.frame.owner = first.packet.frame.owner
+    changed_site_ids.packet.topology.atomic_numbers =
+      first.packet.topology.atomic_numbers.slice()
+    changed_site_ids.source.stable_site_ids = Uint32Array.from([7, 10])
+
+    const prepared = await Promise.all([
+      prepare_exact_trajectory_frame(first),
+      prepare_exact_trajectory_frame(copied),
+      prepare_exact_trajectory_frame(changed_numbers),
+      prepare_exact_trajectory_frame(changed_site_ids),
+    ])
+
+    const sessions = typed_mock.mock.calls.map(([call]) => call.session)
+    expect(sessions[1].id).toBe(sessions[0].id)
+    expect(sessions[1].topology_fingerprint).toBe(
+      sessions[0].topology_fingerprint,
+    )
+    expect(prepared[1].key.topology_fingerprint).toBe(
+      prepared[0].key.topology_fingerprint,
+    )
+    for (const idx of [2, 3]) {
+      expect(sessions[idx].id).not.toBe(sessions[0].id)
+      expect(sessions[idx].topology_fingerprint).not.toBe(
+        sessions[0].topology_fingerprint,
+      )
+      expect(prepared[idx].key.topology_fingerprint).toBe(
+        sessions[idx].topology_fingerprint,
+      )
+    }
+  })
+
+  test(`snapshots mutable topology inputs before session reuse`, async () => {
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const first = input()
+    await prepare_exact_trajectory_frame(first)
+    const first_session_id = typed_mock.mock.calls[0][0].session.id
+
+    first.packet.topology.atomic_numbers[0] = 1
+    first.source.stable_site_ids![0] = 999
+    first.options.tolerance = 9
+    const copied_original = input()
+    copied_original.packet.frame.owner = first.packet.frame.owner
+
+    await prepare_exact_trajectory_frame(copied_original)
+
+    expect(typed_mock.mock.calls[1][0].session.id).toBe(first_session_id)
   })
 
   test(`custom rules use object detection, full override, and worker packing`, async () => {

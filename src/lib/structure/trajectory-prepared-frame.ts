@@ -9,6 +9,7 @@ export type PreparedFrameKey = {
   frame_idx: number
   positions_version: number
   topology_version: number
+  topology_fingerprint: string
   rules_version: string
 }
 
@@ -36,6 +37,7 @@ export function same_prepared_frame_key(
     a.frame_idx === b.frame_idx &&
     a.positions_version === b.positions_version &&
     a.topology_version === b.topology_version &&
+    a.topology_fingerprint === b.topology_fingerprint &&
     a.rules_version === b.rules_version
 }
 
@@ -353,6 +355,7 @@ export function create_prepared_frame_pipeline(options: {
       previous.owner === key.owner &&
       previous.positions_version === key.positions_version &&
       previous.topology_version === key.topology_version &&
+      previous.topology_fingerprint === key.topology_fingerprint &&
       previous.rules_version === key.rules_version
     const sequential = previous !== null &&
       (key.frame_idx === previous.frame_idx ||
@@ -403,6 +406,8 @@ export function create_prepared_frame_pipeline(options: {
           record.value.key.owner !== key.owner ||
           (
             record.value.key.topology_version === key.topology_version &&
+            record.value.key.topology_fingerprint ===
+              key.topology_fingerprint &&
             record.value.key.rules_version === key.rules_version
           )
         )

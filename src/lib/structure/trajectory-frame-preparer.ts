@@ -18,6 +18,11 @@ import {
   prepared_frame_byte_size,
   type PreparedTrajectoryFrame,
 } from './trajectory-prepared-frame'
+import {
+  same_trajectory_bond_topology,
+  trajectory_bond_topology_fingerprint,
+  type TrajectoryBondSessionDescriptor,
+} from './trajectory-bond-session'
 import { position_texture_shape } from './gpu/position-texture-layout'
 import {
   compute_bonds_exact_async,
@@ -33,6 +38,7 @@ export type TrajectoryFrameSource = {
   lattice: number[][] | null
   positions_version: number
   topology_stable: boolean
+  stable_site_ids?: Uint32Array | null
 }
 
 export type PreparedPathFeatureInput = {
@@ -181,40 +187,66 @@ export function build_exact_trajectory_overlay(
 }
 
 type TypedSessionIdentity = {
-  atomic_numbers: Uint8Array
-  topology_version: number
-  rules_version: string
+  descriptor: TrajectoryBondSessionDescriptor
+  topology_fingerprint: string
   id: number
 }
 
 const typed_sessions_by_owner = new WeakMap<object, TypedSessionIdentity[]>()
 let next_typed_session_id = 1
 
-function numeric_session_id(input: ExactFramePrepareInput): number {
+function topology_descriptor(
+  input: ExactFramePrepareInput,
+): TrajectoryBondSessionDescriptor {
+  return {
+    atomic_numbers: input.packet.topology.atomic_numbers,
+    site_ids: input.source.stable_site_ids ?? null,
+    pbc: input.pbc,
+    strategy: `atom_radii`,
+    options: input.options,
+    rules_version: input.rules_version,
+  }
+}
+
+function snapshot_descriptor(
+  descriptor: TrajectoryBondSessionDescriptor,
+): TrajectoryBondSessionDescriptor {
+  return {
+    atomic_numbers: descriptor.atomic_numbers.slice(),
+    site_ids: descriptor.site_ids?.slice() ?? null,
+    pbc: descriptor.pbc ? [...descriptor.pbc] : null,
+    strategy: descriptor.strategy,
+    options: { ...descriptor.options },
+    rules_version: descriptor.rules_version,
+  }
+}
+
+function typed_session(
+  input: ExactFramePrepareInput,
+  descriptor: TrajectoryBondSessionDescriptor,
+): TypedSessionIdentity {
   const owner = input.packet.frame.owner
-  const topology = input.packet.topology
   let sessions = typed_sessions_by_owner.get(owner)
   if (!sessions) {
     sessions = []
     typed_sessions_by_owner.set(owner, sessions)
   }
   const existing = sessions.find((session) =>
-    session.atomic_numbers === topology.atomic_numbers &&
-    session.topology_version === topology.version &&
-    session.rules_version === input.rules_version
+    same_trajectory_bond_topology(session.descriptor, descriptor)
   )
-  if (existing) return existing.id
+  if (existing) return existing
   if (next_typed_session_id > Number.MAX_SAFE_INTEGER) {
     throw new Error(`Trajectory bond session ID space exhausted`)
   }
   const id = next_typed_session_id++
-  sessions.push({
-    atomic_numbers: topology.atomic_numbers,
-    topology_version: topology.version,
-    rules_version: input.rules_version,
+  const snapshot = snapshot_descriptor(descriptor)
+  const session = {
+    descriptor: snapshot,
+    topology_fingerprint: trajectory_bond_topology_fingerprint(snapshot),
     id,
-  })
-  return id
+  }
+  sessions.push(session)
+  return session
 }
 
 function rule_lattice(
@@ -278,6 +310,9 @@ export async function prepare_exact_trajectory_frame(
         `position values for ${raw.topology.atom_count} atoms`,
     )
   }
+  const descriptor = topology_descriptor(input)
+  const topology_fingerprint =
+    trajectory_bond_topology_fingerprint(descriptor)
 
   let graph
   let gpu_positions_rgba: Float32Array
@@ -338,13 +373,19 @@ export async function prepare_exact_trajectory_frame(
     gpu_positions_rgba = pack_positions_exact(source.positions)
   } else if (eligibility.kind === `typed-fast`) {
     try {
+      const session = typed_session(input, descriptor)
       const result = await compute_trajectory_frame_typed({
         session: {
-          id: numeric_session_id(input),
-          atomic_numbers: raw.topology.atomic_numbers,
-          pbc: input.pbc,
-          options: input.options,
+          id: session.id,
+          topology_fingerprint: session.topology_fingerprint,
+          atomic_numbers: session.descriptor.atomic_numbers,
+          stable_site_ids: session.descriptor.site_ids,
+          pbc: session.descriptor.pbc
+            ? [...session.descriptor.pbc]
+            : null,
+          options: { ...session.descriptor.options },
         },
+        frame_idx: source.frame_idx,
         positions: source.positions,
         lattice_matrix: source.lattice,
       })
@@ -375,6 +416,7 @@ export async function prepare_exact_trajectory_frame(
       frame_idx: source.frame_idx,
       positions_version: source.positions_version,
       topology_version: raw.topology.version,
+      topology_fingerprint,
       rules_version: input.rules_version,
     },
     packet,

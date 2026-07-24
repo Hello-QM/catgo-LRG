@@ -19,6 +19,9 @@ import {
   type BondWorkerGlue,
   type BondWorkerScope,
 } from '$lib/structure/workers/bond-worker'
+import {
+  TrajectoryBondFrameLengthError,
+} from '$lib/structure/trajectory-bond-session'
 
 const capabilities = {
   cross_origin_isolated: false,
@@ -34,10 +37,13 @@ function trajectory_input(
   return {
     session: {
       id: session_id,
+      topology_fingerprint: `topology:${session_id}`,
       atomic_numbers: Uint8Array.from([6, 8]),
+      stable_site_ids: Uint32Array.from([17, 29]),
       pbc: [true, false, true],
       options: { tolerance: 1.1 },
     },
+    frame_idx: 12,
     positions,
     lattice_matrix: [
       [10, 0, 0],
@@ -103,7 +109,9 @@ describe(`trajectory messages in the worker`, () => {
         id: 0,
         type: `trajectory_session_init`,
         session_id: 7,
+        topology_fingerprint: `topology:7`,
         atomic_numbers,
+        stable_site_ids: null,
         pbc: Uint8Array.from([1, 0, 1]),
         options_json: `{"tolerance":1.1}`,
       },
@@ -116,6 +124,8 @@ describe(`trajectory messages in the worker`, () => {
         id: 1,
         type: `trajectory_frame_typed`,
         session_id: 7,
+        topology_fingerprint: `topology:7`,
+        frame_idx: 4,
         positions,
         lattice: new Float64Array(9),
       },
@@ -278,6 +288,10 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
     expect(frame.data).not.toHaveProperty(`atomic_numbers`)
     expect(frame.data).not.toHaveProperty(`pbc`)
     expect(frame.data).not.toHaveProperty(`options_json`)
+    expect(frame.data.frame_idx).toBe(first.frame_idx)
+    expect(frame.data.topology_fingerprint).toBe(
+      first.session.topology_fingerprint,
+    )
     expect(frame.data.positions).not.toBe(first.positions)
     expect(frame.transfer).toEqual([
       (frame.data.positions as Float32Array).buffer,
@@ -305,6 +319,43 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
       [`trajectory_frame_typed`, 2],
     ])
   })
+
+  test(`reinitializes when the topology fingerprint changes under one session ID`, async () => {
+    const worker = new ReplyingWorker()
+    const handle = new RealBondWorkerHandle(
+      worker as unknown as Worker,
+      vi.fn(),
+      `scalar`,
+    )
+    await handle.compute_trajectory_frame_typed(trajectory_input(1))
+    const changed = trajectory_input(1)
+    changed.session.topology_fingerprint = `topology:changed`
+    await handle.compute_trajectory_frame_typed(changed)
+
+    expect(worker.posted.map((entry) => entry.data.type)).toEqual([
+      `trajectory_session_init`,
+      `trajectory_frame_typed`,
+      `trajectory_session_init`,
+      `trajectory_frame_typed`,
+    ])
+  })
+
+  test.each([3, 9])(
+    `rejects %i position floats before posting any worker message`,
+    async (float_count) => {
+      const worker = new ReplyingWorker()
+      const handle = new RealBondWorkerHandle(
+        worker as unknown as Worker,
+        vi.fn(),
+        `scalar`,
+      )
+
+      await expect(handle.compute_trajectory_frame_typed(
+        trajectory_input(1, new Float32Array(float_count)),
+      )).rejects.toBeInstanceOf(TrajectoryBondFrameLengthError)
+      expect(worker.posted).toHaveLength(0)
+    },
+  )
 
   test(`serializes each session init with its frame across concurrent callers`, async () => {
     const worker = new ReplyingWorker()
@@ -343,6 +394,75 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
     expect(positions.byteLength).toBe(12)
     expect(worker.posted[0].data.positions).not.toBe(positions)
   })
+})
+
+describe(`trajectory frame length validation inside the worker`, () => {
+  test.each([3, 9])(
+    `rejects %i position floats before WASM or frame publication`,
+    async (float_count) => {
+      const posted: Array<{
+        msg: Record<string, unknown>
+        transfer: Transferable[]
+      }> = []
+      const scope: BondWorkerScope = {
+        onmessage: null,
+        postMessage: (msg, transfer = []) => {
+          posted.push({ msg: msg as Record<string, unknown>, transfer })
+        },
+      }
+      const detect = vi.fn()
+      const glue = {
+        initSync: vi.fn(),
+        detect_bonds_radii_typed: detect,
+        detect_bonds_radii: vi.fn(),
+        detect_bonds_electronegativity: vi.fn(),
+        detect_bonds_solid_angle: vi.fn(),
+        detect_hydrogen_bonds: vi.fn(),
+      } as unknown as BondWorkerGlue
+      install_bond_worker(scope, glue)
+      await scope.onmessage!({
+        data: { id: -1, type: `init`, module: {}, thread_count: 1 },
+      } as MessageEvent)
+      await scope.onmessage!({
+        data: {
+          id: 0,
+          type: `trajectory_session_init`,
+          session_id: 7,
+          topology_fingerprint: `topology:7`,
+          atomic_numbers: Uint8Array.from([6, 8]),
+          stable_site_ids: null,
+          pbc: Uint8Array.from([1, 0, 1]),
+          options_json: `{}`,
+        },
+      } as MessageEvent)
+      posted.length = 0
+
+      await scope.onmessage!({
+        data: {
+          id: 1,
+          type: `trajectory_frame_typed`,
+          session_id: 7,
+          topology_fingerprint: `topology:7`,
+          frame_idx: 33,
+          positions: new Float32Array(float_count),
+          lattice: new Float64Array(9),
+        },
+      } as MessageEvent)
+
+      expect(detect).not.toHaveBeenCalled()
+      expect(posted).toHaveLength(1)
+      expect(posted[0].msg).toMatchObject({
+        id: 1,
+        error: expect.stringContaining(
+          `trajectory bond session 7 frame 33`,
+        ),
+      })
+      expect(posted[0].msg.error).toContain(
+        `expected 2 atoms (6 position floats), received ${float_count}`,
+      )
+      expect(posted[0].transfer).toEqual([])
+    },
+  )
 })
 
 describe(`trajectory runtime API`, () => {

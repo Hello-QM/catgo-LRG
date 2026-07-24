@@ -19,6 +19,9 @@
 // - All wasm-bindgen glue code is statically imported and bundled inline
 
 import { position_texture_shape } from '../gpu/position-texture-layout'
+import {
+  assert_trajectory_bond_frame_length,
+} from '../trajectory-bond-session'
 
 /** The wasm-bindgen glue surface both ferrox artifacts share. `initThreadPool`
  *  only exists on the threaded artifact (wasm-bindgen-rayon). */
@@ -77,7 +80,9 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
   let initialized = false
   let trajectory_session: {
     id: number
+    topology_fingerprint: string
     atomic_numbers: Uint8Array
+    stable_site_ids: Uint32Array | null
     pbc: Uint8Array
     options_json: string
   } | null = null
@@ -118,7 +123,9 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
       if (type === `trajectory_session_init`) {
         trajectory_session = {
           id: e.data.session_id,
+          topology_fingerprint: e.data.topology_fingerprint,
           atomic_numbers: e.data.atomic_numbers,
+          stable_site_ids: e.data.stable_site_ids,
           pbc: e.data.pbc,
           options_json: e.data.options_json,
         }
@@ -126,11 +133,22 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
         return
       }
       if (type === `trajectory_frame_typed`) {
-        if (!trajectory_session || trajectory_session.id !== e.data.session_id) {
+        if (
+          !trajectory_session ||
+          trajectory_session.id !== e.data.session_id ||
+          trajectory_session.topology_fingerprint !==
+            e.data.topology_fingerprint
+        ) {
           throw new Error(`Unknown trajectory bond session ${e.data.session_id}`)
         }
-        const t0 = performance.now()
         const positions = e.data.positions as Float32Array
+        assert_trajectory_bond_frame_length(
+          trajectory_session.id,
+          trajectory_session.atomic_numbers.length,
+          positions.length,
+          e.data.frame_idx,
+        )
+        const t0 = performance.now()
         const table = glue.detect_bonds_radii_typed(
           positions,
           trajectory_session.atomic_numbers,

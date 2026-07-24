@@ -58,6 +58,7 @@ function make_key(overrides: Partial<PreparedFrameKey> = {}): PreparedFrameKey {
     frame_idx: 7,
     positions_version: 9,
     topology_version: 3,
+    topology_fingerprint: `topology:base`,
     rules_version: `atom-radii:1.1`,
     ...overrides,
   }
@@ -73,6 +74,7 @@ describe(`same_prepared_frame_key`, () => {
       make_key({ frame_idx: 8 }),
       make_key({ positions_version: 10 }),
       make_key({ topology_version: 4 }),
+      make_key({ topology_fingerprint: `topology:changed` }),
       make_key({ rules_version: `atom-radii:1.2` }),
     ]
     for (const changed of changes) {
@@ -337,6 +339,44 @@ describe(`create_prepared_frame_pipeline`, () => {
     await expect(current).resolves.toMatchObject({ status: `ready` })
     expect(pipeline.peek(running_key)).toBeNull()
     expect(pipeline.stats().stale_results).toBe(2)
+  })
+
+  test(`discards an old topology fingerprint that resolves after a segment transition`, async () => {
+    const pipeline = create_prepared_frame_pipeline({ max_in_flight: 1 })
+    const old_key = make_key({
+      frame_idx: 0,
+      topology_fingerprint: `topology:old`,
+    })
+    const old_generation = pipeline.begin_request(old_key)
+    const old_work = deferred<PreparedTrajectoryFrame>()
+    const old_outcome = pipeline.request({
+      key: old_key,
+      priority: `current`,
+      estimated_bytes: 10,
+      prepare: () => old_work.promise,
+    }, old_generation)
+
+    const new_key = make_key({
+      frame_idx: 0,
+      topology_fingerprint: `topology:new`,
+    })
+    const new_generation = pipeline.begin_request(new_key)
+    const new_outcome = pipeline.request({
+      key: new_key,
+      priority: `current`,
+      estimated_bytes: 10,
+      prepare: async () => make_prepared(new_key, 10),
+    }, new_generation)
+
+    old_work.resolve(make_prepared(old_key, 10))
+
+    await expect(old_outcome).resolves.toEqual({ status: `stale` })
+    await expect(new_outcome).resolves.toMatchObject({
+      status: `ready`,
+      value: { key: new_key },
+    })
+    expect(pipeline.peek(old_key)).toBeNull()
+    expect(pipeline.peek(new_key)?.key).toBe(new_key)
   })
 
   test(`enforces frame LRU while retaining frames nearest the playhead`, async () => {

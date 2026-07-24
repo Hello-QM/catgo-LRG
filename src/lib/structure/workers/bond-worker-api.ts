@@ -42,6 +42,9 @@ import {
   type TypedBondTable,
 } from './bond-worker-runtime'
 import { detect_bond_backend_capabilities } from './wasm-thread-capability'
+import {
+  assert_trajectory_bond_frame_length,
+} from '../trajectory-bond-session'
 
 export { BondBackendUnavailableError, LARGE_SYSTEM_MIN_ATOMS }
 export type {
@@ -82,6 +85,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
   >()
   private next_id = 0
   private trajectory_session_id: number | null = null
+  private trajectory_session_fingerprint: string | null = null
   private trajectory_request_tail: Promise<void> = Promise.resolve()
 
   constructor(
@@ -215,8 +219,12 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
   private async ensure_trajectory_session(
     session: TrajectoryTypedBondInput[`session`],
   ): Promise<void> {
-    if (this.trajectory_session_id === session.id) return
+    if (
+      this.trajectory_session_id === session.id &&
+      this.trajectory_session_fingerprint === session.topology_fingerprint
+    ) return
     const atomic_numbers = session.atomic_numbers.slice()
+    const stable_site_ids = session.stable_site_ids?.slice() ?? null
     const pbc = session.pbc
       ? new Uint8Array([
         session.pbc[0] ? 1 : 0,
@@ -228,19 +236,32 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
       {
         type: `trajectory_session_init`,
         session_id: session.id,
+        topology_fingerprint: session.topology_fingerprint,
         atomic_numbers,
+        stable_site_ids,
         pbc,
         options_json: JSON.stringify(session.options),
       },
       20_000,
-      [atomic_numbers.buffer, pbc.buffer],
+      [
+        atomic_numbers.buffer,
+        ...(stable_site_ids ? [stable_site_ids.buffer] : []),
+        pbc.buffer,
+      ],
     )
     this.trajectory_session_id = session.id
+    this.trajectory_session_fingerprint = session.topology_fingerprint
   }
 
   async compute_trajectory_frame_typed(
     input: TrajectoryTypedBondInput,
   ): Promise<TrajectoryFrameWorkerResult> {
+    assert_trajectory_bond_frame_length(
+      input.session.id,
+      input.session.atomic_numbers.length,
+      input.positions.length,
+      input.frame_idx,
+    )
     const execute = async (): Promise<TrajectoryFrameWorkerResult> => {
       // The worker owns one mutable trajectory session. Keep init + frame in
       // one critical section so concurrent viewers cannot replace the session
@@ -256,6 +277,8 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
         {
           type: `trajectory_frame_typed`,
           session_id: input.session.id,
+          topology_fingerprint: input.session.topology_fingerprint,
+          frame_idx: input.frame_idx,
           positions,
           lattice,
         },
