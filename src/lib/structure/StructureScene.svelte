@@ -98,6 +98,7 @@
   import {
     create_trajectory_presentation_committer,
     type PacketSyncEvidence,
+    type PreparedPresentationIdentity,
   } from './trajectory-presentation-commit'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
@@ -1172,7 +1173,17 @@
   onDestroy(() => {
     current_source_request_guard.invalidate()
     prepared_pipeline.clear()
+    trajectory_presentation_committer.clear()
   })
+  type PendingPreparedPresentation = {
+    presentation: PreparedPresentationIdentity
+    structure: AnyStructure
+    rules_version: string
+    topology_version: number
+  }
+  let pending_prepared_presentation = $state.raw<
+    PendingPreparedPresentation | null
+  >(null)
   let prepared_render_packet = $state.raw<RenderPacket | null>(null)
   let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
   let prepared_frame_forces = $state.raw<Float32Array | null>(null)
@@ -2805,6 +2816,8 @@
       current_source_request_guard.invalidate()
       latest_prepared_request_key = null
       prepared_pipeline.clear()
+      pending_prepared_presentation = null
+      trajectory_presentation_committer.clear()
       prepared_render_packet = null
       prepared_gpu_positions = null
       prepared_frame_forces = null
@@ -3016,49 +3029,19 @@
           prepared.graph.pairs.length / 2,
           prepared.graph.jimages,
         )
-        const packet_renderer_will_own = packet_render_features_eligible() &&
-          show_bulk_atoms && !webgl_suspended
-        // The unified packet layer reads the immutable packet and typed bond
-        // manager directly. Publishing legacy object connectivity/structure
-        // here wakes the full legacy consumer graph, while rewriting the
-        // AtomManager costs O(N) reactive writes. Keep that entire snapshot
-        // path together for unsupported visual features only.
-        if (!packet_renderer_will_own) {
-          bond_state.bond_connectivity = graph_connectivity(prepared.graph)
-          bond_state.last_bond_structure = raw_structure
-          bond_state.last_bond_strategy = rules_version
-          bond_state.last_elem_fingerprint = `${raw_packet.topology.version}`
-          const manager = atom_manager
-          manager.begin_positions_batch()
-          try {
-            for (
-              let slot = 0;
-              slot < manager.count &&
-              slot < raw_packet.topology.atom_count;
-              slot++
-            ) {
-              const site_idx = manager.site_ids_buffer[slot]
-              const offset = site_idx * 3
-              manager.set_position(
-                slot,
-                prepared.packet.frame.positions[offset],
-                prepared.packet.frame.positions[offset + 1],
-                prepared.packet.frame.positions[offset + 2],
-              )
-            }
-          } finally {
-            manager.commit_positions_batch()
-          }
+        const presentation: PreparedPresentationIdentity = {
+          prepared_packet: prepared.packet,
+          key: prepared.key,
+          graph_hash: prepared.graph_hash,
+          bond_count: prepared.graph.pairs.length / 2,
         }
-        trajectory_presentation_committer.publish(
-          {
-            prepared_packet: prepared.packet,
-            key: prepared.key,
-            graph_hash: prepared.graph_hash,
-            bond_count: prepared.graph.pairs.length / 2,
-          },
-          packet_renderer_will_own ? `renderer` : `direct`,
-        )
+        trajectory_presentation_committer.publish(presentation)
+        pending_prepared_presentation = {
+          presentation,
+          structure: raw_structure,
+          rules_version,
+          topology_version: raw_packet.topology.version,
+        }
       } else if (outcome.status === `failed`) {
         report_buffer_failure(outcome.error)
         return
@@ -5350,6 +5333,11 @@
   let combined_packet_renderer_owned = $derived(
     manager_render_packet !== null && packet_render_features_eligible(),
   )
+  let combined_packet_renderer_actually_owned = $derived(
+    manager_render_packet !== null &&
+      combined_packet_renderer_owned &&
+      show_bulk_atoms && !webgl_suspended,
+  )
   let combined_packet_bonds_visible = $derived(
     should_show_bonds(show_bonds, lattice) && !bonds_deferred,
   )
@@ -5358,6 +5346,62 @@
       ? prepared_gpu_positions
       : null,
   )
+
+  function install_direct_prepared_presentation(
+    presentation: PreparedPresentationIdentity,
+  ): void {
+    const pending = pending_prepared_presentation
+    if (pending?.presentation !== presentation) return
+    const graph = presentation.prepared_packet.topology.bond_graph
+    bond_state.bond_connectivity = graph ? graph_connectivity(graph) : []
+    bond_state.last_bond_structure = pending.structure
+    bond_state.last_bond_strategy = pending.rules_version
+    bond_state.last_elem_fingerprint = `${pending.topology_version}`
+    const manager = atom_manager
+    manager.begin_positions_batch()
+    try {
+      for (
+        let slot = 0;
+        slot < manager.count &&
+        slot < presentation.prepared_packet.topology.atom_count;
+        slot++
+      ) {
+        const site_idx = manager.site_ids_buffer[slot]
+        const offset = site_idx * 3
+        manager.set_position(
+          slot,
+          presentation.prepared_packet.frame.positions[offset],
+          presentation.prepared_packet.frame.positions[offset + 1],
+          presentation.prepared_packet.frame.positions[offset + 2],
+        )
+      }
+    } finally {
+      manager.commit_positions_batch()
+    }
+  }
+
+  // Eligibility can change after publication, and the manager packet can fail
+  // its shape guard. Reconcile against the layer's real mount conditions so
+  // every exact prepared frame gets either renderer evidence or one complete
+  // legacy install before acknowledgement.
+  $effect(() => {
+    const pending = pending_prepared_presentation
+    const current_display_packet = manager_render_packet
+    const current_prepared_packet = prepared_render_packet
+    const latest_key = latest_prepared_request_key
+    const layer_owned = combined_packet_renderer_actually_owned
+    if (pending === null) return
+    untrack(() => {
+      trajectory_presentation_committer.reconcile(
+        pending.presentation,
+        current_display_packet,
+        current_prepared_packet,
+        latest_key,
+        layer_owned,
+        install_direct_prepared_presentation,
+      )
+    })
+  })
 
   function handle_packet_synced(evidence: PacketSyncEvidence): void {
     trajectory_presentation_committer.renderer_synced(

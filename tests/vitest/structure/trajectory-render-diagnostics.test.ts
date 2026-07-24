@@ -65,6 +65,15 @@ describe(`trajectory render diagnostics`, () => {
     diagnostics.record_renderer_installed(0, 7, `hash-0`, 26_001, 1_050)
     // Renderer re-sync of the same packet is not a second presentation.
     diagnostics.record_renderer_installed(0, 7, `hash-0`, 26_001, 1_060)
+    // A same-frame rules/topology recompute is distinct renderer evidence,
+    // even when the position buffer identity is unchanged.
+    diagnostics.record_renderer_installed(
+      0,
+      7,
+      `hash-0-recomputed`,
+      26_005,
+      1_065,
+    )
 
     diagnostics.record(`requested`, 1, 1_070, 8)
     diagnostics.record_prepared(1, `hash-1`, 26_010, 20)
@@ -80,27 +89,27 @@ describe(`trajectory render diagnostics`, () => {
     diagnostics.record_long_task()
 
     expect(diagnostics.snapshot()).toMatchObject({
-      presented_frames: 3,
+      presented_frames: 4,
       unique_presented_frames: 3,
-      renderer_installed_frames: 3,
+      renderer_installed_frames: 4,
       last_renderer_installed_frame: 2,
       graph_hash_by_frame: {
-        0: `hash-0`,
+        0: `hash-0-recomputed`,
         1: `hash-1`,
         2: `hash-2`,
       },
       bond_count_by_frame: {
-        0: 26_001,
+        0: 26_005,
         1: 26_010,
         2: 25_999,
       },
       renderer_graph_hash_by_frame: {
-        0: `hash-0`,
+        0: `hash-0-recomputed`,
         1: `hash-1`,
         2: `hash-2`,
       },
       renderer_bond_count_by_frame: {
-        0: 26_001,
+        0: 26_005,
         1: 26_010,
         2: 25_999,
       },

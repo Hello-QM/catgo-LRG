@@ -23,6 +23,8 @@ export type PreparedPresentationIdentity = {
   bond_count: number
 }
 
+export type PresentationReconcileResult = `stale` | `renderer` | `direct`
+
 type PresentationHooks = {
   record_presented(
     frame_idx: number,
@@ -40,16 +42,22 @@ type PresentationHooks = {
 }
 
 export type TrajectoryPresentationCommitter = {
-  publish(
+  publish(presentation: PreparedPresentationIdentity): void
+  reconcile(
     presentation: PreparedPresentationIdentity,
-    owner: `renderer` | `direct`,
-  ): boolean
+    current_display_packet: RenderPacket | null,
+    current_prepared_packet: RenderPacket | null,
+    latest_key: PreparedFrameKey | null,
+    layer_owned: boolean,
+    install_direct: (presentation: PreparedPresentationIdentity) => void,
+  ): PresentationReconcileResult
   renderer_synced(
     evidence: PacketSyncEvidence,
     current_display_packet: RenderPacket | null,
     current_prepared_packet: RenderPacket | null,
     latest_key: PreparedFrameKey | null,
   ): boolean
+  clear(): void
 }
 
 function packet_graph_identity(packet: RenderPacket): {
@@ -67,17 +75,35 @@ export function create_trajectory_presentation_committer(
   hooks: PresentationHooks,
 ): TrajectoryPresentationCommitter {
   let latest: PreparedPresentationIdentity | null = null
-  let last_committed_key: PreparedFrameKey | null = null
+  let last_committed: PreparedPresentationIdentity | null = null
+  let last_direct_install: PreparedPresentationIdentity | null = null
 
-  const already_committed = (key: PreparedFrameKey): boolean =>
-    last_committed_key !== null &&
-    same_prepared_frame_key(last_committed_key, key)
+  const same_presentation = (
+    left: PreparedPresentationIdentity,
+    right: PreparedPresentationIdentity,
+  ): boolean =>
+    same_prepared_frame_key(left.key, right.key) &&
+    left.graph_hash === right.graph_hash &&
+    left.bond_count === right.bond_count
+
+  const is_current = (
+    presentation: PreparedPresentationIdentity,
+    current_prepared_packet: RenderPacket | null,
+    latest_key: PreparedFrameKey | null,
+  ): boolean =>
+    latest === presentation &&
+    current_prepared_packet === presentation.prepared_packet &&
+    latest_key !== null &&
+    same_prepared_frame_key(presentation.key, latest_key)
 
   const acknowledge = (
     presentation: PreparedPresentationIdentity,
     renderer_installed: boolean,
   ): boolean => {
-    if (already_committed(presentation.key)) return false
+    if (
+      last_committed !== null &&
+      same_presentation(last_committed, presentation)
+    ) return false
     const { frame_idx, positions_version } = presentation.key
     if (renderer_installed) {
       hooks.record_renderer_installed(
@@ -94,17 +120,45 @@ export function create_trajectory_presentation_committer(
         presentation.bond_count,
       )
     }
-    last_committed_key = presentation.key
+    last_committed = presentation
     hooks.acknowledge(frame_idx, positions_version)
     return true
   }
 
   return {
-    publish(presentation, owner) {
+    publish(presentation) {
       latest = presentation
-      return owner === `direct`
-        ? acknowledge(presentation, false)
-        : false
+    },
+    reconcile(
+      presentation,
+      current_display_packet,
+      current_prepared_packet,
+      latest_key,
+      layer_owned,
+      install_direct,
+    ) {
+      if (!is_current(
+        presentation,
+        current_prepared_packet,
+        latest_key,
+      )) return `stale`
+      if (
+        layer_owned &&
+        current_display_packet !== null &&
+        current_display_packet.frame === presentation.prepared_packet.frame &&
+        current_display_packet.topology.bond_graph ===
+          presentation.prepared_packet.topology.bond_graph
+      ) return `renderer`
+
+      if (
+        last_direct_install === null ||
+        !same_presentation(last_direct_install, presentation)
+      ) {
+        install_direct(presentation)
+        last_direct_install = presentation
+      }
+      acknowledge(presentation, false)
+      return `direct`
     },
     renderer_synced(
       evidence,
@@ -116,9 +170,7 @@ export function create_trajectory_presentation_committer(
       if (
         presentation === null ||
         current_display_packet === null ||
-        current_prepared_packet !== presentation.prepared_packet ||
-        latest_key === null ||
-        !same_prepared_frame_key(presentation.key, latest_key) ||
+        !is_current(presentation, current_prepared_packet, latest_key) ||
         evidence.packet !== current_display_packet ||
         current_display_packet.frame !== presentation.prepared_packet.frame ||
         current_display_packet.topology.bond_graph !==
@@ -139,6 +191,11 @@ export function create_trajectory_presentation_committer(
       ) return false
 
       return acknowledge(presentation, true)
+    },
+    clear() {
+      latest = null
+      last_committed = null
+      last_direct_install = null
     },
   }
 }

@@ -94,7 +94,7 @@ describe(`trajectory presentation committer`, () => {
     })
     const current = fixture()
 
-    committer.publish(current.presentation, `renderer`)
+    committer.publish(current.presentation)
 
     expect(record_presented).not.toHaveBeenCalled()
     expect(record_renderer_installed).not.toHaveBeenCalled()
@@ -111,7 +111,7 @@ describe(`trajectory presentation committer`, () => {
       acknowledge,
     })
     const first = fixture()
-    committer.publish(first.presentation, `renderer`)
+    committer.publish(first.presentation)
 
     expect(committer.renderer_synced(
       {
@@ -145,7 +145,7 @@ describe(`trajectory presentation committer`, () => {
     )).toBe(false)
 
     const next = fixture(4, 14)
-    committer.publish(next.presentation, `renderer`)
+    committer.publish(next.presentation)
     expect(committer.renderer_synced(
       first.evidence,
       first.display_packet,
@@ -178,10 +178,11 @@ describe(`trajectory presentation committer`, () => {
     expect(acknowledge.mock.calls).toEqual([[3, 13], [4, 14]])
   })
 
-  test(`uses a direct commit only when no unified renderer owns the packet`, () => {
+  test(`falls back directly when the manager packet shape guard prevents a renderer mount`, () => {
     const record_presented = vi.fn()
     const record_renderer_installed = vi.fn()
     const acknowledge = vi.fn()
+    const install_direct = vi.fn()
     const committer = create_trajectory_presentation_committer({
       record_presented,
       record_renderer_installed,
@@ -189,8 +190,25 @@ describe(`trajectory presentation committer`, () => {
     })
     const current = fixture()
 
-    expect(committer.publish(current.presentation, `direct`)).toBe(true)
-    expect(committer.publish(current.presentation, `direct`)).toBe(false)
+    committer.publish(current.presentation)
+    expect(committer.reconcile(
+      current.presentation,
+      null,
+      current.prepared_packet,
+      current.key,
+      false,
+      install_direct,
+    )).toBe(`direct`)
+    expect(committer.reconcile(
+      current.presentation,
+      null,
+      current.prepared_packet,
+      current.key,
+      false,
+      install_direct,
+    )).toBe(`direct`)
+    expect(install_direct).toHaveBeenCalledOnce()
+    expect(install_direct).toHaveBeenCalledWith(current.presentation)
     expect(record_presented).toHaveBeenCalledOnce()
     expect(record_presented).toHaveBeenCalledWith(
       3,
@@ -201,5 +219,90 @@ describe(`trajectory presentation committer`, () => {
     expect(record_renderer_installed).not.toHaveBeenCalled()
     expect(acknowledge).toHaveBeenCalledOnce()
     expect(acknowledge).toHaveBeenCalledWith(3, 13)
+  })
+
+  test(`falls back once when a live unified owner is lost before renderer sync`, () => {
+    const record_presented = vi.fn()
+    const record_renderer_installed = vi.fn()
+    const acknowledge = vi.fn()
+    const install_direct = vi.fn()
+    const committer = create_trajectory_presentation_committer({
+      record_presented,
+      record_renderer_installed,
+      acknowledge,
+    })
+    const current = fixture()
+
+    committer.publish(current.presentation)
+    expect(committer.reconcile(
+      current.presentation,
+      current.display_packet,
+      current.prepared_packet,
+      current.key,
+      true,
+      install_direct,
+    )).toBe(`renderer`)
+    expect(install_direct).not.toHaveBeenCalled()
+    expect(acknowledge).not.toHaveBeenCalled()
+
+    expect(committer.reconcile(
+      current.presentation,
+      current.display_packet,
+      current.prepared_packet,
+      current.key,
+      false,
+      install_direct,
+    )).toBe(`direct`)
+    expect(install_direct).toHaveBeenCalledOnce()
+    expect(record_presented).toHaveBeenCalledOnce()
+    expect(record_renderer_installed).not.toHaveBeenCalled()
+    expect(acknowledge).toHaveBeenCalledOnce()
+
+    // A child effect already queued before ownership loss may still report
+    // afterward; it must not turn the direct fallback into a second commit.
+    expect(committer.renderer_synced(
+      current.evidence,
+      current.display_packet,
+      current.prepared_packet,
+      current.key,
+    )).toBe(false)
+    expect(record_presented).toHaveBeenCalledOnce()
+    expect(record_renderer_installed).not.toHaveBeenCalled()
+    expect(acknowledge).toHaveBeenCalledOnce()
+  })
+
+  test(`clear releases the pending presentation and rejects late renderer sync`, () => {
+    const record_presented = vi.fn()
+    const record_renderer_installed = vi.fn()
+    const acknowledge = vi.fn()
+    const install_direct = vi.fn()
+    const committer = create_trajectory_presentation_committer({
+      record_presented,
+      record_renderer_installed,
+      acknowledge,
+    })
+    const current = fixture()
+
+    committer.publish(current.presentation)
+    committer.clear()
+
+    expect(committer.renderer_synced(
+      current.evidence,
+      current.display_packet,
+      current.prepared_packet,
+      current.key,
+    )).toBe(false)
+    expect(committer.reconcile(
+      current.presentation,
+      null,
+      current.prepared_packet,
+      current.key,
+      false,
+      install_direct,
+    )).toBe(`stale`)
+    expect(install_direct).not.toHaveBeenCalled()
+    expect(record_presented).not.toHaveBeenCalled()
+    expect(record_renderer_installed).not.toHaveBeenCalled()
+    expect(acknowledge).not.toHaveBeenCalled()
   })
 })

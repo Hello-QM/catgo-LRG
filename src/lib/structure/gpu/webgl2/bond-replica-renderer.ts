@@ -467,6 +467,14 @@ export type BondReplicaOptions = {
   ghost_opacity?: number
 }
 
+/** Metadata-only proof of the packet graph installed in live bond buffers. */
+export type BondReplicaInstalledState = Readonly<{
+  packet: RenderPacket
+  topology_version: number
+  graph_version: number | null
+  bond_count: number
+}>
+
 export class BondReplicaRenderer {
   readonly mesh: THREE.Mesh
   readonly ghost_mesh: THREE.Mesh
@@ -477,6 +485,7 @@ export class BondReplicaRenderer {
   #ghost_geometry = new THREE.InstancedBufferGeometry()
   #box: THREE.BoxGeometry
   #prev: RenderPacket | null = null
+  #installed_state: BondReplicaInstalledState | null = null
   #positions: SharedPositionTexture
   #release_positions: () => void
   #owns_positions: boolean
@@ -646,10 +655,20 @@ export class BondReplicaRenderer {
     // Publish the installed identity only after topology, replicas, current
     // lattice, and every enabled ghost page have completed.
     this.#prev = packet
+    this.#installed_state = {
+      packet,
+      topology_version: packet.topology.version,
+      graph_version: packet.topology.bond_graph?.version ?? null,
+      bond_count: this.#bond_count,
+    }
   }
 
   installed_packet(): RenderPacket | null {
     return this.#prev
+  }
+
+  installed_state(): BondReplicaInstalledState | null {
+    return this.#installed_state
   }
 
   /** Per-frame camera state for the fragment ray-cast (inverse projection +
@@ -822,6 +841,8 @@ export class BondReplicaRenderer {
   }
 
   dispose(): void {
+    this.#prev = null
+    this.#installed_state = null
     this.#geometry.dispose()
     for (const page of this.#ghost_pages) page.geometry.dispose()
     this.#box.dispose()

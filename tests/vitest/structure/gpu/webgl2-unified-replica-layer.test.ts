@@ -225,6 +225,54 @@ describe(`unified WebGL2 replica layer`, () => {
     expect(on_packet_synced).not.toHaveBeenCalled()
   })
 
+  test.each([
+    [`an independent bond packet`, `packet`],
+    [`tampered bond graph metadata`, `metadata`],
+  ] as const)(
+    `does not report packet sync from %s`,
+    async (_description, fault) => {
+      const expected_packets = packets()
+      vi.spyOn(BondReplicaRenderer.prototype, `installed_state`)
+        .mockImplementation(function () {
+          const packet = this.installed_packet()
+          if (packet === null) return null
+          const graph = packet.topology.bond_graph
+          return {
+            packet: fault === `packet` ? { ...packet } : packet,
+            topology_version: packet.topology.version,
+            graph_version: fault === `metadata`
+              ? (graph?.version ?? 0) + 1
+              : graph?.version ?? null,
+            bond_count: (graph?.pairs.length ?? 0) / 2 +
+              (fault === `metadata` ? 1 : 0),
+          }
+        })
+      const dom = document.createElement(`div`)
+      const canvas = document.createElement(`canvas`)
+      dom.append(canvas)
+      document.body.append(dom)
+      const on_packet_synced = vi.fn()
+      const component = mount(Harness, {
+        target: dom,
+        props: {
+          mode: `combined`,
+          packets: expected_packets,
+          atom_manager: new AtomManager(16),
+          bond_manager: new BondManager(16),
+          renderer: fake_renderer(),
+          dom,
+          canvas,
+          onscene: () => {},
+          on_packet_synced,
+        },
+      })
+      mounted.push(component)
+      await settle()
+
+      expect(on_packet_synced).not.toHaveBeenCalled()
+    },
+  )
+
   test(`creates and disposes the bond draw reactively without replacing atoms`, async () => {
     const dom = document.createElement(`div`)
     const canvas = document.createElement(`canvas`)

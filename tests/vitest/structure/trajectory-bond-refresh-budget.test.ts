@@ -35,7 +35,7 @@ describe(`exact prepared trajectory ownership`, () => {
     )
   })
 
-  test(`packet-owned presentation does not rewrite legacy atom positions`, () => {
+  test(`live renderer ownership reconciles exact packets or installs legacy state`, () => {
     const scene = readFileSync(
       `src/lib/structure/StructureScene.svelte`,
       `utf8`,
@@ -49,19 +49,15 @@ describe(`exact prepared trajectory ownership`, () => {
     )
     const commit = scene.slice(commit_start, commit_end)
 
-    expect(commit).toContain(
-      `const packet_renderer_will_own = packet_render_features_eligible() &&`,
-    )
-    expect(commit).toContain(`show_bulk_atoms && !webgl_suspended`)
-    expect(commit).toContain(`if (!packet_renderer_will_own)`)
-    expect(commit).toContain(`manager.begin_positions_batch()`)
-    expect(commit.indexOf(`const packet_renderer_will_own`)).toBeLessThan(
-      commit.indexOf(`bond_state.bond_connectivity =`),
-    )
-    const legacy_start = commit.indexOf(`if (!packet_renderer_will_own)`)
-    const legacy_commit = commit.slice(legacy_start)
-    expect(legacy_commit).toContain(`bond_state.bond_connectivity =`)
-    expect(legacy_commit).toContain(`bond_state.last_bond_structure =`)
+    expect(commit).not.toContain(`packet_renderer_will_own`)
+    expect(commit).not.toContain(`manager.begin_positions_batch()`)
+    expect(scene).toContain(`let pending_prepared_presentation = $state.raw<`)
+    expect(scene).toContain(`function install_direct_prepared_presentation(`)
+    expect(scene).toContain(`trajectory_presentation_committer.reconcile(`)
+    expect(scene).toContain(`manager_render_packet !== null &&`)
+    expect(scene).toContain(`show_bulk_atoms && !webgl_suspended`)
+    expect(scene).toContain(`bond_state.bond_connectivity =`)
+    expect(scene).toContain(`manager.begin_positions_batch()`)
     expect(scene).toContain(
       `let atom_data_has_partial_occupancy = $derived(`,
     )
@@ -103,6 +99,28 @@ describe(`exact prepared trajectory ownership`, () => {
     )
     expect(scene).toContain(
       `on_packet_synced={handle_packet_synced}`,
+    )
+  })
+
+  test(`scene clears presentation ownership on trajectory teardown and unmount`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const destroy_start = scene.indexOf(`onDestroy(() => {`)
+    const destroy_end = scene.indexOf(`})`, destroy_start)
+    expect(scene.slice(destroy_start, destroy_end)).toContain(
+      `trajectory_presentation_committer.clear()`,
+    )
+    const teardown_start = scene.indexOf(
+      `if (\n      !raw_packet || !raw_structure?.sites || !raw_positions ||`,
+    )
+    const teardown_end = scene.indexOf(`return`, teardown_start)
+    expect(scene.slice(teardown_start, teardown_end)).toContain(
+      `trajectory_presentation_committer.clear()`,
+    )
+    expect(scene.slice(teardown_start, teardown_end)).toContain(
+      `pending_prepared_presentation = null`,
     )
   })
 

@@ -160,27 +160,39 @@
       mark_dirty()
       const installed_frame = position_resource.uploaded_frame()
       const atom_packet = atoms?.installed_packet() ?? null
-      const bond_packet = bonds?.installed_packet() ?? null
+      const bond_state = bonds?.installed_state() ?? null
+      const bond_packet = bond_state?.packet ?? null
+      const expected_graph = pkt.topology.bond_graph
+      const expected_graph_version = expected_graph?.version ?? null
+      const expected_bond_count = (expected_graph?.pairs.length ?? 0) / 2
       if (
         installed_frame === null ||
         installed_frame.owner !== pkt.frame.owner ||
         installed_frame.frame_idx !== pkt.frame.frame_idx ||
         installed_frame.positions_version !== pkt.frame.positions_version ||
         (atoms !== null && atom_packet !== pkt) ||
-        (bonds !== null && bond_packet !== pkt) ||
+        (bonds !== null && (
+          bond_state === null ||
+          bond_packet !== pkt ||
+          bond_state.topology_version !== pkt.topology.version ||
+          bond_state.graph_version !== expected_graph_version ||
+          bond_state.bond_count !== expected_bond_count
+        )) ||
         (atoms === null && bonds === null)
       ) return
       const installed_packet = atom_packet ?? bond_packet
       if (installed_packet === null) return
-      const graph = installed_packet.topology.bond_graph
       on_packet_synced?.({
         packet: installed_packet,
         ...installed_frame,
-        topology_version: installed_packet.topology.version,
-        graph_version: graph?.version ?? null,
-        bond_count: (graph?.pairs.length ?? 0) / 2,
+        topology_version:
+          bond_state?.topology_version ?? installed_packet.topology.version,
+        graph_version: bond_state?.graph_version ??
+          installed_packet.topology.bond_graph?.version ?? null,
+        bond_count: bond_state?.bond_count ??
+          (installed_packet.topology.bond_graph?.pairs.length ?? 0) / 2,
         atom_renderer_synced: atom_packet === pkt,
-        bond_renderer_synced: bond_packet === pkt,
+        bond_renderer_synced: bond_state?.packet === pkt,
       })
     })
   })

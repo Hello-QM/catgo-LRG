@@ -186,6 +186,15 @@ function event_key(frame_idx: number, positions_version: number): string {
   return `${frame_idx}:${positions_version}`
 }
 
+function renderer_event_key(
+  frame_idx: number,
+  positions_version: number,
+  graph_hash: string,
+  bond_count: number,
+): string {
+  return `${event_key(frame_idx, positions_version)}:${bond_count}:${graph_hash}`
+}
+
 export function create_trajectory_render_diagnostics():
   TrajectoryRenderDiagnosticsRecorder {
   let state = initial_state()
@@ -299,7 +308,12 @@ export function create_trajectory_render_diagnostics():
       bond_count,
       timestamp_ms = performance.now(),
     ) {
-      const key = event_key(frame_idx, positions_version)
+      const key = renderer_event_key(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      )
       if (last_renderer_identity === key) return
       last_renderer_identity = key
       state.renderer_installed_frames++
