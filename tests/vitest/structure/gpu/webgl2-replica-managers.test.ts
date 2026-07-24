@@ -356,8 +356,16 @@ for (const mode of [`atom`, `bond`] as const) {
       const geometry = main.geometry as THREE.InstancedBufferGeometry
       const material = main.material
       const attr_name = mode === `atom` ? `instanceSite` : `a_site`
-      const base_array = (geometry.getAttribute(attr_name) as
-        THREE.InstancedBufferAttribute).array
+      const initial_attr = geometry.getAttribute(attr_name) as
+        THREE.InstancedBufferAttribute
+      const base_array = initial_attr.array
+      const expected_divisor = (cell_count: number): number =>
+        mode === `atom` ? cell_count : 2 * cell_count
+
+      // Atom attributes stay per-site and advance once per replica cell.
+      // Compact bond attributes stay per-bond and serve both half-bond draws,
+      // so they advance once per (2 × replica cell count) instance group.
+      expect(initial_attr.meshPerAttribute).toBe(expected_divisor(1))
 
       for (const [button, expected_cells] of [
         [`factor-2`, 2],
@@ -375,7 +383,9 @@ for (const mode of [`atom`, `bond`] as const) {
         const live_attr = geometry.getAttribute(attr_name) as
           THREE.InstancedBufferAttribute
         expect(live_attr.array).toBe(base_array)
-        expect(live_attr.meshPerAttribute).toBe(expected_cells)
+        expect(live_attr.meshPerAttribute).toBe(
+          expected_divisor(expected_cells),
+        )
 
         // The render boundary must be inert: the retired resetState() VAO
         // hack reset renderer-global state mid-frame (correct on ANGLE only —
