@@ -95,6 +95,11 @@ function pack_positions_rgba(positions: Float32Array): Float32Array {
   return gpu_positions_rgba
 }
 
+function finite_elapsed_ms(started_ms: number, finished_ms: number): number {
+  const elapsed_ms = finished_ms - started_ms
+  return Number.isFinite(elapsed_ms) && elapsed_ms >= 0 ? elapsed_ms : 0
+}
+
 export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue): void {
   let initialized = false
   let trajectory_session: {
@@ -175,24 +180,46 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
           positions.length,
           e.data.frame_idx,
         )
-        const t0 = performance.now()
+        const worker_started_ms = performance.now()
         const table = trajectory_session.rust.compute_frame(
           positions,
           e.data.lattice,
           e.data.frame_idx,
         )
+        const wasm_finished_ms = performance.now()
         const gpu_positions_rgba = pack_positions_rgba(positions)
+        const position_pack_finished_ms = performance.now()
         const pairs = table.pairs
         const images = table.images
         const lengths = table.lengths
         const strengths = table.strengths
         table.free()
+        const table_copy_finished_ms = performance.now()
         const session_diagnostics = {
           ...JSON.parse(trajectory_session.rust.diagnostics_json()),
           session_initializations: trajectory_session_initializations,
           thread_count: active_thread_count,
         }
-        const dt = (performance.now() - t0).toFixed(1)
+        const worker_finished_ms = performance.now()
+        const worker_timings = {
+          wasm_compute_ms: finite_elapsed_ms(
+            worker_started_ms,
+            wasm_finished_ms,
+          ),
+          position_pack_ms: finite_elapsed_ms(
+            wasm_finished_ms,
+            position_pack_finished_ms,
+          ),
+          table_copy_ms: finite_elapsed_ms(
+            position_pack_finished_ms,
+            table_copy_finished_ms,
+          ),
+          worker_total_ms: finite_elapsed_ms(
+            worker_started_ms,
+            worker_finished_ms,
+          ),
+        }
+        const dt = worker_timings.worker_total_ms.toFixed(1)
         scope.postMessage(
           {
             id,
@@ -202,6 +229,7 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
             strengths,
             gpu_positions_rgba,
             session_diagnostics,
+            worker_timings,
             dt,
           },
           [

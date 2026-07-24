@@ -39,6 +39,7 @@ import {
   type TrajectoryBondSessionDiagnostics,
   type TrajectoryFrameWorkerResult,
   type TrajectoryTypedBondInput,
+  type TrajectoryWorkerTimings,
   type TypedBondInput,
   type TypedBondTable,
 } from './bond-worker-runtime'
@@ -54,6 +55,7 @@ export type {
   ComputeTrajectoryFrameTypedResult,
   TrajectoryBondSessionDiagnostics,
   TrajectoryTypedBondInput,
+  TrajectoryWorkerTimings,
   TypedBondInput,
   TypedBondTable,
 }
@@ -293,6 +295,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
         TypedBondTable & {
           gpu_positions_rgba: Float32Array
           session_diagnostics: TrajectoryBondSessionDiagnostics
+          worker_timings: TrajectoryWorkerTimings
           dt: string
         }
       >(
@@ -319,6 +322,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
           ...response.session_diagnostics,
           thread_count: this.thread_count,
         },
+        worker_timings: response.worker_timings,
       }
     }
     const outcome = this.trajectory_request_tail.then(execute, execute)

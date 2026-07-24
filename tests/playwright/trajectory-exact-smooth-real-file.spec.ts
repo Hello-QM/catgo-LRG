@@ -36,6 +36,19 @@ type Diagnostics = {
   renderer_graph_hash_by_frame: Record<number, string>
   renderer_bond_count_by_frame: Record<number, number>
   bond_compute_ms: number[]
+  bond_worker_wasm_ms: number[]
+  bond_worker_position_pack_ms: number[]
+  bond_worker_table_copy_ms: number[]
+  bond_worker_total_ms: number[]
+  bond_worker_roundtrip_ms: number[]
+  bond_backend: string | null
+  bond_threading_expected: boolean
+  bond_thread_count: number
+  bond_session_initializations: number
+  bond_session_frames: number
+  bond_grid_cache_hits: number
+  bond_grid_rebuilds: number
+  bond_capacity_growths: number
   cold_first_frame_ms: number | null
   warmup_ms: number | null
   frame_time_p95_ms: number | null
@@ -205,7 +218,28 @@ function log_segment(label: string, snapshot: Diagnostics): void {
     `frame_p95_ms=${snapshot.frame_time_p95_ms?.toFixed(2) ?? `n/a`} ` +
     `compute_p95_ms=${
       percentile(snapshot.bond_compute_ms, 0.95)?.toFixed(2) ?? `n/a`
-    } long_tasks=${snapshot.main_thread_long_tasks}`,
+    } worker_wasm_p95_ms=${
+      percentile(snapshot.bond_worker_wasm_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } worker_pack_p95_ms=${
+      percentile(snapshot.bond_worker_position_pack_ms, 0.95)?.toFixed(2) ??
+        `n/a`
+    } worker_table_copy_p95_ms=${
+      percentile(snapshot.bond_worker_table_copy_ms, 0.95)?.toFixed(2) ??
+        `n/a`
+    } worker_total_p95_ms=${
+      percentile(snapshot.bond_worker_total_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } worker_roundtrip_p95_ms=${
+      percentile(snapshot.bond_worker_roundtrip_ms, 0.95)?.toFixed(2) ??
+        `n/a`
+    } backend=${snapshot.bond_backend ?? `n/a`} ` +
+    `threading_expected=${snapshot.bond_threading_expected} ` +
+    `threads=${snapshot.bond_thread_count} ` +
+    `session_initializations=${snapshot.bond_session_initializations} ` +
+    `session_frames=${snapshot.bond_session_frames} ` +
+    `grid_cache_hits=${snapshot.bond_grid_cache_hits} ` +
+    `grid_rebuilds=${snapshot.bond_grid_rebuilds} ` +
+    `capacity_growths=${snapshot.bond_capacity_growths} ` +
+    `long_tasks=${snapshot.main_thread_long_tasks}`,
   )
 }
 

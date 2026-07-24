@@ -459,6 +459,13 @@ export async function prepare_exact_trajectory_frame(
         result.threading_expected,
         result.session_diagnostics,
       )
+      trajectory_render_diagnostics.record_bond_worker_timings(
+        result.worker_timings.wasm_compute_ms,
+        result.worker_timings.position_pack_ms,
+        result.worker_timings.table_copy_ms,
+        result.worker_timings.worker_total_ms,
+        result.elapsed_ms,
+      )
       graph = typed_table_to_base_bond_graph(result.table, input.graph_version)
       gpu_positions_rgba = result.gpu_positions_rgba
     } catch (error) {

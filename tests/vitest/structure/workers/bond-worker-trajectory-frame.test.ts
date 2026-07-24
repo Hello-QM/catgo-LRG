@@ -165,6 +165,17 @@ describe(`trajectory messages in the worker`, () => {
     const positions = new Float32Array(atom_count * 3)
     positions.set([1, 2, 3], 0)
     positions.set([7, 8, 9], (atom_count - 1) * 3)
+    const now = vi.spyOn(performance, `now`)
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(104)
+      .mockReturnValueOnce(110)
+      .mockReturnValueOnce(113)
+      .mockReturnValueOnce(120)
+      .mockReturnValueOnce(200)
+      .mockReturnValueOnce(205)
+      .mockReturnValueOnce(211)
+      .mockReturnValueOnce(215)
+      .mockReturnValueOnce(224)
     await scope.onmessage!({
       data: {
         id: 1,
@@ -228,7 +239,18 @@ describe(`trajectory messages in the worker`, () => {
       session_initializations: 1,
       thread_count: 1,
     })
+    expect(response.msg.worker_timings).toEqual({
+      wasm_compute_ms: 5,
+      position_pack_ms: 6,
+      table_copy_ms: 4,
+      worker_total_ms: 24,
+    })
+    expect(
+      Object.values(response.msg.worker_timings as Record<string, number>)
+        .every((value) => Number.isFinite(value) && value >= 0),
+    ).toBe(true)
     expect(table_free).toHaveBeenCalledTimes(2)
+    now.mockRestore()
   })
 
   test(`frees the old Rust session before creating its replacement`, async () => {
@@ -437,6 +459,12 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
                 grid_rebuilds: 1,
                 capacity_growths: 2,
               },
+              worker_timings: {
+                wasm_compute_ms: 2,
+                position_pack_ms: 0.5,
+                table_copy_ms: 1,
+                worker_total_ms: 4.2,
+              },
               dt: `4.2`,
             },
           } as MessageEvent)
@@ -488,6 +516,12 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
       grid_cache_hits: 0,
       grid_rebuilds: 1,
       capacity_growths: 2,
+    })
+    expect(result.worker_timings).toEqual({
+      wasm_compute_ms: 2,
+      position_pack_ms: 0.5,
+      table_copy_ms: 1,
+      worker_total_ms: 4.2,
     })
     expect(worker.posted.map((entry) => entry.data.type)).toEqual([
       `trajectory_session_init`,
@@ -778,6 +812,12 @@ describe(`trajectory runtime API`, () => {
           grid_rebuilds: 1,
           capacity_growths: 2,
         },
+        worker_timings: {
+          wasm_compute_ms: 2,
+          position_pack_ms: 0.5,
+          table_copy_ms: 1,
+          worker_total_ms: 4,
+        },
       })),
       pack_trajectory_positions: vi.fn(async () =>
         Float32Array.from([1, 2, 3, 1])
@@ -800,6 +840,12 @@ describe(`trajectory runtime API`, () => {
     expect(result.backend).toBe(`rust-wasm-scalar`)
     expect(result.threading_expected).toBe(false)
     expect(result.elapsed_ms).toBe(5)
+    expect(result.worker_timings).toEqual({
+      wasm_compute_ms: 2,
+      position_pack_ms: 0.5,
+      table_copy_ms: 1,
+      worker_total_ms: 4,
+    })
     expect(result.session_diagnostics).toEqual({
       thread_count: 1,
       session_initializations: 1,

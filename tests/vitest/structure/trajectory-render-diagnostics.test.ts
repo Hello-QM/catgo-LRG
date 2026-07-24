@@ -115,6 +115,42 @@ describe(`trajectory render diagnostics`, () => {
     })
   })
 
+  test(`keeps bounded scalar worker phase timings and clears them by owner`, () => {
+    const diagnostics = create_trajectory_render_diagnostics()
+    diagnostics.begin_owner({}, 1_000)
+    for (let idx = 0; idx < 300; idx++) {
+      diagnostics.record_bond_worker_timings(
+        idx,
+        idx + 0.25,
+        idx + 0.5,
+        idx + 0.75,
+        idx + 1,
+      )
+    }
+
+    const snapshot = diagnostics.snapshot()
+    expect(snapshot.bond_worker_wasm_ms).toHaveLength(256)
+    expect(snapshot.bond_worker_position_pack_ms).toHaveLength(256)
+    expect(snapshot.bond_worker_table_copy_ms).toHaveLength(256)
+    expect(snapshot.bond_worker_total_ms).toHaveLength(256)
+    expect(snapshot.bond_worker_roundtrip_ms).toHaveLength(256)
+    expect(snapshot.bond_worker_wasm_ms[0]).toBe(44)
+    expect(snapshot.bond_worker_roundtrip_ms.at(-1)).toBe(300)
+    expect(
+      Object.values(snapshot).some((value) => ArrayBuffer.isView(value)),
+    ).toBe(false)
+    expect(snapshot).not.toHaveProperty(`worker_timings`)
+
+    diagnostics.begin_owner({}, 2_000)
+    expect(diagnostics.snapshot()).toMatchObject({
+      bond_worker_wasm_ms: [],
+      bond_worker_position_pack_ms: [],
+      bond_worker_table_copy_ms: [],
+      bond_worker_total_ms: [],
+      bond_worker_roundtrip_ms: [],
+    })
+  })
+
   test(`records exact graph identities, uploads, latency, and unique presentation FPS`, () => {
     const diagnostics = create_trajectory_render_diagnostics()
     diagnostics.begin_owner({}, 1_000)

@@ -95,10 +95,18 @@ export type TrajectoryBondSessionDiagnostics = {
   capacity_growths: number
 }
 
+export type TrajectoryWorkerTimings = {
+  wasm_compute_ms: number
+  position_pack_ms: number
+  table_copy_ms: number
+  worker_total_ms: number
+}
+
 export interface TrajectoryFrameWorkerResult {
   table: TypedBondTable
   gpu_positions_rgba: Float32Array
   session_diagnostics: TrajectoryBondSessionDiagnostics
+  worker_timings: TrajectoryWorkerTimings
 }
 
 /** A live, initialized bond worker. `compute_typed` is the hot path both
@@ -258,6 +266,7 @@ export function create_bond_worker_runtime(
       table: result.table,
       gpu_positions_rgba: result.gpu_positions_rgba,
       session_diagnostics: result.session_diagnostics,
+      worker_timings: result.worker_timings,
       threading_expected: initial_threading_expected ?? false,
       elapsed_ms: now() - t0,
     }

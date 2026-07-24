@@ -178,6 +178,15 @@ function scalar_session_diagnostics() {
   }
 }
 
+function scalar_worker_timings() {
+  return {
+    wasm_compute_ms: 0.5,
+    position_pack_ms: 0.1,
+    table_copy_ms: 0.1,
+    worker_total_ms: 0.9,
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   trajectory_render_diagnostics.reset()
@@ -198,10 +207,21 @@ describe(`prepare_exact_trajectory_frame`, () => {
       trajectory_render_diagnostics,
       `record_bond_session`,
     )
+    const record_bond_worker_timings = vi.spyOn(
+      trajectory_render_diagnostics,
+      `record_bond_worker_timings`,
+    )
+    const worker_timings = {
+      wasm_compute_ms: 1.1,
+      position_pack_ms: 0.2,
+      table_copy_ms: 0.3,
+      worker_total_ms: 1.8,
+    }
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-threads`,
       threading_expected: true,
       session_diagnostics,
+      worker_timings,
       elapsed_ms: 2,
       table: {
         pairs: new Uint32Array([0, 1, 0, 0]),
@@ -257,6 +277,14 @@ describe(`prepare_exact_trajectory_frame`, () => {
       true,
       session_diagnostics,
     )
+    expect(record_bond_worker_timings).toHaveBeenCalledOnce()
+    expect(record_bond_worker_timings).toHaveBeenCalledWith(
+      1.1,
+      0.2,
+      0.3,
+      1.8,
+      2,
+    )
     expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
       bond_backend: `rust-wasm-threads`,
       bond_threading_expected: true,
@@ -266,8 +294,14 @@ describe(`prepare_exact_trajectory_frame`, () => {
       bond_grid_cache_hits: 6,
       bond_grid_rebuilds: 1,
       bond_capacity_growths: 2,
+      bond_worker_wasm_ms: [1.1],
+      bond_worker_position_pack_ms: [0.2],
+      bond_worker_table_copy_ms: [0.3],
+      bond_worker_total_ms: [1.8],
+      bond_worker_roundtrip_ms: [2],
     })
     record_bond_session.mockRestore()
+    record_bond_worker_timings.mockRestore()
   })
 
   test(`allocates different typed-worker sessions for different trajectory owners`, async () => {
@@ -275,6 +309,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -302,6 +337,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -360,6 +396,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -389,6 +426,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -443,6 +481,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -509,6 +548,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -583,6 +623,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -702,6 +743,7 @@ describe(`prepare_exact_trajectory_frame`, () => {
       backend: `rust-wasm-scalar`,
       threading_expected: false,
       session_diagnostics: scalar_session_diagnostics(),
+      worker_timings: scalar_worker_timings(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -856,6 +898,11 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
       bond_backend: null,
       bond_session_frames: 0,
+      bond_worker_wasm_ms: [],
+      bond_worker_position_pack_ms: [],
+      bond_worker_table_copy_ms: [],
+      bond_worker_total_ms: [],
+      bond_worker_roundtrip_ms: [],
     })
   })
 
@@ -889,6 +936,13 @@ describe(`prepare_exact_trajectory_frame`, () => {
       request.source.positions[0], 0, 0, 1,
       request.source.positions[3], 0, 0, 1,
     ])
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      bond_worker_wasm_ms: [],
+      bond_worker_position_pack_ms: [],
+      bond_worker_table_copy_ms: [],
+      bond_worker_total_ms: [],
+      bond_worker_roundtrip_ms: [],
+    })
   })
 
   test(`large typed-worker failure rejects without an object or main-thread fallback`, async () => {
@@ -958,6 +1012,11 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
       bond_backend: null,
       bond_session_frames: 0,
+      bond_worker_wasm_ms: [],
+      bond_worker_position_pack_ms: [],
+      bond_worker_table_copy_ms: [],
+      bond_worker_total_ms: [],
+      bond_worker_roundtrip_ms: [],
     })
   })
 

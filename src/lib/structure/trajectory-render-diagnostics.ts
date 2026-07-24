@@ -35,6 +35,11 @@ export type TrajectoryRenderDiagnostics = TrajectoryRetainedState & {
   renderer_graph_hash_by_frame: Record<number, string>
   renderer_bond_count_by_frame: Record<number, number>
   bond_compute_ms: number[]
+  bond_worker_wasm_ms: number[]
+  bond_worker_position_pack_ms: number[]
+  bond_worker_table_copy_ms: number[]
+  bond_worker_total_ms: number[]
+  bond_worker_roundtrip_ms: number[]
   bond_backend: BondBackendKind | null
   bond_threading_expected: boolean
   bond_thread_count: number
@@ -77,6 +82,13 @@ export type TrajectoryRenderDiagnosticsRecorder = {
     backend: BondBackendKind,
     threading_expected: boolean,
     diagnostics: TrajectoryBondSessionDiagnostics,
+  ): void
+  record_bond_worker_timings(
+    wasm_compute_ms: number,
+    position_pack_ms: number,
+    table_copy_ms: number,
+    worker_total_ms: number,
+    worker_roundtrip_ms: number,
   ): void
   record_presented(
     frame_idx: number,
@@ -150,6 +162,11 @@ class NumberRing {
 type MutableDiagnostics = Omit<
   TrajectoryRenderDiagnostics,
   | 'bond_compute_ms'
+  | 'bond_worker_wasm_ms'
+  | 'bond_worker_position_pack_ms'
+  | 'bond_worker_table_copy_ms'
+  | 'bond_worker_total_ms'
+  | 'bond_worker_roundtrip_ms'
   | 'frame_time_p95_ms'
   | 'presentation_latency_ms'
   | 'unique_frame_fps'
@@ -229,6 +246,11 @@ export function create_trajectory_render_diagnostics():
   let last_unique_timestamp_ms: number | null = null
   let requested_at = new Map<string, number>()
   let bond_compute = new NumberRing()
+  let bond_worker_wasm = new NumberRing()
+  let bond_worker_position_pack = new NumberRing()
+  let bond_worker_table_copy = new NumberRing()
+  let bond_worker_total = new NumberRing()
+  let bond_worker_roundtrip = new NumberRing()
   let presentation_latency = new NumberRing()
   let unique_timestamps = new NumberRing()
   let frame_times = new NumberRing()
@@ -241,6 +263,11 @@ export function create_trajectory_render_diagnostics():
     last_unique_timestamp_ms = null
     requested_at = new Map()
     bond_compute = new NumberRing()
+    bond_worker_wasm = new NumberRing()
+    bond_worker_position_pack = new NumberRing()
+    bond_worker_table_copy = new NumberRing()
+    bond_worker_total = new NumberRing()
+    bond_worker_roundtrip = new NumberRing()
     presentation_latency = new NumberRing()
     unique_timestamps = new NumberRing()
     frame_times = new NumberRing()
@@ -330,6 +357,19 @@ export function create_trajectory_render_diagnostics():
         state.bond_capacity_growths,
         diagnostics.capacity_growths,
       )
+    },
+    record_bond_worker_timings(
+      wasm_compute_ms,
+      position_pack_ms,
+      table_copy_ms,
+      worker_total_ms,
+      worker_roundtrip_ms,
+    ) {
+      bond_worker_wasm.push(Math.max(0, wasm_compute_ms))
+      bond_worker_position_pack.push(Math.max(0, position_pack_ms))
+      bond_worker_table_copy.push(Math.max(0, table_copy_ms))
+      bond_worker_total.push(Math.max(0, worker_total_ms))
+      bond_worker_roundtrip.push(Math.max(0, worker_roundtrip_ms))
     },
     record_presented(
       frame_idx,
@@ -436,6 +476,11 @@ export function create_trajectory_render_diagnostics():
           ...state.renderer_bond_count_by_frame,
         },
         bond_compute_ms: compute_values,
+        bond_worker_wasm_ms: bond_worker_wasm.to_array(),
+        bond_worker_position_pack_ms: bond_worker_position_pack.to_array(),
+        bond_worker_table_copy_ms: bond_worker_table_copy.to_array(),
+        bond_worker_total_ms: bond_worker_total.to_array(),
+        bond_worker_roundtrip_ms: bond_worker_roundtrip.to_array(),
         frame_time_p95_ms: percentile_95(frame_times.to_array()),
         presentation_latency_ms: latency_values,
         unique_frame_fps,
