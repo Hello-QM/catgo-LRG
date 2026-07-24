@@ -7,7 +7,7 @@ Branch: `feat/impostor-bond-mvp`.
 Starting point: `a831db46`.
 Task 9 implementation head: `483575dd`.
 Task 10 closure: `9cfcc6bf`.
-Final audited implementation head: `536809fe`.
+Final audited implementation head: `5ba7f90f`.
 
 The ten-task exact prepared-frame pipeline is implemented. Production playback now
 prepares positions and exact bonds together, publishes only complete matching snapshots,
@@ -32,9 +32,10 @@ worker path.
 
 Post-task audits hardened attribute rebinding, unified ownership, transactional prefetch,
 persistent WASM sessions, renderer acknowledgement, packet-owned legacy isolation, and
-main-thread scheduling. The final performance closure snapshots the eight prepared buffer
-keys once per scheduling turn instead of regenerating 20k-atom topology fingerprints in
-every buffer callback.
+main-thread scheduling. The final performance closure suspends the legacy bond position
+resync while the packet renderer owns the layer, reuses the current exact topology key
+across sources with the same stable-site snapshot, and rebases cache hits onto the live
+replica layout without recomputing or mutating the cached graph.
 
 ### Real-file acceptance evidence
 
@@ -48,30 +49,31 @@ pnpm playwright test \
   --project=chromium --workers=1 --reporter=line
 ```
 
-Fresh final outcome at `536809fe`: `1 passed (4.4m)`.
+Fresh final outcome at `5ba7f90f`: `1 passed (47.1s)`.
 
 - Input SHA-256:
   `38d4554e93744b7efc53e2add4f7ef90ed8f72557b78e45f0696347434b3e41c`.
 - Shape: 100 frames × 19,968 atoms.
-- Reference sweep: 1,050.85 ms in an independent browser context.
+- Reference sweep: 1,252.18 ms in an independent browser context.
 - Exact displayed bond graphs: 100/100 hashes and counts matched the reference.
-- First four-second unique presented FPS: 27.54.
-- Steady unique presented FPS: 27.16.
+- First four-second unique presented FPS: 24.02.
+- Steady unique presented FPS: 29.87.
 - Required floor: 24 FPS; requested target: 30 FPS.
-- Cold first complete-frame diagnostic: 51,288.78 ms.
-- Three-frame warmup diagnostic: 51,412.82 ms.
-- Frame-time p95: 62.31 ms; main-thread long tasks: 6.
-- Exact bond compute median/p95: 10.87 / 81.83 ms.
-- Presentation latency median/p95: 238.40 / 419.84 ms.
-- Position uploads: 301, exactly one per unique presented frame; 98,631,680 bytes.
+- Cold first complete-frame diagnostic: 1,228.90 ms.
+- Three-frame warmup diagnostic: 1,313.87 ms.
+- Frame-time p95: 41.77 ms; final diagnostic main-thread long tasks: 1.
+- Exact bond compute median/p95: 9.13 / 61.81 ms.
+- Presentation latency median/p95: 238.32 / 579.65 ms.
+- Position uploads: 224, exactly one per unique presented frame; 73,400,320 bytes.
 - Picker position uploads during passive playback: 0.
-- Renderer-scheduled topology uploads: 301; 85,634,274 live-prefix bytes.
-- Peak prepared cache: 8 frames / 11,209,296 bytes.
-- Peak total retained prepared state: 21,427,136 bytes, below 96 MiB.
-- Maximum random-seek application-state acknowledgement: 2.825 ms, below 100 ms.
+- Renderer-scheduled topology uploads: 224; 63,735,804 live-prefix bytes.
+- Peak prepared cache: 8 frames / 11,209,568 bytes.
+- Peak total retained prepared state: 20,148,672 bytes, below 96 MiB.
+- Maximum random-seek application-state acknowledgement: 1.34 ms, below 100 ms.
 - Prepared playback reported zero stale results and zero failed frames.
-- Worker backend: `rust-wasm-threads`, threading expected, 8 threads; one session
-  initialization, 341 grid-cache hits, and one grid rebuild at the end of measurement.
+- Worker backend: `rust-wasm-threads`, threading expected, 8 threads; two session
+  initializations, 234 grid-cache hits, and one grid rebuild at the end of the steady
+  segment.
 - Chromium used headed hardware WebGL through:
   `ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 4060 Laptop GPU/PCIe/SSE2,
   OpenGL 4.5.0)`.
@@ -79,10 +81,10 @@ Fresh final outcome at `536809fe`: `1 passed (4.4m)`.
 
 ### Final verification
 
-- Focused trajectory/render regression set: 117 passed, 0 failed.
+- Focused trajectory/render regression set: 128 passed, 0 failed.
 - `pnpm verify:wasm`: all scalar/threaded artifact and bridge assertions passed.
 - Rust library suite: 1,027 passed, 0 failed.
-- `pnpm test`: 284 files passed, 1 skipped; 5,093 tests passed, 53 skipped,
+- `pnpm test`: 284 files passed, 1 skipped; 5,098 tests passed, 53 skipped,
   0 failed.
 - `pnpm check`: 0 errors and 304 pre-existing warnings.
 - `git diff --check`: passed.
@@ -93,11 +95,11 @@ Fresh final outcome at `536809fe`: `1 passed (4.4m)`.
   1,366 passed, 49 skipped, and 85 unrelated failures. No Python source is changed by
   this task.
 
-Known non-blocking limitations: the 30 FPS target is not reached, although both required
-segments exceed the 24 unique-presented-FPS floor. Cold startup and the seek-inclusive
-presentation-latency p95 remain substantially higher than steady-state latency. The
-repository-wide Python gate remains blocked by the existing local CUDA/NVRTC environment
-and unrelated baseline failures.
+Known non-blocking limitations: the first segment clears the required 24 FPS floor by a
+small margin, and the steady segment reaches 29.87 rather than the requested 30 FPS
+target. Cold startup and the seek-inclusive presentation-latency p95 remain substantially
+higher than steady-state latency. The repository-wide Python gate remains blocked by the
+existing local CUDA/NVRTC environment and unrelated baseline failures.
 
 The local-only paths `.claude/gate-approvals/`, `.claude/tmp-dump.traj`, and
 `.superpowers/` remain unstaged and unmodified by this closure.
