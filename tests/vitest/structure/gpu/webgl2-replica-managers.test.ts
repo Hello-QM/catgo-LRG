@@ -366,6 +366,7 @@ for (const mode of [`atom`, `bond`] as const) {
       // Compact bond attributes stay per-bond and serve both half-bond draws,
       // so they advance once per (2 × replica cell count) instance group.
       expect(initial_attr.meshPerAttribute).toBe(expected_divisor(1))
+      let previous_attr = initial_attr
 
       for (const [button, expected_cells] of [
         [`factor-2`, 2],
@@ -382,10 +383,12 @@ for (const mode of [`atom`, `bond`] as const) {
         // detects) over the SAME base-sized backing array.
         const live_attr = geometry.getAttribute(attr_name) as
           THREE.InstancedBufferAttribute
+        expect(live_attr).not.toBe(previous_attr)
         expect(live_attr.array).toBe(base_array)
         expect(live_attr.meshPerAttribute).toBe(
           expected_divisor(expected_cells),
         )
+        previous_attr = live_attr
 
         // The render boundary must be inert: the retired resetState() VAO
         // hack reset renderer-global state mid-frame (correct on ANGLE only —
