@@ -63,7 +63,7 @@ function make_packets(): RenderPacket[] {
   ]
 }
 
-function make_fake_renderer() {
+function make_fake_renderer(is_webgl2 = true) {
   // Match Three r181's split bookkeeping: getViewport/getScissor/getScissorTest
   // expose the canvas defaults, while setRenderTarget copies the target's
   // viewport/scissor/scissorTest into the active _current* pass state.
@@ -172,6 +172,7 @@ function make_fake_renderer() {
   } as unknown as WebGL2RenderingContext
 
   const renderer = {
+    capabilities: { isWebGL2: is_webgl2 },
     render: vi.fn(),
     setSize: vi.fn(),
     setPixelRatio: vi.fn(),
@@ -256,7 +257,12 @@ afterEach(async () => {
   document.body.replaceChildren()
 })
 
-async function mount_manager(mode: 'atom' | 'bond', start_null = false) {
+async function mount_manager(
+  mode: 'atom' | 'bond',
+  start_null = false,
+  is_webgl2 = true,
+  add_periodic_bond = false,
+) {
   const dom = document.createElement(`div`)
   const canvas = document.createElement(`canvas`)
   dom.append(canvas)
@@ -272,15 +278,20 @@ async function mount_manager(mode: 'atom' | 'bond', start_null = false) {
     activate_render_target,
     current_pass,
     expected_pass,
-  } = make_fake_renderer()
+  } = make_fake_renderer(is_webgl2)
   let scene!: THREE.Scene
+  const bond_manager = new BondManager(16)
+  if (mode === `bond` && start_null) bond_manager.add_bond(0, 1)
+  if (mode === `bond` && start_null && add_periodic_bond) {
+    bond_manager.add_bond(1, 0, undefined, [1, 0, 0])
+  }
   const component = mount(Harness, {
     target: dom,
     props: {
       mode,
       packets: make_packets(),
       atom_manager: new AtomManager(16),
-      bond_manager: new BondManager(16),
+      bond_manager,
       renderer,
       dom,
       canvas,
@@ -469,6 +480,65 @@ describe(`packet-path activation from a previously mounted static state`, () => 
     await click(dom, `factor-null`)
     // Dropping back to 1×1×1 static returns to the legacy path cleanly.
     expect(instanced_meshes(scene)).toHaveLength(1)
+  })
+})
+
+describe(`static bond impostor activation`, () => {
+  test(`WebGL2 static bonds ray-cast cylinders from CPU-authored matrices`, async () => {
+    const { dom, scene } = await mount_manager(`bond`, true)
+    const [bond_mesh] = instanced_meshes(scene)
+    expect(bond_mesh).toBeDefined()
+    expect(bond_mesh.geometry.type).toBe(`BoxGeometry`)
+    const material = bond_mesh.material as THREE.ShaderMaterial
+    expect(material.glslVersion).toBe(THREE.GLSL3)
+    expect(material.vertexShader).toContain(`instanceMatrix[3]`)
+    expect(material.vertexShader).toContain(`uGpuXform`)
+    expect(material.vertexShader).toContain(`instance_seam_cap`)
+    expect(material.vertexShader).toContain(`owns_shared_seam`)
+    expect(material.vertexShader).toContain(`true_radius * 0.02`)
+    expect(material.vertexShader).toContain(`proxy_len`)
+    expect(material.fragmentShader).toContain(`vOpenBase`)
+    expect(material.fragmentShader).toContain(`vOpenTip`)
+    expect(material.fragmentShader).toContain(`gl_FragDepth`)
+    expect(material.transparent).toBe(true)
+    expect(material.depthWrite).toBe(false)
+    expect(material.depthTest).toBe(false)
+    expect(material.side).toBe(THREE.DoubleSide)
+    await click(dom, `appearance`)
+    expect(bond_mesh.material).toBe(material)
+    expect(material.uniforms.uOpacity.value).toBeCloseTo(0.4)
+    expect(material.depthWrite).toBe(false)
+    const seam = bond_mesh.geometry.getAttribute(
+      `instance_seam_cap`,
+    ) as THREE.InstancedBufferAttribute
+    expect([...seam.array].slice(0, 2)).toEqual([1, -1])
+  })
+
+  test(`legacy WebGL1 static bonds keep the cylinder mesh fallback`, async () => {
+    const { scene } = await mount_manager(`bond`, true, false)
+    const [bond_mesh] = instanced_meshes(scene)
+    expect(bond_mesh).toBeDefined()
+    expect(bond_mesh.geometry.type).toBe(`CylinderGeometry`)
+    expect((bond_mesh.material as THREE.ShaderMaterial).glslVersion).not.toBe(
+      THREE.GLSL3,
+    )
+  })
+
+  test(`periodic static stubs keep both real end caps closed`, async () => {
+    const warn = vi.spyOn(console, `warn`).mockImplementation(() => undefined)
+    try {
+      const { scene } = await mount_manager(`bond`, true, true, true)
+      const [bond_mesh] = instanced_meshes(scene)
+      const seam = bond_mesh.geometry.getAttribute(
+        `instance_seam_cap`,
+      ) as THREE.InstancedBufferAttribute
+      expect([...seam.array].slice(0, 4)).toEqual([1, -1, 0, 0])
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`no lattice matrix is available`),
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

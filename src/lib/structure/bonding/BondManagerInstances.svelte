@@ -185,6 +185,15 @@
 
   const packet_position_resource = new SharedPositionTexture()
   onDestroy(() => packet_position_resource.dispose())
+  const threlte = useThrelte()
+
+  // Ray-cylinder impostors require GLSL 300 ES. Fail closed until Three has
+  // published an explicit WebGL2 capability; legacy WebGL1 keeps the existing
+  // cylinder mesh/material path.
+  let webgl2_capable = $state(false)
+  $effect(() => {
+    webgl2_capable = threlte.renderer?.capabilities?.isWebGL2 === true
+  })
 
   // GPU-transform eligibility. v1 exclusions (all fall back to the CPU
   // instanceMatrix path, zero regression surface):
@@ -198,6 +207,7 @@
   // the CPU path for in-session A/B benchmarking.
   const gpu_active = $derived(
     gpu_transform_active &&
+      webgl2_capable &&
       !multibond_enabled &&
       (image_atom_layout === null || image_atom_layout.n_image_atoms === 0) &&
       !(import.meta.env?.DEV &&
@@ -211,8 +221,6 @@
   // Threlte renders on-demand; after GPU-attribute uploads we must ask for a
   // frame. Without this, bond restores after Ctrl+Z sit in the buffer
   // invisibly until camera movement or a structure change triggers a repaint.
-  const threlte = useThrelte()
-
   // Render-loop refactor (R4c): all canvas-paint requests in this component
   // route through mark_dirty() — single grep target + DEV counter contribution.
   function mark_dirty(): void {
@@ -362,23 +370,21 @@
     }
   `
 
-  // Impostor (ray-cylinder) vertex shader for the GPU-transform trajectory
-  // path. It mirrors #524's uGpuXform-branch geometry at parity -- same
-  // endpoint texelFetch, b_eff = pb_base + uLattice*a_jimage, intra-cell mid,
-  // periodic paired-stub (uStubMode / uStubScale), and the same collapse
-  // conditions -- but instead of transforming a cylinder vertex + emitting a
-  // surface normal, it maps a unit OBB box (Task 2's BoxGeometry, corners in
-  // [-1,1]) onto each half-bond and passes the half-cylinder's view-space
-  // frame (base / axis / radius) to the fragment stage (Task 4), which
-  // ray-casts the true cylinder surface. uBondRadius / uInvProjection are
-  // wired as uniforms in Task 5.
+  // Unified ray-cylinder impostor vertex shader. The trajectory GPU branch
+  // resolves exact endpoints from the position texture and typed topology.
+  // The static branch consumes the CPU-authored instanceMatrix that already
+  // encodes every legacy feature (PBC image decorators, repeats, manual and
+  // multibonds, stubs, cuts). Both branches map a unit OBB proxy around the
+  // same half-cylinder and hand its analytic frame to the fragment shader.
   const impostor_vertex_shader = `
     attribute vec3 instance_color_start;
     attribute vec3 instance_color_end;
     attribute float instance_opacity;
+    attribute float instance_seam_cap;
     attribute vec2 a_site;
     attribute vec3 a_jimage;
     attribute float a_half;
+    uniform float uGpuXform;
     uniform sampler2D uPosTex;
     uniform float uNAtoms;
     uniform mat3 uLattice;
@@ -396,76 +402,135 @@
     flat varying float vImpRadiusSq;
     flat varying float vImpLen;
     flat varying float vImpCollapse;
+    flat varying float vOpenBase;
+    flat varying float vOpenTip;
 
     void main() {
       vColorStart = instance_color_start;
       vColorEnd = instance_color_end;
       vOpacity = instance_opacity;
+      vOpenBase = 0.0;
+      vOpenTip = 0.0;
 
-      int ia = int(a_site.x + 0.5);
-      int ib = int(a_site.y + 0.5);
-      ivec2 sa = ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT});
-      ivec2 sb = ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT});
-      vec3 pa = texelFetch(uPosTex, sa, 0).xyz;
-      vec3 pb_base = texelFetch(uPosTex, sb, 0).xyz;
-      bool periodic = dot(abs(a_jimage), vec3(1.0)) > 0.5;
-      vec3 pb = periodic ? pb_base + uLattice * a_jimage : pb_base;
-      vec3 d = pb - pa;
-      float len = length(d);
+      vec3 obj_base;
+      vec3 obj_tip;
+      vec3 xb;
+      vec3 zb;
+      float true_radius = uBondRadius;
+      bool collapse = false;
+      bool owns_shared_seam = false;
 
-      // Collapse (zero-scale) under the same conditions as #524: endpoint past
-      // the live buffer, degenerate/over-cap length, or cross-cell under
-      // hide_incomplete.
-      bool collapse = a_site.x >= uNAtoms || a_site.y >= uNAtoms ||
-        !(len > 1e-6) || len > uMaxBondLength ||
-        (periodic && uHideIncomplete > 0.5);
+      if (uGpuXform > 0.5) {
+        int ia = int(a_site.x + 0.5);
+        int ib = int(a_site.y + 0.5);
+        ivec2 sa = ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT});
+        ivec2 sb = ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT});
+        vec3 pa = texelFetch(uPosTex, sa, 0).xyz;
+        vec3 pb_base = texelFetch(uPosTex, sb, 0).xyz;
+        bool periodic = dot(abs(a_jimage), vec3(1.0)) > 0.5;
+        if (!periodic) {
+          vOpenTip = 1.0;
+          owns_shared_seam = a_half < 0.5;
+        }
+        vec3 pb = periodic ? pb_base + uLattice * a_jimage : pb_base;
+        vec3 d = pb - pa;
+        float len = length(d);
+        collapse = a_site.x >= uNAtoms || a_site.y >= uNAtoms ||
+          !(len > 1e-6) || len > uMaxBondLength ||
+          (periodic && uHideIncomplete > 0.5);
+        if (!collapse) {
+          vec3 dir = d / len;
+          vec3 ref = abs(dir.y) < 0.99
+            ? vec3(0.0, 1.0, 0.0)
+            : vec3(1.0, 0.0, 0.0);
+          xb = normalize(cross(ref, dir));
+          zb = cross(xb, dir);
+          float half_len = 0.5 * len;
+          if (periodic) {
+            float stub_len = half_len *
+              (uStubMode > 0.5 ? uStubScale : 1.0);
+            if (a_half < 0.5) {
+              obj_base = pa;
+              obj_tip = pa + dir * stub_len;
+            } else {
+              obj_base = pb_base;
+              obj_tip = pb_base - dir * stub_len;
+            }
+          } else {
+            vec3 mid = 0.5 * (pa + pb);
+            if (a_half < 0.5) {
+              obj_base = pa;
+              obj_tip = mid;
+            } else {
+              obj_base = pb;
+              obj_tip = mid;
+            }
+          }
+        }
+      } else {
+        // The legacy renderer has already resolved every static feature into
+        // a unit-height, Y-oriented half-cylinder transform. Column 1 is its
+        // full axis; columns 0/2 carry multibond radius scale; column 3 is the
+        // center. A zero matrix is the existing "omit this half" sentinel.
+        vec3 center = instanceMatrix[3].xyz;
+        vec3 axis = instanceMatrix[1].xyz;
+        vec3 x_column = instanceMatrix[0].xyz;
+        vec3 z_column = instanceMatrix[2].xyz;
+        vOpenBase = instance_seam_cap < -0.5 ? 1.0 : 0.0;
+        vOpenTip = instance_seam_cap > 0.5 ? 1.0 : 0.0;
+        owns_shared_seam = instance_seam_cap > 0.5;
+        float axis_len = length(axis);
+        float radial_scale =
+          0.5 * (length(x_column) + length(z_column));
+        collapse = !(axis_len > 1e-6) || !(radial_scale > 1e-6);
+        if (!collapse) {
+          obj_base = center - 0.5 * axis;
+          obj_tip = center + 0.5 * axis;
+          xb = normalize(x_column);
+          zb = normalize(z_column);
+          true_radius *= radial_scale;
+        }
+      }
+
       vImpCollapse = collapse ? 1.0 : 0.0;
       if (collapse) {
-        gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // off-screen (clipped)
-        vImpBase = vec3(0.0); vImpAxis = vec3(0.0, 0.0, 1.0);
-        vImpRadiusSq = 0.0; vImpLen = 0.0;
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        vImpBase = vec3(0.0);
+        vImpAxis = vec3(0.0, 0.0, 1.0);
+        vImpRadiusSq = 0.0;
+        vImpLen = 0.0;
         return;
       }
 
-      vec3 dir = d / len;
-      // Deterministic perp basis (same roll-arbitrary choice as #524).
-      vec3 ref = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-      vec3 xb = normalize(cross(ref, dir));
-      vec3 zb = cross(xb, dir);
-      float half_len = 0.5 * len;
-
-      // Object-space half-cylinder endpoints (base -> tip along dir).
-      vec3 obj_base;   // the capped/anchored end
-      vec3 obj_tip;    // the mid (or stub) end
-      if (periodic) {
-        // Phase 6 outward paired stubs (hide OFF; hide ON collapsed above).
-        float stub_len = half_len * (uStubMode > 0.5 ? uStubScale : 1.0);
-        if (a_half < 0.5) { obj_base = pa;      obj_tip = pa + dir * stub_len; }
-        else              { obj_base = pb_base; obj_tip = pb_base - dir * stub_len; }
-      } else {
-        // Intra-cell: half A spans pa..mid, half B spans mid..pb.
-        vec3 mid = 0.5 * (pa + pb);
-        if (a_half < 0.5) { obj_base = pa; obj_tip = mid; }
-        else              { obj_base = pb; obj_tip = mid; }
-      }
-
-      float R = uBondRadius * 1.3; // AA padding shell (ray-cast uses true radius)
+      float R = true_radius * 1.3;
       float cyl_len = length(obj_tip - obj_base);
       vec3 cyl_dir = (obj_tip - obj_base) / max(cyl_len, 1e-6);
+      // Adjacent half-cylinders can leave a one-pixel raster gap at their
+      // exactly shared plane. Let one half own a tiny one-sided overlap
+      // (2% of radius, also capped by half length): enough to cover the pixel
+      // boundary without a visible colour-boundary shift. Periodic/incomplete
+      // stub ends never own a seam and remain geometrically untouched.
+      float proxy_len = cyl_len;
+      if (owns_shared_seam) {
+        float seam_overlap = min(true_radius * 0.02, cyl_len * 0.02);
+        obj_tip += cyl_dir * seam_overlap;
+        cyl_len += seam_overlap;
+        proxy_len = cyl_len;
+      }
       // OBB corner: base + (+/-R)perp + (0..len)axis. position in [-1,1]^3 -> remap
       // z from [-1,1] to [0,1] so the box spans base->tip.
       float za = position.z * 0.5 + 0.5;
       vec3 corner = obj_base
         + xb * (position.x * R)
         + zb * (position.y * R)
-        + cyl_dir * (za * cyl_len);
+        + cyl_dir * (za * proxy_len);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(corner, 1.0);
 
       // View-space half-cylinder frame for the fragment ray-cast.
       vImpBase = (modelViewMatrix * vec4(obj_base, 1.0)).xyz;
       vImpAxis = (modelViewMatrix * vec4(obj_tip - obj_base, 0.0)).xyz;
       vImpLen = length(vImpAxis);
-      float vr = uBondRadius * length(modelViewMatrix[0].xyz);
+      float vr = true_radius * length(modelViewMatrix[0].xyz);
       vImpRadiusSq = vr * vr;
     }
   `
@@ -504,6 +569,8 @@
     flat varying float vImpRadiusSq;
     flat varying float vImpLen;
     flat varying float vImpCollapse;
+    flat varying float vOpenBase;
+    flat varying float vOpenTip;
 
     // GLSL3 (glslVersion '300 es' — required for flat varyings + gl_FragDepth
     // + texelFetch): gl_FragColor does not exist, so declare an explicit
@@ -551,11 +618,26 @@
       vec3 hit; vec3 nrm; float coverage = 1.0; float axial = 0.0;
 
       if (ln < 1e-7 * vImpLen) {
-        float t = dot(RC, rd);
-        float v = dot(RC, RC);
-        if (v - t * t > vImpRadiusSq) discard;
-        hit = ray_origin - t * rd;
-        nrm = -A; axial = 0.0;
+        vec3 axis_dir = A / vImpLen;
+        vec3 radial = RC - axis_dir * dot(RC, axis_dir);
+        if (dot(radial, radial) > vImpRadiusSq) discard;
+        bool enter_base = dot(rd, axis_dir) > 0.0;
+        axial = enter_base ? 0.0 : 1.0;
+        bool entry_open = enter_base
+          ? vOpenBase > 0.5
+          : vOpenTip > 0.5;
+        if (entry_open) {
+          axial = enter_base ? 1.0 : 0.0;
+          bool other_open = enter_base
+            ? vOpenTip > 0.5
+            : vOpenBase > 0.5;
+          if (other_open) discard;
+        }
+        vec3 cap_center = B + axial * A;
+        float cap_t = dot(cap_center - ray_origin, axis_dir) /
+          dot(rd, axis_dir);
+        hit = ray_origin + cap_t * rd;
+        nrm = axial < 0.5 ? -A : A;
       } else {
         n /= ln;
         float dd = dot(RC, n); dd *= dd;
@@ -575,11 +657,29 @@
           vec3 farp = ray_origin + tfar * rd;
           float afar = dot(farp - B, A) / len2;
           if (anear < 0.0 && afar > 0.0) {
-            hit = ray_origin + (tnear + (anear / (anear - afar)) * 2.0 * s) * rd;
-            nrm = -A; axial = 0.0;
+            if (vOpenBase < 0.5) {
+              hit = mix(hit, farp, anear / (anear - afar));
+              nrm = -A; axial = 0.0;
+            } else if (afar <= 1.0) {
+              hit = farp;
+              nrm = farp - (B + afar * A);
+              axial = afar;
+            } else if (vOpenTip < 0.5) {
+              hit = mix(hit, farp, (1.0 - anear) / (afar - anear));
+              nrm = A; axial = 1.0;
+            } else discard;
           } else if (anear > 1.0 && afar < 1.0) {
-            hit = ray_origin + (tnear + ((anear - 1.0) / (anear - afar)) * 2.0 * s) * rd;
-            nrm = A; axial = 1.0;
+            if (vOpenTip < 0.5) {
+              hit = mix(hit, farp, (anear - 1.0) / (anear - afar));
+              nrm = A; axial = 1.0;
+            } else if (afar >= 0.0) {
+              hit = farp;
+              nrm = farp - (B + afar * A);
+              axial = afar;
+            } else if (vOpenBase < 0.5) {
+              hit = mix(hit, farp, anear / (anear - afar));
+              nrm = -A; axial = 0.0;
+            } else discard;
           } else discard;
         }
       }
@@ -812,6 +912,7 @@
       uDepthFar: shader_material.uniforms.uDepthFar,
       uDepthCueBgColor: shader_material.uniforms.uDepthCueBgColor,
       uBondOutlineStrength: shader_material.uniforms.uBondOutlineStrength,
+      uGpuXform: shader_material.uniforms.uGpuXform,
       uPosTex: shader_material.uniforms.uPosTex,
       uNAtoms: shader_material.uniforms.uNAtoms,
       uLattice: shader_material.uniforms.uLattice,
@@ -826,11 +927,42 @@
     },
   }))
 
-  // The InstancedMesh binds this: impostor cylinders while the GPU path runs,
-  // the #524 cylinder-mesh material otherwise. The geometry $derived flips on
-  // the same gpu_active signal (unit OBB vs CylinderGeometry), so a mode change
-  // reconstructs the mesh and the renderer effect reinitialises either way.
-  const active_material = $derived(gpu_active ? impostor_material : shader_material)
+  // Static/editor bonds preserve the legacy transparent blending contract.
+  // They share the exact shader + uniform objects with the opaque trajectory
+  // material, but use alpha blending for per-bond opacity overrides.
+  const static_impostor_material = untrack(() => new ShaderMaterial({
+    vertexShader: impostor_vertex_shader,
+    fragmentShader: impostor_fragment_shader,
+    glslVersion: '300 es',
+    transparent: true,
+    depthWrite: true,
+    alphaToCoverage: false,
+    uniforms: impostor_material.uniforms,
+  }))
+
+  // WebGL2 always ray-casts the cylinder surface. The trajectory fast path
+  // uses typed endpoint attributes; static/fallback modes consume the same
+  // CPU-authored instance matrices that the legacy cylinder mesh used.
+  const active_material = $derived(
+    gpu_active
+      ? impostor_material
+      : webgl2_capable
+        ? static_impostor_material
+        : shader_material,
+  )
+
+  function refresh_impostor_view_uniforms(): void {
+    if (!webgl2_capable) return
+    const camera = threlte.camera.current
+    if (camera) {
+      impostor_material.uniforms.uInvProjection.value.copy(
+        camera.projectionMatrixInverse,
+      )
+    }
+    threlte.renderer?.getDrawingBufferSize(
+      impostor_material.uniforms.uViewport.value,
+    )
+  }
 
   // ── GPU-transform position texture ────────────────────────────────────────
   // RGBA32F DataTexture, one texel per atom (xyz in rgb). Rewritten in place
@@ -978,6 +1110,17 @@
     shader_material.depthWrite = opacity >= 1
     shader_material.depthTest = opacity >= 1
     shader_material.side = opacity < 1 ? 2 : 0
+    // The static impostor stays in the transparent queue because its
+    // per-instance overrides can fade individual periodic/manual bonds even
+    // when global opacity is 1. Match the legacy material's depth/culling
+    // contract for a globally translucent structure.
+    static_impostor_material.depthWrite = opacity >= 1
+    static_impostor_material.depthTest = opacity >= 1
+    const static_side = opacity < 1 ? 2 : 0
+    if (static_impostor_material.side !== static_side) {
+      static_impostor_material.side = static_side
+      static_impostor_material.needsUpdate = true
+    }
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })
@@ -1045,10 +1188,8 @@
     })
   })
 
-  // Geometry rebuilds reactively when bond_radius OR the LOD segment count
-  // changes. Threlte's `args` reconciliation reconstructs the InstancedMesh,
-  // which drops the mesh ref — the renderer effect below then reinitialises
-  // and force_full_resync()s every slot's matrix, preserving bond data.
+  // WebGL2 uses one persistent unit OBB for every impostor half-bond. Legacy
+  // WebGL1 retains the radius/LOD-dependent CylinderGeometry fallback.
   //
   // Segment LOD: a large system drops to fewer cylinder segments *while
   // playing* (gpu_transform_active) and restores full segments on pause —
@@ -1060,14 +1201,14 @@
   // frame — the exact per-frame churn the trajectory fast-path exists to kill.
   const _unit_obb = new BoxGeometry(2, 2, 2) // corners x,y,z in [-1,1]
   const geometry = $derived.by(() => {
-    const active = gpu_active
+    const use_impostor = webgl2_capable
     // Track gpu_transform_active too, not just gpu_active: when multibond or
     // drawn image atoms hold gpu_active false while gpu_transform_active still
     // flips on play/pause, the segment-LOD rebuild (#529) must still fire on
     // that edge. Read it tracked here, use it inside untrack below.
     const playing = gpu_transform_active
     const radius = bond_radius
-    if (active) return _unit_obb // impostor maps the box per half-bond in the shader
+    if (use_impostor) return _unit_obb
     const segments = untrack(() =>
       bond_lod_segments(atom_positions.length / 3, playing)
     )
@@ -1113,6 +1254,8 @@
       // layout uses the correct per-slot stride.
       r.set_multibond(multibond_enabled, bond_radius)
       renderer = r
+      mesh_ref.onBeforeRender = refresh_impostor_view_uniforms
+      refresh_impostor_view_uniforms()
       // Apply the current transform mode: the mode-transition effect only
       // fires on gpu_active CHANGES and may have already run (renderer was
       // undefined), so a mesh (re)mount mid-playback must self-serve.
@@ -1127,6 +1270,7 @@
       }
       mark_dirty()
       return () => {
+        mesh_ref.onBeforeRender = () => {}
         r.dispose()
         if (renderer === r) renderer = undefined
       }
@@ -1296,13 +1440,7 @@
         // Impostor-only camera uniforms — the fragment ray-cast rebuilds the
         // view ray per pixel from the inverse projection + drawing-buffer size,
         // so both must track the live camera/renderer each frame.
-        const cam = threlte.camera.current
-        if (cam) {
-          impostor_material.uniforms.uInvProjection.value.copy(cam.projectionMatrixInverse)
-        }
-        // Write drawing-buffer size straight into the uniform's Vector2 — no
-        // per-frame allocation on this hot path.
-        threlte.renderer?.getDrawingBufferSize(impostor_material.uniforms.uViewport.value)
+        refresh_impostor_view_uniforms()
       } else {
         renderer!.force_full_resync()
       }
