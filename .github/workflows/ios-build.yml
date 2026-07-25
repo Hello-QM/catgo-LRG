@@ -27,6 +27,11 @@ on:
         description: 'After a signed build, upload the IPA to App Store Connect / TestFlight (needs App Store Connect API key secrets)'
         type: boolean
         default: false
+      release_tag:
+        description: 'Required for a TestFlight upload; must exactly match the app version (for example, v1.4.6)'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   ios:
@@ -42,6 +47,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ inputs.upload }}
+        run: node scripts/verify-release-version.mjs
 
       - name: Select Xcode 26 (iOS 26 SDK)
         # App Store Connect now rejects uploads built with the iOS 18.5 SDK —

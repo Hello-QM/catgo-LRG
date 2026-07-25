@@ -169,6 +169,34 @@ jobs:
             --repo "$REPOSITORY" --dir dist
           ls -lh dist
 
+      - name: Rewrite latest.json URLs for Cloudflare
+        # Rewrite before validation so the verifier sees exactly what R2 will
+        # serve. A stale source tag remains stale after the host substitution
+        # and is rejected by verify-mirrored-release.mjs.
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ ! -f dist/latest.json ]; then
+            echo "Release has no latest.json; refusing to publish a broken updater mirror." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          rewritten=$(mktemp)
+          trap 'rm -f "$rewritten"' EXIT
+          jq --arg base "${R2_PUBLIC_BASE_URL%/}" '
+            .platforms |= map_values(
+              .url |= sub(
+                "^https://github.com/[^/]+/[^/]+/releases/download/";
+                $base + "/"
+              )
+            )
+          ' dist/latest.json > "$rewritten"
+          mv "$rewritten" dist/latest.json
+          jq . dist/latest.json > /dev/null
+
       - name: Validate release assets against target tag
         if: steps.creds.outputs.configured == 'true'
         env:
@@ -180,37 +208,19 @@ jobs:
           target_source=$(mktemp -d)
           trap 'rm -rf "$target_source"' EXIT
           git archive "$tag" | tar -x -C "$target_source"
+          # v1.4.5 predates the citation surfaces enforced by the shared
+          # verifier. Keep that one historical backfill available; every later
+          # release must match the complete root-version inventory.
+          if [ "$tag" != "v1.4.5" ]; then
+            node scripts/verify-release-version.mjs \
+              --root "$target_source" \
+              --tag "$tag" \
+              --require-tag
+          fi
           node scripts/verify-mirrored-release.mjs \
             --tag "$tag" \
             --assets-dir dist \
             --source-root "$target_source"
-
-      - name: Rewrite and validate latest.json URLs
-        # latest.json is the Tauri updater manifest; its asset URLs point at
-        # github.com, which defeats the purpose for users behind the GFW.
-        # Point them at the mirror instead and serve the manifest from the
-        # bucket root (the updater endpoint in tauri.conf.json).
-        if: steps.creds.outputs.configured == 'true'
-        run: |
-          if [ ! -f dist/latest.json ]; then
-            echo "Release has no latest.json; refusing to publish a broken updater mirror." \
-              >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          jq --arg base "$R2_PUBLIC_BASE_URL" '
-            .platforms |= map_values(
-              .url |= sub(
-                "^https://github.com/[^/]+/[^/]+/releases/download/";
-                $base + "/"
-              )
-            )
-            | if all(.platforms[]; (.url | startswith($base + "/")))
-              then .
-              else error("updater manifest contains a non-mirror URL")
-              end
-          ' dist/latest.json > latest.mirror.json
-          jq . latest.mirror.json > /dev/null
 
       - name: Generate index.html download page
         if: steps.creds.outputs.configured == 'true'
@@ -245,7 +255,7 @@ jobs:
               tail -n 1
           )
           if [ "$tag" = "$latest_app_tag" ]; then
-            aws s3 cp latest.mirror.json "s3://$R2_BUCKET/latest.json" \
+            aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json" \
               --content-type application/json --cache-control 'public, max-age=300'
             aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
               --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'

@@ -44,20 +44,32 @@ test('checks out trusted source and generates the page with the Node CLI', () =>
   assert.doesNotMatch(WORKFLOW, /github\.com\/\$\{\{ github\.repository \}\}\/releases/)
 })
 
-test('resolves the release tag before validating target-tag legal material', () => {
+test('rewrites updater metadata before validating target-tag release material', () => {
   const resolveTag = WORKFLOW.indexOf('- name: Resolve tag')
+  const rewrite = WORKFLOW.indexOf(
+    '- name: Rewrite latest.json URLs for Cloudflare',
+  )
   const validateTarget = WORKFLOW.indexOf(
     '- name: Validate release assets against target tag',
   )
   assert.ok(resolveTag >= 0, 'tag is resolved')
-  assert.ok(validateTarget > resolveTag, 'target validation follows tag resolution')
+  assert.ok(rewrite > resolveTag, 'URL rewriting follows tag resolution')
+  assert.ok(
+    validateTarget > rewrite,
+    'target validation follows Cloudflare URL rewriting',
+  )
 
   const validationBlock = WORKFLOW.slice(
     validateTarget,
-    WORKFLOW.indexOf('- name: Rewrite and validate latest.json URLs'),
+    WORKFLOW.indexOf('- name: Generate index.html download page'),
   )
   assert.match(validationBlock, /refs\/tags\/\$tag:refs\/tags\/\$tag/)
   assert.match(validationBlock, /git archive "\$tag"/)
+  assert.match(
+    validationBlock,
+    /if \[ "\$tag" != "v1\.4\.5" \]; then[\s\S]*node scripts\/verify-release-version\.mjs[\s\S]*--root "\$target_source"[\s\S]*--tag "\$tag"[\s\S]*--require-tag[\s\S]*fi/,
+  )
+  assert.doesNotMatch(validationBlock, /v1\.4\.\[0-5\]|v1\.4\.\*/)
   assert.match(
     validationBlock,
     /node scripts\/verify-mirrored-release\.mjs[\s\S]*--tag "\$tag"[\s\S]*--source-root "\$target_source"/,
@@ -67,12 +79,12 @@ test('resolves the release tag before validating target-tag legal material', () 
 })
 
 test('rewrites and validates every updater URL before publishing metadata', () => {
-  assert.match(WORKFLOW, /Rewrite and validate latest\.json URLs/)
-  assert.match(WORKFLOW, /startsWith|startswith/)
-  assert.match(WORKFLOW, /jq \. latest\.mirror\.json > \/dev\/null/)
+  assert.match(WORKFLOW, /Rewrite latest\.json URLs for Cloudflare/)
+  assert.match(WORKFLOW, /MIRROR_TAG:\s*\$\{\{ steps\.tag\.outputs\.tag \}\}/)
+  assert.match(WORKFLOW, /jq \. dist\/latest\.json > \/dev\/null/)
 
   const syncAssets = WORKFLOW.indexOf('aws s3 sync dist/')
-  const uploadManifest = WORKFLOW.indexOf('aws s3 cp latest.mirror.json')
+  const uploadManifest = WORKFLOW.indexOf('aws s3 cp dist/latest.json')
   const uploadIndex = WORKFLOW.indexOf('aws s3 cp index.html')
   const prune = WORKFLOW.indexOf('- name: Prune older releases')
 
@@ -80,6 +92,7 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   assert.ok(uploadManifest > syncAssets, 'latest.json uploads after release assets')
   assert.ok(uploadIndex > uploadManifest, 'index.html uploads after latest.json')
   assert.ok(prune > uploadIndex, 'pruning starts only after root metadata uploads')
+  assert.doesNotMatch(WORKFLOW, /latest\.mirror\.json/)
 })
 
 test('keeps triggers but resolves only validated CatGo app releases', () => {
@@ -112,6 +125,6 @@ test('manual old-tag backfills cannot replace public root metadata', () => {
   assert.match(syncBlock, /latest_app_tag=/)
   assert.match(
     syncBlock,
-    /if \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp latest\.mirror\.json[\s\S]*aws s3 cp index\.html[\s\S]*fi/,
+    /if \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp dist\/latest\.json[\s\S]*aws s3 cp index\.html[\s\S]*fi/,
   )
 })

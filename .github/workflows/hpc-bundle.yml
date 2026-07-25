@@ -31,6 +31,12 @@ on:
       - 'vite.shared.ts'
       - 'svelte.config.js'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Upload the bundle to this release tag; empty builds a workflow artifact only'
+        type: string
+        required: false
+        default: ''
 
 env:
   CARGO_NET_RETRY: "10"
@@ -47,6 +53,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-version.mjs
 
       - uses: pnpm/action-setup@v4
 
@@ -145,10 +157,11 @@ jobs:
           path: catgo-hpc-bundle.tar.gz
           retention-days: 90
 
-      # Attach to release when triggered by a tag
+      # Attach to a release for tag pushes or an explicitly versioned manual run.
       - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
           files: catgo-hpc-bundle.tar.gz
           draft: true

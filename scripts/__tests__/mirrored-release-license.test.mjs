@@ -41,7 +41,7 @@ function makeAssets(parent, tag) {
       version: tag.slice(1),
       platforms: {
         'linux-x86_64': {
-          url: `https://example.invalid/${tag}/CatGo_${tag}_amd64.deb`,
+          url: `https://dl.catgo-ucsd.org/${tag}/CatGo_${tag}_amd64.deb`,
         },
       },
     })}\n`,

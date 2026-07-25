@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -7,6 +7,95 @@ import test from 'node:test'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const source = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const APP_VERSION = '1.4.6'
+const WORKFLOW_INVENTORY = {
+  'android-build.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /inputs\.release_tag/,
+      requireSource: /inputs\.release_tag/,
+    },
+  },
+  'build-stt-accel.yml': {
+    classification: 'independently-versioned-publisher',
+  },
+  'build-vscode-sidecars.yml': {
+    classification: 'root-versioned-publisher',
+    externalGateOwner:
+      'excluded from this change because another agent owns this workflow',
+  },
+  'deploy-cloudflare.yml': {
+    classification: 'unversioned-publisher',
+  },
+  'docker-publish.yml': {
+    classification: 'rolling-publisher',
+  },
+  'hpc-bundle.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /github\.ref_name[\s\S]*inputs\.release_tag/,
+      requireSource: /refs\/tags[\s\S]*inputs\.release_tag/,
+    },
+  },
+  'ios-build.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /inputs\.release_tag/,
+      requireSource: /inputs\.upload/,
+    },
+  },
+  'lint.yml': {
+    classification: 'non-publisher',
+  },
+  'pypi-publish.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /github\.event\.release\.tag_name/,
+      requireSource: /inputs\.dry_run/,
+    },
+  },
+  'r2-release-mirror.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Validate release assets against target tag',
+      tagSource: /--tag "\$tag"/,
+      requireSource: /--require-tag/,
+      cli: true,
+    },
+  },
+  'tauri-build.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /github\.ref_name/,
+      requireSource: /inputs\.release/,
+    },
+  },
+  'tauri-test-build.yml': {
+    classification: 'non-publisher',
+  },
+  'test.yml': {
+    classification: 'non-publisher',
+  },
+  'vsix-publish.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /github\.ref_name/,
+      requireSource: /inputs\.dry_run/,
+    },
+  },
+}
+const PUBLISHER_SIGNAL =
+  /softprops\/action-gh-release|gh release (?:create|upload)|tauri-apps\/tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|docker\/build-push-action|cloudflare\/wrangler-action|xcrun altool|aws s3 sync/
+const activeWorkflowSource = (path) =>
+  source(path)
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
 
 function tomlSectionVersion(path, section) {
   const content = source(path)
@@ -111,35 +200,58 @@ test('PyPI publishing does not skip an already-used Python version', () => {
   assert.doesNotMatch(publishStep, /skip-existing:\s*true/)
 })
 
-test('every release workflow delegates version policy to the shared verifier', () => {
-  const integrations = [
-    {
-      path: '.github/workflows/tauri-build.yml',
-      tagSource: /github\.ref_name/,
-      requireSource: /inputs\.release/,
-    },
-    {
-      path: '.github/workflows/android-build.yml',
-      tagSource: /inputs\.release_tag/,
-      requireSource: /inputs\.release_tag/,
-    },
-    {
-      path: '.github/workflows/pypi-publish.yml',
-      tagSource: /github\.event\.release\.tag_name/,
-      requireSource: /inputs\.dry_run/,
-    },
-    {
-      path: '.github/workflows/vsix-publish.yml',
-      tagSource: /github\.ref_name/,
-      requireSource: /inputs\.dry_run/,
-    },
-  ]
+test('manual HPC publishing uploads to the same release tag required by the gate', () => {
+  const uploadStep = workflowStep(
+    '.github/workflows/hpc-bundle.yml',
+    'Upload to release',
+  )
+  assert.match(uploadStep, /if:.*inputs\.release_tag != ''/)
+  assert.match(
+    uploadStep,
+    /tag_name:.*github\.ref_name.*inputs\.release_tag/,
+  )
+})
 
-  for (const { path, tagSource, requireSource } of integrations) {
-    const step = workflowStep(path, 'Verify release version')
+test('every GitHub workflow has an explicit publisher classification', () => {
+  const workflowDirectory = resolve(ROOT, '.github/workflows')
+  const actual = readdirSync(workflowDirectory)
+    .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
+    .sort()
+  const classified = Object.keys(WORKFLOW_INVENTORY).sort()
+  assert.deepEqual(actual, classified)
+
+  for (const [name, { classification }] of Object.entries(
+    WORKFLOW_INVENTORY,
+  )) {
+    const publishes = PUBLISHER_SIGNAL.test(
+      activeWorkflowSource(`.github/workflows/${name}`),
+    )
+    assert.equal(
+      publishes,
+      classification !== 'non-publisher',
+      `${name}: ${classification}`,
+    )
+  }
+})
+
+test('every root-versioned publisher delegates version policy to the shared verifier', () => {
+  for (const [name, integration] of Object.entries(WORKFLOW_INVENTORY)) {
+    if (integration.classification !== 'root-versioned-publisher') continue
+    if (integration.externalGateOwner) {
+      assert.equal(name, 'build-vscode-sidecars.yml')
+      assert.match(integration.externalGateOwner, /another agent owns/)
+      continue
+    }
+
+    assert.ok(integration.gate, `${name} declares its release-version gate`)
+    const path = `.github/workflows/${name}`
+    const { step: stepName, tagSource, requireSource, cli } = integration.gate
+    const step = workflowStep(path, stepName)
     assert.match(step, /node scripts\/verify-release-version\.mjs/, path)
-    assert.match(step, /RELEASE_VERSION_TAG:/, path)
-    assert.match(step, /RELEASE_VERSION_REQUIRE_TAG:/, path)
+    if (!cli) {
+      assert.match(step, /RELEASE_VERSION_TAG:/, path)
+      assert.match(step, /RELEASE_VERSION_REQUIRE_TAG:/, path)
+    }
     assert.match(step, tagSource, path)
     assert.match(step, requireSource, path)
   }
