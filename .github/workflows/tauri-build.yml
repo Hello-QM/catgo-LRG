@@ -82,6 +82,35 @@ jobs:
           RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
         run: node scripts/verify-release-version.mjs
 
+      - name: Preflight macOS release signing
+        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for secret in \
+            TAURI_SIGNING_PRIVATE_KEY \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            MACOS_CERTIFICATE \
+            MACOS_CERTIFICATE_PASSWORD \
+            MACOS_SIGNING_IDENTITY \
+            APPLE_DEVELOPMENT_TEAM
+          do
+            if [[ -z "${!secret:-}" ]]; then
+              printf 'Missing required secret: %s\n' "$secret" >&2
+              missing+=("$secret")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            exit 1
+          fi
+
       - name: Stage legal bundle for backend and app resources
         run: node scripts/sync-legal-bundle.mjs
 
@@ -308,6 +337,68 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Verify macOS release signatures
+        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          apps=("$bundle_root"/macos/*.app)
+          dmgs=("$bundle_root"/dmg/*.dmg)
+
+          if (( ${#apps[@]} != 1 )); then
+            printf 'Expected exactly one built macOS app, found %s under %s\n' \
+              "${#apps[@]}" "$bundle_root/macos" >&2
+            exit 1
+          fi
+          if (( ${#dmgs[@]} != 1 )); then
+            printf 'Expected exactly one built macOS DMG, found %s under %s\n' \
+              "${#dmgs[@]}" "$bundle_root/dmg" >&2
+            exit 1
+          fi
+
+          verify_app_signature() {
+            local app_path="$1"
+            local signature_details
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            signature_details="$(codesign --display --verbose=4 "$app_path" 2>&1)"
+            if ! grep -Fqx "Authority=$MACOS_SIGNING_IDENTITY" <<<"$signature_details"; then
+              printf 'Unexpected signer for %s; expected Authority=%s\n' \
+                "$app_path" "$MACOS_SIGNING_IDENTITY" >&2
+              exit 1
+            fi
+            if ! grep -Fqx "TeamIdentifier=$APPLE_DEVELOPMENT_TEAM" <<<"$signature_details"; then
+              printf 'Unexpected team for %s; expected TeamIdentifier=%s\n' \
+                "$app_path" "$APPLE_DEVELOPMENT_TEAM" >&2
+              exit 1
+            fi
+          }
+
+          verify_app_signature "${apps[0]}"
+
+          mount_dir="$(mktemp -d "$RUNNER_TEMP/catgo-signature-dmg.XXXXXX")"
+          mounted=0
+          cleanup() {
+            if (( mounted )); then
+              hdiutil detach "$mount_dir"
+            fi
+            rmdir "$mount_dir" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "${dmgs[0]}" >/dev/null
+          mounted=1
+
+          dmg_apps=("$mount_dir"/*.app)
+          if (( ${#dmg_apps[@]} != 1 )); then
+            printf 'Expected exactly one app inside %s, found %s\n' \
+              "${dmgs[0]}" "${#dmg_apps[@]}" >&2
+            exit 1
+          fi
+          verify_app_signature "${dmg_apps[0]}"
 
       - name: Finalize canonical v1.4.6 release body
         if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.4.6'
