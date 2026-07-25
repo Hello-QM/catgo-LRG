@@ -12,15 +12,18 @@ describe(`CatRender bond-order release source`, () => {
     ).toBe(false)
 
     const production = [
+      `extensions/catrender-wasm/src/bonds.rs`,
+      `extensions/catrender-wasm/src/element_data.rs`,
       `extensions/catrender-wasm/src/lib.rs`,
       `extensions/catrender-wasm/src/svg.rs`,
       `extensions/catrender-wasm/src/types.rs`,
     ]
       .map(readRustProduction)
       .concat([
-      `src/lib/structure/catrender/catrender-state.svelte.ts`,
-      `src/lib/structure/catrender/CatRenderParamsPane.svelte`,
-      `src/lib/structure/catrender/CatRenderViewPane.svelte`,
+        `scripts/generate-catrender-covalent-radii.mjs`,
+        `src/lib/structure/catrender/catrender-state.svelte.ts`,
+        `src/lib/structure/catrender/CatRenderParamsPane.svelte`,
+        `src/lib/structure/catrender/CatRenderViewPane.svelte`,
       ].map(read))
       .join(`\n`)
 
