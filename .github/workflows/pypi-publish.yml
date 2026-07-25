@@ -37,6 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - name: Verify release version
         env:
           RELEASE_VERSION_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}

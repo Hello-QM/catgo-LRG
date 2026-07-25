@@ -56,6 +56,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - name: Verify release version
         env:
           RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}

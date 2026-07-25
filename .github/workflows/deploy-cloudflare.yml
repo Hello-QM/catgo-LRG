@@ -21,8 +21,10 @@ on:
       - "CITATION.cff"
       - "THIRD_PARTY_NOTICES.md"
       - "third_party/licenses/**"
+      - "third_party/provenance/**"
       - "scripts/sync-legal-bundle.mjs"
       - "scripts/verify-legal-distributions.mjs"
+      - "scripts/verify-release-rights.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "vite.desktop.config.ts"
@@ -106,6 +108,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - uses: pnpm/action-setup@v4
         with:

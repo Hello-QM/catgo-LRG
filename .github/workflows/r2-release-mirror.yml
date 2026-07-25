@@ -209,6 +209,7 @@ jobs:
           target_source=$(mktemp -d)
           trap 'rm -rf "$target_source"' EXIT
           git archive "$tag" | tar -x -C "$target_source"
+          node scripts/verify-release-rights.mjs --root "$target_source"
           # v1.4.5 predates the citation surfaces enforced by the shared
           # verifier. Keep that one historical backfill available; every later
           # release must match the complete root-version inventory.
