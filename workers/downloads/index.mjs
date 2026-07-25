@@ -1,6 +1,12 @@
 const ALLOWED_METHODS = 'GET, HEAD'
 const INLINE_EXTENSIONS = new Set(['.html', '.json'])
 const APP_TAG_PATTERN = /^v\d+\.\d+\.\d+$/
+const RECEIPT_DIRECTORIES = new Set([
+  'promotion-receipts',
+  'rollback-receipts',
+])
+const PROMOTION_ID_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/
 const CONDITIONAL_HEADERS = [
   'if-match',
   'if-none-match',
@@ -63,6 +69,14 @@ function resolveObjectKey(requestUrl) {
     && APP_TAG_PATTERN.test(decoded[0])
     && decoded[1] !== '.'
     && decoded[1] !== '..'
+  ) {
+    return decoded.join('/')
+  }
+  if (
+    decoded.length === 2
+    && RECEIPT_DIRECTORIES.has(decoded[0])
+    && decoded[1].endsWith('.json')
+    && PROMOTION_ID_PATTERN.test(decoded[1].slice(0, -'.json'.length))
   ) {
     return decoded.join('/')
   }
