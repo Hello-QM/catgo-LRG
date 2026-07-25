@@ -96,6 +96,7 @@ const licenseClaimInventory = {
     'server/README-pypi.md',
   ],
   historicalGrantPreservation: [
+    '.github/release-notes/v1.4.6.md',
     '.github/workflows/tauri-build.yml',
   ],
   historicalOnly: [
