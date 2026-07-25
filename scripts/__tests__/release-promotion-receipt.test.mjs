@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -30,6 +32,11 @@ function fixture() {
     previousIndex: resolve(root, 'previous-index.html'),
     previousState: resolve(root, 'previous-root.json'),
     receipt: resolve(root, 'receipt.json'),
+    assets: resolve(root, 'assets'),
+  }
+  mkdirSync(paths.assets)
+  for (const { name } of requiredReleaseAssets('v1.4.6')) {
+    writeFileSync(resolve(paths.assets, name), `verified release asset: ${name}\n`)
   }
   writeFileSync(
     paths.latest,
@@ -83,6 +90,8 @@ function run(mode, paths, extra = []) {
       paths.latest,
       '--index',
       paths.index,
+      '--assets-dir',
+      paths.assets,
       '--previous-state',
       paths.previousState,
       '--previous-latest',
@@ -103,8 +112,18 @@ test('creates and verifies an exact release-promotion receipt', () => {
     const receipt = JSON.parse(readFileSync(paths.receipt, 'utf8'))
     assert.deepEqual(
       receipt.requiredAssets,
-      requiredReleaseAssets('v1.4.6').map(({ name }) => name),
+      requiredReleaseAssets('v1.4.6').map(({ name }) => {
+        const assetPath = resolve(paths.assets, name)
+        return {
+          name,
+          size: statSync(assetPath).size,
+          sha256: createHash('sha256')
+            .update(readFileSync(assetPath))
+            .digest('hex'),
+        }
+      }),
     )
+    assert.equal(receipt.schemaVersion, 2)
     assert.equal(receipt.promotionId, PROMOTION_ID)
     assert.equal(receipt.releaseTag, 'v1.4.6')
     assert.equal(receipt.sourceCommit, SOURCE_COMMIT)
@@ -129,9 +148,43 @@ test('rejects receipt identity, root bytes, inventory, or backup-state drift', a
       expected: /source|receipt/i,
     },
     {
-      name: 'required asset inventory',
+      name: 'missing required asset',
       mutate(receipt) {
         receipt.requiredAssets.pop()
+      },
+      expected: /asset|receipt/i,
+    },
+    {
+      name: 'extra required asset',
+      mutate(receipt) {
+        receipt.requiredAssets.push({
+          name: 'unexpected.bin',
+          size: 1,
+          sha256: 'd'.repeat(64),
+        })
+      },
+      expected: /asset|receipt/i,
+    },
+    {
+      name: 'required asset ordering',
+      mutate(receipt) {
+        const first = receipt.requiredAssets[0]
+        receipt.requiredAssets[0] = receipt.requiredAssets[1]
+        receipt.requiredAssets[1] = first
+      },
+      expected: /asset|receipt/i,
+    },
+    {
+      name: 'required asset size',
+      mutate(receipt) {
+        receipt.requiredAssets[0].size += 1
+      },
+      expected: /asset|receipt/i,
+    },
+    {
+      name: 'required asset SHA-256',
+      mutate(receipt) {
+        receipt.requiredAssets[0].sha256 = 'd'.repeat(64)
       },
       expected: /asset|receipt/i,
     },
@@ -168,6 +221,23 @@ test('rejects receipt identity, root bytes, inventory, or backup-state drift', a
       const result = run('verify', paths)
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, /latest|receipt/i)
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true })
+    }
+  })
+
+  await t.test('required asset bytes', () => {
+    const paths = fixture()
+    try {
+      assert.equal(run('create', paths).status, 0)
+      const asset = requiredReleaseAssets('v1.4.6')[0].name
+      const assetPath = resolve(paths.assets, asset)
+      const original = readFileSync(assetPath)
+      original[0] ^= 1
+      writeFileSync(assetPath, original)
+      const result = run('verify', paths)
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /asset|receipt/i)
     } finally {
       rmSync(paths.root, { recursive: true, force: true })
     }

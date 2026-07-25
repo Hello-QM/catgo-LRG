@@ -24,6 +24,7 @@ function parseArguments(argv) {
   }
   const allowed = new Set([
     '--receipt',
+    '--assets-dir',
     '--tag',
     '--source-commit',
     '--asset-snapshot',
@@ -45,6 +46,7 @@ function parseArguments(argv) {
   }
   const required = [
     '--receipt',
+    '--assets-dir',
     '--tag',
     '--source-commit',
     '--asset-snapshot',
@@ -78,6 +80,7 @@ function parseArguments(argv) {
     mode,
     ...identity,
     receiptPath: resolve(values.get('--receipt')),
+    assetsDir: resolve(values.get('--assets-dir')),
     latestPath: resolve(values.get('--latest')),
     indexPath: resolve(values.get('--index')),
     previousStatePath: values.has('--previous-state')
@@ -163,14 +166,22 @@ function verifyBackup(path, entry, kind) {
 
 function expectedReceipt(options, previousRoot) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     promotionId: options.promotionId,
     releaseTag: options.tag,
     sourceCommit: options.sourceCommit,
     assetSnapshot: options.assetSnapshot,
     latestSha256: sha256(options.latestPath, 'Promoted latest.json'),
     indexSha256: sha256(options.indexPath, 'Promoted index.html'),
-    requiredAssets: requiredReleaseAssets(options.tag).map(({ name }) => name),
+    requiredAssets: requiredReleaseAssets(options.tag).map(({ name }) => {
+      const path = resolve(options.assetsDir, name)
+      regularFile(path, `Required release asset ${name}`)
+      return {
+        name,
+        size: lstatSync(path).size,
+        sha256: sha256(path, `Required release asset ${name}`),
+      }
+    }),
     previousRoot,
   }
 }
@@ -232,4 +243,3 @@ try {
   process.stderr.write(`[promotion-receipt] ${error.message}\n`)
   process.exitCode = 1
 }
-
