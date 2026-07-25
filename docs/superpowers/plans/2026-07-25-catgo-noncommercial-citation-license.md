@@ -167,10 +167,11 @@ top-level `license` field because CFF 1.2 only accepts its enumerated SPDX
 identifiers, and set `license-url` exactly to
 `https://github.com/Hello-QM/catgo-LRG/blob/main/license`. This CFF-specific
 schema requirement does not change the custom-license requirements for package
-manifests in Task 2. Set the message exactly to:
+manifests in Task 2. Set the message exactly to the mandatory acknowledgement
+followed by the CFF citation instruction:
 
 ```yaml
-message: If you use CatGo, you must acknowledge and cite it as described below.
+message: This work used CatGo (https://catgo-ucsd.org). If you use CatGo, you must acknowledge and cite it as described below.
 ```
 
 Keep the software record and add `preferred-citation` for the ChemRxiv

@@ -1,7 +1,7 @@
 # CatGo Noncommercial and Citation License Design
 
-**Date:** 2026-07-25  
-**Target release:** CatGo 1.4.6  
+**Date:** 2026-07-25
+**Target release:** CatGo 1.4.6
 **Status:** Approved under the maintainer's standing instruction to apply the
 recommended option without further confirmation
 
