@@ -48,17 +48,35 @@ describe(`is_newer_version`, () => {
     [`1.4.6`, `1.4.5`, true],
     [`v1.4.6`, `1.4.6`, false],
     [`1.4.5`, `1.4.6`, false],
-    [`1.5`, `1.4.99`, true],
+    [`1.5.0`, `1.4.99`, true],
     [`1.4.6-beta.1`, `1.4.5`, true],
     [`1.4.6-beta.1`, `1.4.6`, false],
     [`1.4.6`, `1.4.6-beta.9`, true],
     [`1.4.6-beta.10`, `1.4.6-beta.2`, true],
+    [`1.4.6-beta`, `1.4.6-Beta`, true],
+    [
+      `1.4.6-beta.9999999999999999999999999`,
+      `1.4.6-beta.9999999999999999999999998`,
+      true,
+    ],
+    [`1.4.6+build.2`, `1.4.6+build.1`, false],
   ])(`compares %s with %s`, (latest, current, expected) => {
     expect(is_newer_version(latest, current)).toBe(expected)
   })
 
-  it(`rejects malformed versions instead of guessing`, () => {
-    expect(() => is_newer_version(`latest`, `1.4.5`)).toThrow(/version/i)
-    expect(() => is_newer_version(`1.4.6`, `current`)).toThrow(/version/i)
+  it.each([
+    `latest`,
+    `1`,
+    `1.2`,
+    `1.2.3.4`,
+    `01.2.3`,
+    `1.02.3`,
+    `1.2.03`,
+    `1.2.3-01`,
+    `1.2.3+`,
+    `1.2.3+bad!`,
+  ])(`rejects malformed version %s instead of guessing`, (version) => {
+    expect(() => is_newer_version(version, `1.4.5`)).toThrow(/version/i)
+    expect(() => is_newer_version(`1.4.6`, version)).toThrow(/version/i)
   })
 })

@@ -10,12 +10,24 @@ export interface ReleaseManifest {
   platforms?: Record<string, ReleasePlatform>
 }
 
-type VersionIdentifier = number | string
+type VersionIdentifier = bigint | string
 
 interface SemanticVersion {
-  core: number[]
+  core: bigint[]
   prerelease: VersionIdentifier[] | null
 }
+
+const NUMERIC_IDENTIFIER = `0|[1-9]\\d*`
+const NON_NUMERIC_IDENTIFIER =
+  `[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*`
+const PRERELEASE_IDENTIFIER =
+  `(?:${NUMERIC_IDENTIFIER}|${NON_NUMERIC_IDENTIFIER})`
+const SEMANTIC_VERSION_PATTERN = new RegExp(
+  `^[vV]?(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})\\.` +
+    `(${NUMERIC_IDENTIFIER})(?:-(${PRERELEASE_IDENTIFIER}` +
+    `(?:\\.${PRERELEASE_IDENTIFIER})*))?` +
+    `(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$`,
+)
 
 function is_record(value: unknown): value is Record<string, unknown> {
   return typeof value === `object` && value !== null && !Array.isArray(value)
@@ -26,31 +38,16 @@ function parse_version(version: string): SemanticVersion {
     throw new Error(`Invalid version: expected a string`)
   }
 
-  const without_prefix = version.replace(/^v/i, ``)
-  const [without_build] = without_prefix.split(`+`, 1)
-  const separator = without_build.indexOf(`-`)
-  const core_text = separator === -1
-    ? without_build
-    : without_build.slice(0, separator)
-  const prerelease_text = separator === -1
-    ? null
-    : without_build.slice(separator + 1)
-
-  if (!/^\d+(?:\.\d+)*$/.test(core_text)) {
-    throw new Error(`Invalid version: ${version}`)
-  }
-  if (
-    prerelease_text !== null &&
-    !/^[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/.test(prerelease_text)
-  ) {
+  const match = SEMANTIC_VERSION_PATTERN.exec(version)
+  if (!match) {
     throw new Error(`Invalid version: ${version}`)
   }
 
-  const core = core_text.split(`.`).map((part) => Number(part))
-  const prerelease = prerelease_text === null
+  const core = [BigInt(match[1]), BigInt(match[2]), BigInt(match[3])]
+  const prerelease = match[4] === undefined
     ? null
-    : prerelease_text.split(`.`).map((part) => (
-      /^\d+$/.test(part) ? Number(part) : part
+    : match[4].split(`.`).map((part) => (
+      /^\d+$/.test(part) ? BigInt(part) : part
     ))
 
   return { core, prerelease }
@@ -118,12 +115,14 @@ function compare_identifiers(
   left: VersionIdentifier,
   right: VersionIdentifier,
 ): number {
-  if (typeof left === `number` && typeof right === `number`) {
-    return left - right
+  if (typeof left === `bigint` && typeof right === `bigint`) {
+    if (left === right) return 0
+    return left < right ? -1 : 1
   }
-  if (typeof left === `number`) return -1
-  if (typeof right === `number`) return 1
-  return left.localeCompare(right)
+  if (typeof left === `bigint`) return -1
+  if (typeof right === `bigint`) return 1
+  if (left === right) return 0
+  return left < right ? -1 : 1
 }
 
 /** Return true only when latest is a strictly newer semantic version. */
@@ -131,9 +130,9 @@ export function is_newer_version(latest: string, current: string): boolean {
   const left = parse_version(latest)
   const right = parse_version(current)
 
-  for (let index = 0; index < Math.max(left.core.length, right.core.length); index++) {
-    const left_part = left.core[index] ?? 0
-    const right_part = right.core[index] ?? 0
+  for (let index = 0; index < left.core.length; index++) {
+    const left_part = left.core[index]
+    const right_part = right.core[index]
     if (left_part !== right_part) return left_part > right_part
   }
 

@@ -60,3 +60,12 @@ test('desktop choices open the hub while iOS remains on TestFlight', () => {
   assert.match(modal, /platform-\$\{hub_platform\}/)
   assert.doesNotMatch(modal, /fetch\s*\(/)
 })
+
+test('the update banner exposes bounded release notes', () => {
+  const banner = source('src/lib/update/UpdateBanner.svelte')
+
+  assert.match(banner, /update_state\.notes/)
+  assert.match(banner, /<details class="ub-notes">/)
+  assert.match(banner, /max-height:/)
+  assert.match(banner, /overflow:\s*auto/)
+})

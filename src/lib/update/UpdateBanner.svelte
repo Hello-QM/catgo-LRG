@@ -54,6 +54,12 @@
           : t('app.update_install_btn')}
       </button>
       <button class="ub-dismiss" onclick={() => dismiss_update()}>{t('app.update_later_btn')}</button>
+      {#if update_state.notes}
+        <details class="ub-notes">
+          <summary>{t('app.update_release_notes')}</summary>
+          <p>{update_state.notes}</p>
+        </details>
+      {/if}
     {:else if update_state.status === 'downloading'}
       <div class="ub-bar"><div class="ub-fill" style="width: {pct}%"></div></div>
       <span class="ub-text">{t('app.update_downloading', { pct: String(pct) })}</span>
@@ -74,6 +80,7 @@
     transform: translateX(-50%);
     z-index: 9500;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     max-width: 90vw;
@@ -121,6 +128,23 @@
   }
   .ub-dismiss:hover {
     color: var(--text-color, #f3f4f6);
+  }
+  .ub-notes {
+    flex-basis: 100%;
+    max-width: min(640px, 82vw);
+    color: var(--text-color-muted, #c2c8d0);
+  }
+  .ub-notes summary {
+    width: fit-content;
+    cursor: pointer;
+    color: var(--text-color, #f3f4f6);
+  }
+  .ub-notes p {
+    max-height: 10rem;
+    margin: 8px 0 2px;
+    overflow: auto;
+    white-space: pre-wrap;
+    line-height: 1.5;
   }
   .ub-bar {
     width: 140px;
