@@ -284,15 +284,41 @@ type SidecarFileLockOptions = {
 }
 
 type SidecarFileLockRecord = {
-  version: 1
+  version: 1 | 2
   pid: number
   token: string
   created_at: number
 }
 
+export type SidecarFileLockSnapshot = {
+  lock_path: string
+  kind:
+    | `owned-directory`
+    | `malformed-directory`
+    | `empty-directory`
+    | `unsafe-directory`
+    | `unsafe-entry`
+  device: number
+  inode: number
+  modified_at: number
+  owner_name: string | null
+  owner_device: number | null
+  owner_inode: number | null
+  record: SidecarFileLockRecord | null
+}
+
 const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_LOCK_STALE_AFTER_MS = 2 * 60 * 1000
 const DEFAULT_LOCK_POLL_INTERVAL_MS = 100
+const LOCK_TOKEN_PATTERN = /^[A-Za-z0-9-]{1,128}$/
+const LOCK_OWNER_PATTERN = /^owner\.([A-Za-z0-9-]{1,128})\.json$/
+
+function lock_owner_name(token: string): string {
+  if (!LOCK_TOKEN_PATTERN.test(token)) {
+    throw new Error(`Invalid sidecar lock token`)
+  }
+  return `owner.${token}.json`
+}
 
 function filesystem_error_code(error: unknown): string | undefined {
   if (error instanceof Error && `code` in error) {
@@ -305,18 +331,18 @@ function parse_lock_record(contents: string): SidecarFileLockRecord | null {
   try {
     const parsed = JSON.parse(contents) as Partial<SidecarFileLockRecord>
     if (
-      parsed.version === 1 &&
+      (parsed.version === 1 || parsed.version === 2) &&
       Number.isInteger(parsed.pid) &&
       (parsed.pid ?? 0) > 0 &&
       typeof parsed.token === `string` &&
-      parsed.token.length > 0 &&
+      LOCK_TOKEN_PATTERN.test(parsed.token) &&
       typeof parsed.created_at === `number` &&
       Number.isFinite(parsed.created_at)
     ) {
       return parsed as SidecarFileLockRecord
     }
   } catch {
-    // A process can die between atomic creation and writing its metadata.
+    // Malformed owners are recoverable only after their filesystem age gate.
   }
   return null
 }
@@ -327,42 +353,399 @@ function process_is_alive(pid: number): boolean {
     return true
   } catch (error) {
     const code = filesystem_error_code(error)
-    if (code === `EPERM`) return true
-    return false
+    return code !== `ESRCH`
   }
 }
 
-async function stale_lock_is_recoverable(
-  lock_path: string,
-  stale_after_ms: number,
-): Promise<boolean> {
-  let lock_stat: fs.Stats
-  let contents: string
+async function read_lock_file(
+  file_path: string,
+): Promise<{
+  device: number
+  inode: number
+  modified_at: number
+  contents: string
+} | null> {
+  let handle: Awaited<ReturnType<typeof fsp.open>> | undefined
+  let primary_error: unknown
   try {
-    [lock_stat, contents] = await Promise.all([
-      fsp.stat(lock_path),
-      fsp.readFile(lock_path, `utf8`),
-    ])
+    handle = await fsp.open(file_path, `r`)
+    const file_stat = await handle.stat()
+    const contents = await handle.readFile(`utf8`)
+    return {
+      device: file_stat.dev,
+      inode: file_stat.ino,
+      modified_at: file_stat.mtimeMs,
+      contents,
+    }
   } catch (error) {
-    return filesystem_error_code(error) === `ENOENT`
+    if (filesystem_error_code(error) === `ENOENT`) return null
+    primary_error = error
+    throw error
+  } finally {
+    if (handle) {
+      try {
+        await handle.close()
+      } catch (close_error) {
+        if (primary_error) {
+          throw failures_together(
+            primary_error,
+            close_error,
+            `Sidecar lock owner read and handle cleanup both failed`,
+          )
+        }
+        throw close_error
+      }
+    }
+  }
+}
+
+async function inspect_sidecar_lock_path(
+  lock_path: string,
+): Promise<SidecarFileLockSnapshot | null> {
+  let lock_stat: fs.Stats
+  try {
+    lock_stat = await fsp.lstat(lock_path)
+  } catch (error) {
+    if (filesystem_error_code(error) === `ENOENT`) return null
+    throw error
   }
 
-  const record = parse_lock_record(contents)
-  if (record) return !process_is_alive(record.pid)
-  return Date.now() - lock_stat.mtimeMs >= stale_after_ms
+  if (lock_stat.isSymbolicLink() || !lock_stat.isDirectory()) {
+    return {
+      lock_path,
+      kind: `unsafe-entry`,
+      device: lock_stat.dev,
+      inode: lock_stat.ino,
+      modified_at: lock_stat.mtimeMs,
+      owner_name: null,
+      owner_device: null,
+      owner_inode: null,
+      record: null,
+    }
+  }
+
+  let entries: fs.Dirent[]
+  try {
+    entries = await fsp.readdir(lock_path, { withFileTypes: true })
+  } catch (error) {
+    if (filesystem_error_code(error) === `ENOENT`) return null
+    throw error
+  }
+  if (entries.length === 0) {
+    const snapshot: SidecarFileLockSnapshot = {
+      lock_path,
+      kind: `empty-directory`,
+      device: lock_stat.dev,
+      inode: lock_stat.ino,
+      modified_at: lock_stat.mtimeMs,
+      owner_name: null,
+      owner_device: null,
+      owner_inode: null,
+      record: null,
+    }
+    return await stable_directory_snapshot(lock_stat, snapshot)
+  }
+  const owner_entries = entries.filter((entry) =>
+    entry.isFile() && LOCK_OWNER_PATTERN.test(entry.name)
+  )
+  if (entries.length !== 1 || owner_entries.length !== 1) {
+    const snapshot: SidecarFileLockSnapshot = {
+      lock_path,
+      kind: `unsafe-directory`,
+      device: lock_stat.dev,
+      inode: lock_stat.ino,
+      modified_at: lock_stat.mtimeMs,
+      owner_name: null,
+      owner_device: null,
+      owner_inode: null,
+      record: null,
+    }
+    return await stable_directory_snapshot(lock_stat, snapshot)
+  }
+
+  const owner_name = owner_entries[0].name
+  const owner = await read_lock_file(path.join(lock_path, owner_name))
+  if (!owner) return null
+  const record = parse_lock_record(owner.contents)
+  const filename_token = owner_name.match(LOCK_OWNER_PATTERN)?.[1]
+  const valid_owner = record && record.token === filename_token
+  const snapshot: SidecarFileLockSnapshot = {
+    lock_path,
+    kind: valid_owner ? `owned-directory` : `malformed-directory`,
+    device: lock_stat.dev,
+    inode: lock_stat.ino,
+    modified_at: owner.modified_at,
+    owner_name,
+    owner_device: owner.device,
+    owner_inode: owner.inode,
+    record: valid_owner ? record : null,
+  }
+  return await stable_directory_snapshot(lock_stat, snapshot)
+}
+
+async function stable_directory_snapshot(
+  expected: fs.Stats,
+  snapshot: SidecarFileLockSnapshot,
+): Promise<SidecarFileLockSnapshot | null> {
+  let current: fs.Stats
+  try {
+    current = await fsp.lstat(snapshot.lock_path)
+  } catch (error) {
+    if (filesystem_error_code(error) === `ENOENT`) return null
+    throw error
+  }
+  if (
+    current.isSymbolicLink() ||
+    !current.isDirectory() ||
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino
+  ) {
+    return null
+  }
+  return snapshot
+}
+
+export async function inspect_sidecar_file_lock(
+  destination: string,
+): Promise<SidecarFileLockSnapshot | null> {
+  return await inspect_sidecar_lock_path(
+    `${path.resolve(destination)}.lock`,
+  )
+}
+
+function same_lock_snapshot(
+  left: SidecarFileLockSnapshot,
+  right: SidecarFileLockSnapshot,
+): boolean {
+  return (
+    left.lock_path === right.lock_path &&
+    left.kind === right.kind &&
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.owner_name === right.owner_name &&
+    left.owner_device === right.owner_device &&
+    left.owner_inode === right.owner_inode &&
+    left.record?.token === right.record?.token
+  )
+}
+
+function stale_lock_is_recoverable(
+  snapshot: SidecarFileLockSnapshot,
+  stale_after_ms: number,
+): boolean {
+  if (snapshot.kind === `empty-directory`) return true
+  if (
+    snapshot.kind === `unsafe-directory` ||
+    snapshot.kind === `unsafe-entry`
+  ) return false
+  if (snapshot.record) return !process_is_alive(snapshot.record.pid)
+  return Date.now() - snapshot.modified_at >= stale_after_ms
+}
+
+function normalize_lock_options(
+  options: SidecarFileLockOptions,
+): Required<SidecarFileLockOptions> {
+  return {
+    wait_timeout_ms: Math.max(
+      0,
+      options.wait_timeout_ms ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS,
+    ),
+    stale_after_ms: Math.max(
+      0,
+      options.stale_after_ms ?? DEFAULT_LOCK_STALE_AFTER_MS,
+    ),
+    poll_interval_ms: Math.max(
+      1,
+      options.poll_interval_ms ?? DEFAULT_LOCK_POLL_INTERVAL_MS,
+    ),
+  }
+}
+
+async function remove_empty_directory(dir_path: string): Promise<boolean> {
+  try {
+    await fsp.rmdir(dir_path)
+    return true
+  } catch (error) {
+    const code = filesystem_error_code(error)
+    if (code === `ENOENT`) return true
+    if (code === `ENOTEMPTY` || code === `EEXIST`) return false
+    throw error
+  }
+}
+
+async function unlink_if_present(file_path: string): Promise<boolean> {
+  try {
+    await fsp.unlink(file_path)
+    return true
+  } catch (error) {
+    if (filesystem_error_code(error) === `ENOENT`) return false
+    throw error
+  }
+}
+
+async function cleanup_candidate_directory(
+  candidate_path: string,
+  token: string,
+): Promise<void> {
+  await unlink_if_present(
+    path.join(candidate_path, lock_owner_name(token)),
+  )
+  if (!(await remove_empty_directory(candidate_path))) {
+    throw new Error(
+      `Sidecar lock candidate was not empty during cleanup: ${candidate_path}`,
+    )
+  }
+}
+
+function is_distinct_owned_lock_replacement(
+  previous: SidecarFileLockSnapshot,
+  current: SidecarFileLockSnapshot | null,
+  previous_token: string,
+): boolean {
+  return (
+    current?.kind === `owned-directory` &&
+    current.record?.token !== previous_token &&
+    (
+      current.device !== previous.device ||
+      current.inode !== previous.inode
+    )
+  )
+}
+
+async function lock_directory_was_removed_or_replaced(
+  previous: SidecarFileLockSnapshot,
+  previous_token: string,
+): Promise<boolean> {
+  if (await remove_empty_directory(previous.lock_path)) return true
+  const current = await inspect_sidecar_lock_path(previous.lock_path)
+  return is_distinct_owned_lock_replacement(
+    previous,
+    current,
+    previous_token,
+  )
 }
 
 async function release_sidecar_file_lock(
   lock_path: string,
   token: string,
-): Promise<void> {
-  try {
-    const record = parse_lock_record(await fsp.readFile(lock_path, `utf8`))
-    if (record?.token !== token) return
-    await fsp.unlink(lock_path)
-  } catch (error) {
-    if (filesystem_error_code(error) !== `ENOENT`) throw error
+): Promise<boolean> {
+  const current = await inspect_sidecar_lock_path(lock_path)
+  if (!current) return false
+
+  if (current.kind === `empty-directory`) {
+    await remove_empty_directory(lock_path)
+    return false
   }
+  if (current.record?.token !== token) return false
+  const owner_path = path.join(lock_path, lock_owner_name(token))
+  if (!(await unlink_if_present(owner_path))) {
+    await remove_empty_directory(lock_path)
+    return false
+  }
+  if (!(await lock_directory_was_removed_or_replaced(current, token))) {
+    throw new Error(
+      `Sidecar lock directory was not empty after releasing ${token}`,
+    )
+  }
+  return true
+}
+
+export async function reap_stale_sidecar_file_lock(
+  destination: string,
+  stale_snapshot: SidecarFileLockSnapshot,
+  options: SidecarFileLockOptions = {},
+): Promise<boolean> {
+  const lock_path = `${path.resolve(destination)}.lock`
+  if (stale_snapshot.lock_path !== lock_path) return false
+  const normalized = normalize_lock_options(options)
+  const current = await inspect_sidecar_lock_path(lock_path)
+  if (
+    !current ||
+    !same_lock_snapshot(current, stale_snapshot) ||
+    !stale_lock_is_recoverable(current, normalized.stale_after_ms)
+  ) {
+    return false
+  }
+
+  if (current.kind === `empty-directory`) {
+    return await lock_directory_was_removed_or_replaced(
+      current,
+      stale_snapshot.record?.token ?? ``,
+    )
+  }
+  if (!current.owner_name) return false
+  const owner_path = path.join(lock_path, current.owner_name)
+  if (!(await unlink_if_present(owner_path))) {
+    return await lock_directory_was_removed_or_replaced(
+      current,
+      current.record?.token ?? ``,
+    )
+  }
+  return await lock_directory_was_removed_or_replaced(
+    current,
+    current.record?.token ?? ``,
+  )
+}
+
+async function wait_for_lock_retry(
+  lock_path: string,
+  started_at: number,
+  options: Required<SidecarFileLockOptions>,
+): Promise<void> {
+  const elapsed = Date.now() - started_at
+  if (elapsed >= options.wait_timeout_ms) {
+    throw new Error(
+      `Timed out waiting for sidecar lock ${lock_path}; ` +
+      `manual cleanup may be required: inspect and remove this exact path ` +
+      `if its owner has exited`,
+    )
+  }
+  await new Promise((resolve) => setTimeout(
+    resolve,
+    Math.min(
+      options.poll_interval_ms,
+      options.wait_timeout_ms - elapsed,
+    ),
+  ))
+}
+
+async function is_lock_publication_conflict(
+  error: unknown,
+  lock_path: string,
+): Promise<boolean> {
+  const code = filesystem_error_code(error)
+  if (code === `EEXIST` || code === `ENOTEMPTY`) return true
+  if (code !== `EPERM`) return false
+  try {
+    const target = await fsp.lstat(lock_path)
+    return target.isDirectory() && !target.isSymbolicLink()
+  } catch (stat_error) {
+    if (filesystem_error_code(stat_error) === `ENOENT`) return false
+    throw stat_error
+  }
+}
+
+function unsafe_lock_path_error(
+  lock_path: string,
+  kind: SidecarFileLockSnapshot[`kind`],
+): Error {
+  return new Error(
+    `Unsafe sidecar lock path ${lock_path} (${kind}); ` +
+    `manual cleanup required: inspect and remove this exact path`,
+  )
+}
+
+function failures_together(
+  primary: unknown,
+  cleanup: unknown | readonly unknown[],
+  message: string,
+): AggregateError {
+  const cleanup_errors = Array.isArray(cleanup) ? cleanup : [cleanup]
+  return new AggregateError(
+    [primary, ...cleanup_errors],
+    message,
+    { cause: primary },
+  )
 }
 
 export async function with_sidecar_file_lock<T>(
@@ -371,21 +754,10 @@ export async function with_sidecar_file_lock<T>(
   options: SidecarFileLockOptions = {},
 ): Promise<T> {
   const lock_path = `${path.resolve(destination)}.lock`
-  const wait_timeout_ms = Math.max(
-    0,
-    options.wait_timeout_ms ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS,
-  )
-  const stale_after_ms = Math.max(
-    0,
-    options.stale_after_ms ?? DEFAULT_LOCK_STALE_AFTER_MS,
-  )
-  const poll_interval_ms = Math.max(
-    1,
-    options.poll_interval_ms ?? DEFAULT_LOCK_POLL_INTERVAL_MS,
-  )
+  const normalized = normalize_lock_options(options)
   const started_at = Date.now()
   const record: SidecarFileLockRecord = {
-    version: 1,
+    version: 2,
     pid: process.pid,
     token: randomUUID(),
     created_at: Date.now(),
@@ -393,51 +765,151 @@ export async function with_sidecar_file_lock<T>(
 
   await fsp.mkdir(path.dirname(lock_path), { recursive: true })
   while (true) {
+    const candidate_path = `${lock_path}.candidate-${record.token}-${randomUUID()}`
+    const candidate_owner = path.join(
+      candidate_path,
+      lock_owner_name(record.token),
+    )
+    let candidate_created = false
+    let published = false
+    let publication_attempted = false
+    let handle: Awaited<ReturnType<typeof fsp.open>> | undefined
     try {
-      const handle = await fsp.open(lock_path, `wx`, 0o600)
-      let metadata_written = false
-      try {
-        await handle.writeFile(`${JSON.stringify(record)}\n`, `utf8`)
-        await handle.sync()
-        metadata_written = true
-      } finally {
-        await handle.close()
-        if (!metadata_written) {
-          try { await fsp.unlink(lock_path) } catch { /* best effort */ }
-        }
+      await fsp.mkdir(candidate_path, { mode: 0o700 })
+      candidate_created = true
+      handle = await fsp.open(candidate_owner, `wx`, 0o600)
+      await handle.writeFile(`${JSON.stringify(record)}\n`, `utf8`)
+      const owner_stat = await handle.stat()
+      if (owner_stat.size <= 0) {
+        throw new Error(`Sidecar lock owner metadata was empty`)
       }
+      await handle.sync()
+      await handle.close()
+      handle = undefined
+      publication_attempted = true
+      await fsp.rename(candidate_path, lock_path)
+      published = true
+      candidate_created = false
+      await fsp.access(
+        path.join(lock_path, lock_owner_name(record.token)),
+        fs.constants.R_OK,
+      )
       break
     } catch (error) {
-      if (filesystem_error_code(error) !== `EEXIST`) throw error
-      if (await stale_lock_is_recoverable(lock_path, stale_after_ms)) {
+      const cleanup_errors: unknown[] = []
+      if (handle) {
+        const candidate_handle = handle
+        handle = undefined
         try {
-          await fsp.unlink(lock_path)
-        } catch (unlink_error) {
-          if (filesystem_error_code(unlink_error) !== `ENOENT`) {
-            throw unlink_error
-          }
+          await candidate_handle.close()
+        } catch (close_error) {
+          cleanup_errors.push(close_error)
         }
-        continue
       }
-
-      const elapsed = Date.now() - started_at
-      if (elapsed >= wait_timeout_ms) {
-        throw new Error(
-          `Timed out waiting for sidecar lock ${lock_path}`,
+      try {
+        if (published) {
+          await release_sidecar_file_lock(lock_path, record.token)
+        } else if (candidate_created) {
+          await cleanup_candidate_directory(
+            candidate_path,
+            record.token,
+          )
+          candidate_created = false
+        }
+      } catch (cleanup_error) {
+        cleanup_errors.push(cleanup_error)
+      }
+      if (cleanup_errors.length > 0) {
+        throw failures_together(
+          error,
+          cleanup_errors,
+          `Sidecar lock acquisition and cleanup both failed`,
         )
       }
-      await new Promise((resolve) => setTimeout(
-        resolve,
-        Math.min(poll_interval_ms, wait_timeout_ms - elapsed),
-      ))
+
+      if (!published && publication_attempted) {
+        let existing: SidecarFileLockSnapshot | null
+        try {
+          existing = await inspect_sidecar_lock_path(lock_path)
+        } catch (inspection_error) {
+          throw failures_together(
+            error,
+            inspection_error,
+            `Sidecar lock acquisition and target inspection both failed`,
+          )
+        }
+        if (
+          existing?.kind === `unsafe-entry` ||
+          existing?.kind === `unsafe-directory`
+        ) {
+          throw unsafe_lock_path_error(lock_path, existing.kind)
+        }
+      }
+
+      let publication_conflict = false
+      try {
+        publication_conflict = (
+          !published &&
+          await is_lock_publication_conflict(error, lock_path)
+        )
+      } catch (classification_error) {
+        throw failures_together(
+          error,
+          classification_error,
+          `Sidecar lock acquisition and conflict classification both failed`,
+        )
+      }
+      if (!publication_conflict) throw error
+
+      const snapshot = await inspect_sidecar_lock_path(lock_path)
+      if (
+        snapshot?.kind === `unsafe-entry` ||
+        snapshot?.kind === `unsafe-directory`
+      ) {
+        throw unsafe_lock_path_error(lock_path, snapshot.kind)
+      }
+      if (
+        snapshot &&
+        stale_lock_is_recoverable(snapshot, normalized.stale_after_ms) &&
+        await reap_stale_sidecar_file_lock(destination, snapshot, normalized)
+      ) {
+        continue
+      }
+      await wait_for_lock_retry(lock_path, started_at, normalized)
     }
   }
 
+  let operation_result: T | undefined
+  let operation_error: unknown
   try {
-    return await operation()
-  } finally {
-    await release_sidecar_file_lock(lock_path, record.token)
+    operation_result = await operation()
+  } catch (error) {
+    operation_error = error
   }
+
+  let cleanup_error: unknown
+  try {
+    const released = await release_sidecar_file_lock(
+      lock_path,
+      record.token,
+    )
+    if (!released) {
+      throw new Error(`Sidecar lock ownership was lost during operation`)
+    }
+  } catch (error) {
+    cleanup_error = error
+  }
+
+  if (operation_error && cleanup_error) {
+    throw failures_together(
+      operation_error,
+      cleanup_error,
+      `Sidecar operation and lock cleanup both failed`,
+    )
+  }
+  if (operation_error) throw operation_error
+  if (cleanup_error) throw cleanup_error
+  return operation_result as T
 }
 
 export async function stored_sidecar_is_verified(
