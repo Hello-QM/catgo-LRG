@@ -35,6 +35,11 @@ export const DEFAULT_TARGETS = [
   'docs/public/legal',
   'src-tauri/resources/legal',
 ]
+export const PACKAGE_TARGETS = [
+  { root: resolve(ROOT, 'extensions/rust-wasm'), licenseName: 'license' },
+  { root: resolve(ROOT, 'extensions/vscode'), licenseName: 'license' },
+  { root: resolve(ROOT, 'server'), licenseName: 'LICENSE' },
+]
 export const OWNERSHIP_MARKER = '.catgo-legal-bundle-owned'
 
 const CORE_SOURCES = [
@@ -120,7 +125,7 @@ function validateSource(sourceRoot, source) {
   return canonicalSource
 }
 
-function noticeLicenseSources(sourceRoot) {
+function noticeLinkedSources(sourceRoot) {
   const noticesPath = validateSource(sourceRoot, 'THIRD_PARTY_NOTICES.md')
   const notices = readFileSync(noticesPath, 'utf8')
   const links = [...notices.matchAll(/\]\(([^)]+)\)/g)]
@@ -128,6 +133,7 @@ function noticeLicenseSources(sourceRoot) {
     .filter(
       (path) =>
         path.startsWith('third_party/licenses/') ||
+        path.startsWith('third_party/provenance/') ||
         path.endsWith('/LICENSE'),
     )
   return [...new Set(links)].sort()
@@ -135,9 +141,74 @@ function noticeLicenseSources(sourceRoot) {
 
 export function legalBundleSources(sourceRoot = ROOT) {
   const canonicalRoot = realpathSync(resolve(sourceRoot))
-  const sources = [...CORE_SOURCES, ...noticeLicenseSources(canonicalRoot)]
+  const sources = [...CORE_SOURCES, ...noticeLinkedSources(canonicalRoot)]
   for (const source of sources) validateSource(canonicalRoot, source)
   return sources
+}
+
+function validatePackageTarget({ root, licenseName }) {
+  if (
+    typeof root !== 'string' ||
+    !isAbsolute(root) ||
+    !['license', 'LICENSE'].includes(licenseName)
+  ) {
+    throw new Error(`Invalid package legal target: ${root}`)
+  }
+  const absolute = resolve(root)
+  if (existsSync(absolute) && lstatSync(absolute).isSymbolicLink()) {
+    throw new Error(`Refusing symlinked package legal target: ${absolute}`)
+  }
+  mkdirSync(absolute, { recursive: true })
+  return realpathSync(absolute)
+}
+
+function ensurePackageDestination(packageRoot, destinationPath) {
+  if (
+    !isInside(packageRoot, destinationPath) ||
+    destinationPath === packageRoot
+  ) {
+    throw new Error(`Package legal destination escaped target: ${destinationPath}`)
+  }
+  let cursor = packageRoot
+  for (const part of relative(packageRoot, dirname(destinationPath))
+    .split(sep)
+    .filter(Boolean)) {
+    cursor = resolve(cursor, part)
+    if (existsSync(cursor) && lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(`Refusing symlinked package legal path: ${cursor}`)
+    }
+  }
+  mkdirSync(dirname(destinationPath), { recursive: true })
+  const canonicalParent = realpathSync(dirname(destinationPath))
+  if (!isInside(packageRoot, canonicalParent)) {
+    throw new Error(`Package legal destination parent escaped target`)
+  }
+  if (
+    existsSync(destinationPath) &&
+    lstatSync(destinationPath).isSymbolicLink()
+  ) {
+    throw new Error(`Refusing symlinked package legal file: ${destinationPath}`)
+  }
+}
+
+export function syncPackageLegalBundles({
+  sourceRoot = ROOT,
+  packageTargets = PACKAGE_TARGETS,
+} = {}) {
+  const canonicalSourceRoot = realpathSync(resolve(sourceRoot))
+  const sources = legalBundleSources(canonicalSourceRoot)
+
+  for (const target of packageTargets) {
+    const packageRoot = validatePackageTarget(target)
+    for (const source of sources) {
+      const sourcePath = validateSource(canonicalSourceRoot, source)
+      const destinationName =
+        source === 'license' ? target.licenseName : source
+      const destinationPath = resolve(packageRoot, destinationName)
+      ensurePackageDestination(packageRoot, destinationPath)
+      copyFileSync(sourcePath, destinationPath)
+    }
+  }
 }
 
 export function validateLegalBundleTarget(target) {
@@ -253,6 +324,7 @@ function parseOutputs(argv) {
 
 function main() {
   const requested = parseOutputs(process.argv.slice(2))
+  if (requested.length === 0) syncPackageLegalBundles()
   const targets = requested.length
     ? requested.map((target) =>
         isAbsolute(target) ? target : resolve(ROOT, target),

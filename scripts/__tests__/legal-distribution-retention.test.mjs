@@ -69,6 +69,65 @@ test('canonical sync stages the complete redistribution bundle byte-for-byte', (
   }
 })
 
+test('canonical package sync stages notice-linked licenses and provenance byte-for-byte', () => {
+  assert.equal(
+    typeof legalSync.syncPackageLegalBundles,
+    'function',
+    'sync module must expose canonical package-local synchronization',
+  )
+  const sourceRoot = mkdtempSync(join(tmpdir(), 'catgo-package-legal-source-'))
+  const packageParent = mkdtempSync(join(tmpdir(), 'catgo-package-legal-targets-'))
+  const packageTargets = [
+    { root: resolve(packageParent, 'wasm'), licenseName: 'license' },
+    { root: resolve(packageParent, 'vscode'), licenseName: 'license' },
+    { root: resolve(packageParent, 'server'), licenseName: 'LICENSE' },
+  ]
+  try {
+    mkdirSync(resolve(sourceRoot, 'third_party/licenses'), { recursive: true })
+    mkdirSync(resolve(sourceRoot, 'third_party/provenance'), { recursive: true })
+    writeFileSync(resolve(sourceRoot, 'license'), 'root license\n')
+    writeFileSync(resolve(sourceRoot, 'CITATION.cff'), 'citation\n')
+    writeFileSync(
+      resolve(sourceRoot, 'THIRD_PARTY_NOTICES.md'),
+      [
+        '[dependency](third_party/licenses/dependency.txt)',
+        '[ledger](third_party/provenance/ledger.json)',
+        '',
+      ].join('\n'),
+    )
+    writeFileSync(
+      resolve(sourceRoot, 'third_party/licenses/dependency.txt'),
+      'dependency license\n',
+    )
+    writeFileSync(
+      resolve(sourceRoot, 'third_party/provenance/ledger.json'),
+      '{"schemaVersion":1}\n',
+    )
+    for (const { root } of packageTargets) mkdirSync(root, { recursive: true })
+
+    legalSync.syncPackageLegalBundles({ sourceRoot, packageTargets })
+
+    for (const { root, licenseName } of packageTargets) {
+      assert.equal(readFileSync(resolve(root, licenseName), 'utf8'), 'root license\n')
+      for (const path of [
+        'CITATION.cff',
+        'THIRD_PARTY_NOTICES.md',
+        'third_party/licenses/dependency.txt',
+        'third_party/provenance/ledger.json',
+      ]) {
+        assert.deepEqual(
+          readFileSync(resolve(root, path)),
+          readFileSync(resolve(sourceRoot, path)),
+          `${root}: ${path}`,
+        )
+      }
+    }
+  } finally {
+    rmSync(sourceRoot, { recursive: true, force: true })
+    rmSync(packageParent, { recursive: true, force: true })
+  }
+})
+
 test('target validation rejects repo, home, system roots, and broad ancestors', () => {
   assert.equal(
     typeof legalSync.validateLegalBundleTarget,

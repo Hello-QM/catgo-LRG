@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "scope": "Technical provenance and redistribution-evidence ledger; no legal conclusion.",
+  "releaseStatus": "BLOCKED",
+  "externalRightsGate": "written permission or exclusion",
+  "pormake": {
+    "repository": "https://github.com/Sangwon91/PORMAKE",
+    "revision": "639caad9d315ef6cb4838d0f8e44336d4a41aa7a",
+    "officialArchive": {
+      "url": "https://codeload.github.com/Sangwon91/PORMAKE/tar.gz/639caad9d315ef6cb4838d0f8e44336d4a41aa7a",
+      "sha256": "55220dc01fda8df7f1933b53c9ab3c60e7c242f1b442bb86b7f8237b6bb49421"
+    }
+  },
+  "directoryComparison": {
+    "paths": {
+      "catgo": "server/catgo/vendor/pormake/database",
+      "upstream": "src/pormake/database"
+    },
+    "byteIdentical": true
+  },
+  "manifests": {
+    "algorithm": "SHA-256 of sorted sha256sum records with paths relative to the database root",
+    "bbs": "793516ee8a627990e633633c9d97c39e339d03a26cb09c893dcccaa035801290",
+    "topologies": "45bc4d3b8cabae37f935fb88a1436bfc0db3a695962b992b779fd44e2043ca4d",
+    "all": "0e9df18d6bfd14f4970375ec40242d131eb245547316014e44049f1353b65548"
+  },
+  "counts": {
+    "databaseFiles": 3274,
+    "buildingBlocks": 867,
+    "topologiesCgd": 2404,
+    "toBaCCoBuildingBlocks": 71,
+    "coREBuildingBlocks": 796
+  },
+  "sources": {
+    "toBaCCo": {
+      "fileCount": 71,
+      "evidence": "ACS supporting information",
+      "supportingInformationLicense": "CC BY-NC",
+      "appliesToUnderlyingData": false,
+      "note": "The supporting-information license alone does not establish redistribution terms for the underlying building-block data.",
+      "externalRightsGate": "written permission or exclusion"
+    },
+    "coRE": {
+      "fileCount": 796,
+      "zenodoRecord": 3370144,
+      "doi": "10.5281/zenodo.3370144",
+      "license": "CC BY 4.0",
+      "perFileMappingEstablished": false,
+      "note": "The Zenodo record does not establish an E/N per-file mapping to the 796 PORMAKE building-block files.",
+      "externalRightsGate": "written permission or exclusion"
+    },
+    "rcsr": {
+      "repository": "https://github.com/odf/RCSR",
+      "currentRepositoryLicense": null,
+      "cgdFileCount": 2404,
+      "bundledZip": true,
+      "dedicatedOpenRedistributionLicenseFound": false,
+      "note": "The current repository metadata declares no license, and the audited CGD/ZIP collection has no dedicated open redistribution license.",
+      "externalRightsGate": "written permission or exclusion"
+    }
+  }
+}

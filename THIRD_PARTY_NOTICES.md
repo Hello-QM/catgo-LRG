@@ -251,45 +251,142 @@ That model card identifies the license as Apache License, Version 2.0. On
 2026-07-25 the official "Latest" download was byte-identical to CatGo's
 bundled file at the recorded SHA-256.
 
-## Confirmed source references with mapping still incomplete
+## Confirmed source references with bounded provenance maps
 
-These records identify an upstream and its published license, but CatGo does
-not yet have a sufficiently precise revision/path map to state that the named
-license applies to every current affected line.
+The following records separate exact imports, adapted implementations, adapted
+tests, copied data, and format/API interoperability. The complete
+machine-readable evidence ledger is
+[`third_party/provenance/pymatgen-ase-xterm-provenance.json`](third_party/provenance/pymatgen-ase-xterm-provenance.json).
+These technical mappings make no legal conclusion. Where the historical record
+does not prove the revision actually used by the original author, the immutable
+revision below is identified only as a verified audit snapshot and the external
+evidence gate remains open.
 
 ### pymatgen
 
 - Source: https://github.com/materialsproject/pymatgen
 - Upstream license declaration: MIT
-- Concrete CatGo references:
-  `src/lib/xrd/calc-xrd.ts` says its scattering table is copied from
-  `pymatgen/analysis/diffraction/atomic_scattering_params.json`; several
-  `extensions/rust/src/` test modules say cases are ported from pymatgen.
+- Preserved upstream text:
+  [`third_party/licenses/pymatgen-MIT.txt`](third_party/licenses/pymatgen-MIT.txt)
+- Verified audit snapshot:
+  `7b92f9ab4112d538381f4ee4dd6119295c200245`
 
-The exact pymatgen revision and complete copied-test/data map were not recorded.
-Maintainers should pin those facts and preserve the applicable upstream notice
-before release.
+That snapshot is an immutable point at which the mapped data, symbols, and test
+fixtures can be reproduced. It is **not evidence that this was the revision
+actually adopted**, which was not recorded.
+
+The import history also establishes a MatterViz/Ferrox intermediary:
+
+- MatterViz PR 274 head
+  `63a222673cd21d6b4542ac8b819714aa3104b625` maps to CatGo commit
+  `b4ce49e30eca8547b57f3f57fa251f8936a1b589`. `cif.rs`, `element.rs`, and
+  `lattice.rs` have exact whole-file blobs; the marked test blocks in
+  `composition.rs` and `io.rs` are exact; the first four marked `matcher.rs`
+  tests are exact.
+- MatterViz PR 290 head
+  `34d031638685869f40ebfc8c5233c29584fb86f5` maps to CatGo commit
+  `ce041a67c21232232de7f096652c1c5eb841b6eb`.
+  `integrators.rs`, `structure_matcher.rs`, `algorithms/ewald.rs`, `xrd.rs`,
+  and `elastic.rs` have exact whole-file blobs at import.
+
+Bounded pymatgen mappings:
+
+- **Copied data:** `src/lib/xrd/atomic-scattering-params.ts` is byte-identical
+  to MatterViz revision `e17228c29d744c07b8b4d8315fa79fbc342551b2`;
+  its 99 entries have zero value mismatches against
+  `src/pymatgen/analysis/diffraction/atomic_scattering_params.json` at the
+  audit snapshot.
+- **Adapted production implementation:** `src/lib/xrd/calc-xrd.ts` maps
+  `WAVELENGTHS`, diffraction tolerances, `get_unique_families`, and
+  `compute_xrd_pattern` to pymatgen's diffraction `core.py` and `xrd.py`,
+  through MatterViz revision `e17228c29d744c07b8b4d8315fa79fbc342551b2`.
+- **Adapted production implementation:** CatGo commit
+  `2c2439028ba65bde30866a3bf5efbf1963c5212b` explicitly introduced
+  `extensions/rust/src/crystal_nn.rs` as a pymatgen port.
+  `extensions/rust/src/voronoi_cell.rs::solid_angle` also states that it
+  matches pymatgen's implementation. A reproducible pre-reorganization
+  reference is `cc57da9bb90cf1e46ff72ca8fe8642514692cb8f` at
+  `src/pymatgen/analysis/local_env.py`; the actual adopted revision remains
+  unrecorded.
+- **Adapted production implementation:** `extensions/rust/src/algorithms/ewald.rs`
+  names pymatgen `analysis/ewald.py` for implementation details, and
+  `extensions/rust/src/{matcher,structure_matcher}.rs` adapts
+  `StructureMatcher` behavior.
+- **Adapted tests:** the marked Rust tests map to pymatgen
+  `test_composition.py`, `test_periodic_table.py`, `test_lattice.py`,
+  `test_structure_matcher.py`, and `test_cif.py`; they are consolidated
+  cross-language test scenarios, not byte-identical Python imports.
+- **Interoperability only:** pymatgen `Structure.as_dict()` JSON,
+  `PymatgenStructure` TypeScript shapes, and compatible element/structure
+  field names do not by themselves establish copied implementation.
+
+External evidence is still required to identify the actual pymatgen revisions
+used by the original authors. The audit snapshot must not be promoted to an
+adopted-revision claim without that evidence.
 
 ### ASE
 
 - Source: https://gitlab.com/ase/ase
 - Upstream license declaration: LGPL-2.1-or-later
-- Concrete CatGo reference:
-  `extensions/rust/src/integrators.rs` says a test is ported from ASE's
-  `test_nose_hoover_chain.py`.
+- Preserved upstream text:
+  [`third_party/licenses/ASE-LGPL-2.1.txt`](third_party/licenses/ASE-LGPL-2.1.txt)
+- Verified audit snapshot:
+  `e311e0ab9a04202b94799229e43357ead6243830`
 
-The exact ASE revision and copied scope were not recorded.
+That revision is a reproducible audit snapshot, **not proof of the revision
+actually adopted**, which was not recorded. CatGo's
+`extensions/rust/src/integrators.rs` was imported byte-identically in commit
+`ce041a67c21232232de7f096652c1c5eb841b6eb` from MatterViz PR 290 head
+`34d031638685869f40ebfc8c5233c29584fb86f5`.
+
+The four explicit adapted-test mappings are:
+
+- `test_nose_hoover_momentum_conservation` →
+  `test_nose_hoover_chain.py::test_nose_hoover_chain_nvt`
+- `test_velocity_verlet_symplectic` →
+  `test_nose_hoover_chain.py::test_thermostat_round_trip`
+- `test_nve_total_energy_conserved_high_precision` →
+  `test_verlet_thermostats_asap.py::test_verlet_thermostats_asap`
+- `test_langevin_temperature_distribution` →
+  `test_nvt_npt.py::{propagate,test_langevin}`
+
+These are rewritten Rust scenarios, not byte-identical Python imports. ASE
+Atoms dictionaries, ASE-compatible units, and compatible field names are
+recorded separately as interoperability only. External evidence is still
+required to identify the actual ASE revision used by the original author.
 
 ### xterm.js
 
 - Source: https://github.com/xtermjs/xterm.js
 - Upstream license declaration: MIT
-- Concrete CatGo reference:
-  `src/lib/structure/TerminalPanel.svelte` identifies behavior based on xterm.js
-  PR 5704.
+- Preserved upstream text:
+  [`third_party/licenses/xterm.js-MIT.txt`](third_party/licenses/xterm.js-MIT.txt)
+- PR: https://github.com/xtermjs/xterm.js/pull/5704
+- Fixed comparison base:
+  `fb25eb8f79fd223acef90828dc2990bb7e196a1d`
+- Fixed comparison head:
+  `16c7a837be902403383142016936059c90b6706e`
+- Logic commits:
+  `d70c52da926584f6865ab22e1a98a7d83a4c38bc` and
+  `c02ba2cf07d3f46c594cd1eb37e5785e2b5e8f5a`
 
-CatGo history does not distinguish conceptual use from copied code for that
-change, so no blanket path assignment is made here.
+CatGo commit `99ebfb0015b9e19e8cc83ef43f21f2e7a63dc2e6` explicitly describes
+the terminal IME architecture as based on PR 5704. The bounded scope is the IME
+block in `src/lib/structure/TerminalPanel.svelte`, where
+`wk_composing`, `wk_pending`, `isCJK`, `wkFlush`, `beforeinput`, keydown
+flushing, and `term.onData` suppression correspond to xterm.js
+`_wkImeComposing`, `_wkImePending`, `_isHangul`, `_wkFlush`, `_inputEvent`,
+`_keyDown`, and `CompositionHelper.wkImeComposing`.
+
+The CatGo patch ID is
+`6a61e2bb0cca035bf2500e0afee4e0b2de734b38`; the two upstream logic patch
+IDs are `7330ecfab8076b9baad43bfebc9b68aa0e8a1cf7` and
+`a2eab2de989c9bd7a224d744244b851cd9310fd2`. None match. This rules out a
+patch-identical import but, together with the state-machine and symbol mapping,
+supports classification as an **adapted implementation**, rather than merely
+conceptual use. CatGo-specific extensions include Chinese
+`insertFromComposition`, a post-composition suppression window, and synthetic
+DEL-debt handling. No blanket assignment is made outside that IME block.
 
 ## Unresolved provenance and license mappings
 
@@ -336,12 +433,26 @@ conclusion, and removal does not settle those questions.
 - Paths: `server/catgo/vendor/pormake/database/` and
   `server/catgo/vendor/pormake/database/topologies/RCSR_topology.zip`
 - Immediate source: the recorded PORMAKE revision above
+- Machine-readable evidence:
+  [`third_party/provenance/pormake-database-provenance.json`](third_party/provenance/pormake-database-provenance.json)
 
-The PORMAKE MIT file is retained for the vendored package, but the repository
-does not document whether every building-block and topology data file was
-authored by the PORMAKE copyright holder or imported under separate dataset
-terms. This narrower dataset provenance question requires maintainer/counsel
-mapping.
+The CatGo database directory is byte-identical to
+`src/pormake/database` at PORMAKE revision
+`639caad9d315ef6cb4838d0f8e44336d4a41aa7a`; the official commit archive
+SHA-256 and deterministic `bbs`, `topologies`, and whole-database manifest
+hashes are pinned in the ledger. The collection has 867 building blocks
+identified as 71 ToBaCCo plus 796 CoRE files, and 2,404 RCSR-derived CGD files
+plus a bundled ZIP.
+
+These technical matches do not close the redistribution-rights question. The
+audited ACS supporting-information terms are CC BY-NC only for the supporting
+information and are not extrapolated to its underlying ToBaCCo data. CoRE
+Zenodo record 3370144 is CC BY 4.0, but an E/N per-file mapping to the 796
+bundled files has not been established. The current `odf/RCSR` repository
+declares no license, and no dedicated open redistribution license was found for
+the audited CGD/ZIP collection. Each source therefore still requires written
+permission or exclusion; release remains **BLOCKED**. This is a provenance
+record, not a legal conclusion.
 
 ### Application icons, logos, screenshots, and QR image
 
