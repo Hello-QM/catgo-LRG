@@ -55,6 +55,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Stage canonical legal bundle
+        run: node scripts/sync-legal-bundle.mjs
+
       # --- Python backend toolchain (mirrors tauri-build.yml backend build) ---
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -94,6 +97,18 @@ jobs:
             chmod +x "${{ matrix.asset_name }}"
           fi
           ls -la "${{ matrix.asset_name }}"
+
+      - name: Verify embedded legal bundle
+        run: |
+          set -euo pipefail
+          pyi-archive_viewer -l "${{ matrix.asset_name }}" > sidecar-archive.lst
+          while IFS= read -r file; do
+            rel="${file#build/legal-bundle/}"
+            if ! grep -Fq "legal/$rel" sidecar-archive.lst; then
+              echo "::error::${{ matrix.asset_name }} is missing embedded legal/$rel"
+              exit 1
+            fi
+          done < <(find build/legal-bundle -type f | sort)
 
       - name: Attach sidecar to GitHub Release
         env:

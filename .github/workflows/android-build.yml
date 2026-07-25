@@ -145,6 +145,25 @@ jobs:
           VITE_STATIC_ONLY: '1'
         run: pnpm tauri android build --apk true
 
+      - name: Verify legal bundle in APK/AAB
+        run: |
+          set -euo pipefail
+          mapfile -t artifacts < <(find src-tauri/gen/android -type f \( -name '*.apk' -o -name '*.aab' \))
+          if [ "${#artifacts[@]}" -eq 0 ]; then
+            echo "::error::No Android APK/AAB found for legal-bundle inspection"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            unzip -Z1 "$artifact" > android-archive.lst
+            while IFS= read -r file; do
+              rel="${file#build/legal-bundle/}"
+              if ! grep -Fq "/legal/$rel" android-archive.lst; then
+                echo "::error::$artifact is missing legal/$rel"
+                exit 1
+              fi
+            done < <(find build/legal-bundle -type f | sort)
+          done
+
       - name: Sign the APK (apksigner)
         id: sign
         env:

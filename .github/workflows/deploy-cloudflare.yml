@@ -17,6 +17,12 @@ on:
       - "extensions/catrender-wasm/**"
       - "extensions/rust-wasm/**"
       - "static/**"
+      - "license"
+      - "CITATION.cff"
+      - "THIRD_PARTY_NOTICES.md"
+      - "third_party/licenses/**"
+      - "scripts/sync-legal-bundle.mjs"
+      - "scripts/verify-legal-distributions.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "vite.desktop.config.ts"
@@ -64,6 +70,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm docs:build
+
+      - name: Verify legal retention for static deployments
+        run: pnpm legal:verify
 
       - name: Inject cache headers
         run: |
@@ -150,6 +159,9 @@ jobs:
 
       - name: Build static SPA (VITE_STATIC_ONLY=true)
         run: pnpm deploy:build
+
+      - name: Verify legal retention for static deployments
+        run: pnpm legal:verify
 
       - name: Inject cache + isolation headers
         run: |

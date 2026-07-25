@@ -40,6 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stage canonical legal bundle
+        run: node scripts/sync-legal-bundle.mjs
+
       - name: Resolve tag
         shell: bash
         env:
@@ -83,6 +86,8 @@ jobs:
       - name: Package + checksum
         shell: bash
         run: |
+          mkdir -p "dist/${{ matrix.key }}/legal"
+          cp -r build/legal-bundle/. "dist/${{ matrix.key }}/legal/"
           mkdir -p out
           asset="whisper-cli-${{ matrix.key }}.${{ matrix.ext }}"
           if [ "${{ matrix.ext }}" = "zip" ]; then
@@ -98,6 +103,23 @@ jobs:
           echo "$sha" > "out/$asset.sha256"
           echo "ASSET=$asset" >> "$GITHUB_ENV"
 
+      - name: Verify legal bundle in accelerator archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$ASSET" == *.zip ]]; then
+            unzip -Z1 "out/$ASSET" > accelerator-archive.lst
+          else
+            tar tzf "out/$ASSET" > accelerator-archive.lst
+          fi
+          while IFS= read -r file; do
+            rel="${file#build/legal-bundle/}"
+            if ! grep -Fq "legal/$rel" accelerator-archive.lst; then
+              echo "::error::$ASSET is missing legal/$rel"
+              exit 1
+            fi
+          done < <(find build/legal-bundle -type f | sort)
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.key }}
@@ -110,7 +132,7 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --latest=false --title "$TAG" \
-              --notes "CatGo STT GPU accelerator binaries"
+              --notes "CatGo STT GPU accelerator binaries. Each archive includes the CatGo legal and citation bundle."
           gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
 
   manifest:

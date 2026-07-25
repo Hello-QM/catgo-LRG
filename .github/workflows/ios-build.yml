@@ -195,6 +195,36 @@ jobs:
           pnpm tauri ios build --export-method app-store-connect
           --config '{"identifier":"org.catgo.app","bundle":{"iOS":{"bundleVersion":"${{ github.run_number }}"}}}'
 
+      - name: Verify legal bundle in iOS artifacts
+        run: |
+          set -euo pipefail
+          inspected=0
+          while IFS= read -r -d '' ipa; do
+            unzip -Z1 "$ipa" > ios-archive.lst
+            while IFS= read -r file; do
+              rel="${file#build/legal-bundle/}"
+              if ! grep -Fq "/legal/$rel" ios-archive.lst; then
+                echo "::error::$ipa is missing legal/$rel"
+                exit 1
+              fi
+            done < <(find build/legal-bundle -type f | sort)
+            inspected=$((inspected + 1))
+          done < <(find src-tauri/gen/apple/build -type f -name '*.ipa' -print0)
+          while IFS= read -r -d '' app; do
+            while IFS= read -r file; do
+              rel="${file#build/legal-bundle/}"
+              if ! find "$app" -type f -path "*/legal/$rel" -print -quit | grep -q .; then
+                echo "::error::$app is missing legal/$rel"
+                exit 1
+              fi
+            done < <(find build/legal-bundle -type f | sort)
+            inspected=$((inspected + 1))
+          done < <(find src-tauri/gen/apple/build -type d -name '*.app' -print0)
+          if [ "$inspected" -eq 0 ]; then
+            echo "::error::No iOS IPA/app found for legal-bundle inspection"
+            exit 1
+          fi
+
       # ---- Upload the signed IPA to App Store Connect (TestFlight) ----
       # Needs an App Store Connect API key (App Store Connect → Users and Access →
       # Integrations → App Store Connect API). Add these repo secrets:

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **Noncommercial research license and mandatory citation** — new CatGo 1.4.6 distributions use the source-available `CatGo Noncommercial Research License 1.0`. Commercial use requires prior written permission, and every public output must include the required acknowledgement and citation. Third-party materials retain their own licenses. Historical copies remain governed by the license terms distributed with those copies.
+- **Noncommercial research license and mandatory citation** — new CatGo 1.4.6 distributions use the source-available `CatGo Noncommercial Research License 1.0`. Commercial use requires prior written permission; see [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md) or contact `gul026@ucsd.edu`. Every public output must include the exact acknowledgement `This work used CatGo (https://catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. Third-party materials retain their own licenses. Copies of historical releases already distributed under AGPL remain governed by those grants; those AGPL permissions are not revoked.
 
 ## [1.4.4] - 2026-07-08
 

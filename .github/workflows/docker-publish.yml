@@ -9,6 +9,12 @@ on:
       - 'server/**'
       - 'src/**'
       - 'extensions/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
   pull_request:
@@ -16,6 +22,12 @@ on:
       - 'Dockerfile'
       - 'docker/**'
       - 'server/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
   workflow_dispatch:
 
 env:

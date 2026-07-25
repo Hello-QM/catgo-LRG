@@ -17,6 +17,9 @@ echo "Target: $TARGET"
 echo "Server directory: $SERVER_DIR"
 echo "Output directory: $BINARIES_DIR"
 
+# Stage the complete legal bundle before PyInstaller reads catgo_server.spec.
+node "$PROJECT_DIR/scripts/sync-legal-bundle.mjs"
+
 # Create binaries directory if it doesn't exist
 mkdir -p "$BINARIES_DIR"
 

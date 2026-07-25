@@ -89,7 +89,8 @@
       "infoPlist": "Info.ios.plist"
     },
     "resources": {
-      "icons/document.icns": "./"
+      "icons/document.icns": "./",
+      "resources/legal/": "legal/"
     },
     "fileAssociations": [
       {

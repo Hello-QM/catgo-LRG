@@ -164,6 +164,16 @@ jobs:
             --repo "$REPOSITORY" --dir dist
           ls -lh dist
 
+      - name: Verify mirrored legal bundle
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          test -f dist/catgo-legal-bundle.tar.gz
+          node scripts/sync-legal-bundle.mjs
+          extracted=$(mktemp -d)
+          tar xzf dist/catgo-legal-bundle.tar.gz -C "$extracted"
+          diff -qr build/legal-bundle "$extracted"
+
       - name: Rewrite and validate latest.json URLs
         # latest.json is the Tauri updater manifest; its asset URLs point at
         # github.com, which defeats the purpose for users behind the GFW.

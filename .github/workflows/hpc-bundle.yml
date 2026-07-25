@@ -19,6 +19,12 @@ on:
       - 'src/**'
       - 'server/**'
       - 'static/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'vite.desktop.config.ts'
@@ -94,6 +100,9 @@ jobs:
       - name: Build frontend
         run: pnpm run deploy:build
 
+      - name: Verify legal retention for distribution pipelines
+        run: pnpm legal:verify
+
       - name: Create HPC bundle
         run: |
           BUNDLE_DIR="catgo-hpc-bundle"
@@ -105,12 +114,24 @@ jobs:
           # Copy server (Python backend)
           cp -r server "$BUNDLE_DIR/server"
 
+          # Copy the complete canonical redistribution bundle.
+          cp -r build/legal-bundle "$BUNDLE_DIR/legal"
+
           # Remove __pycache__ and .pyc files
           find "$BUNDLE_DIR/server" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           find "$BUNDLE_DIR/server" -name "*.pyc" -delete 2>/dev/null || true
 
           # Create tarball
-          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server
+          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server legal
+
+          tar tzf catgo-hpc-bundle.tar.gz > hpc-archive.lst
+          while IFS= read -r file; do
+            rel="${file#build/legal-bundle/}"
+            if ! grep -Fq "legal/$rel" hpc-archive.lst; then
+              echo "::error::HPC bundle is missing legal/$rel"
+              exit 1
+            fi
+          done < <(find build/legal-bundle -type f | sort)
 
           echo "Bundle contents:"
           tar tzf catgo-hpc-bundle.tar.gz | head -20

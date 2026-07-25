@@ -73,6 +73,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Stage legal bundle for backend and app resources
+        run: node scripts/sync-legal-bundle.mjs
+
       - name: Install Linux build deps (tauri / webkit2gtk)
         if: runner.os == 'Linux'
         run: |
@@ -160,6 +163,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Verify legal retention for distribution pipelines
+        run: pnpm legal:verify
 
       # Single canonical entry point for ALL wasm builds (design §8.3):
       # scripts/build-wasm.mjs builds ferrox TWICE with explicit feature sets
@@ -251,6 +257,15 @@ jobs:
 
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
+            ### License change in 1.4.6
+            CatGo 1.4.6 distributions use the **source-available CatGo Noncommercial Research License 1.0**. Commercial use requires prior written permission; see [COMMERCIAL_LICENSE.md](https://github.com/${{ github.repository }}/blob/main/COMMERCIAL_LICENSE.md) or contact `gul026@ucsd.edu`.
+
+            Every public output must include this exact acknowledgement:
+
+            > This work used CatGo (https://catgo-ucsd.org).
+
+            It must also cite DOI [`10.26434/chemrxiv.15002984/v1`](https://doi.org/10.26434/chemrxiv.15002984/v1). Third-party materials retain their own terms. Copies of historical CatGo releases already distributed under AGPL remain governed by those grants; those AGPL permissions are **not revoked**.
+
             ### Downloads
             - **Windows** — `.msi` (recommended) or `.exe`
             - **macOS** — `.dmg` (Apple Silicon M1/M2/M3)
@@ -293,3 +308,14 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Upload canonical legal bundle to release
+        if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tar czf catgo-legal-bundle.tar.gz -C build/legal-bundle .
+          tar tzf catgo-legal-bundle.tar.gz
+          tag="${GITHUB_REF_NAME}"
+          gh release upload "$tag" catgo-legal-bundle.tar.gz --clobber
