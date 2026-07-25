@@ -46,6 +46,27 @@ test('download deployment provisions pnpm before Wrangler runs', () => {
   assert.ok(pnpmIndex < wranglerIndex, 'pnpm is available before Wrangler starts')
 })
 
+test('every Cloudflare deployment pins the validated Wrangler release', () => {
+  const deployJobs = ['deploy-docs', 'deploy-app', 'deploy-downloads']
+  const wranglerSteps = deployJobs.map((jobName) => {
+    const steps = DEPLOY_CONFIG.jobs[jobName].steps
+    const matches = steps.filter(
+      (step) => step.uses === 'cloudflare/wrangler-action@v3',
+    )
+    assert.equal(matches.length, 1, `${jobName} has one Wrangler action`)
+    return [jobName, matches[0]]
+  })
+
+  assert.equal(wranglerSteps.length, 3)
+  for (const [jobName, step] of wranglerSteps) {
+    assert.equal(
+      step.with.wranglerVersion,
+      '4.90.1',
+      `${jobName} pins the validated Wrangler release`,
+    )
+  }
+})
+
 test('download Worker config binds the releases bucket to the domain route', () => {
   assert.ok(existsSync(DOWNLOADS_CONFIG_PATH), 'wrangler.downloads.toml exists')
   const config = readFileSync(DOWNLOADS_CONFIG_PATH, 'utf8')
