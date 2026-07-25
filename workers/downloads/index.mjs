@@ -188,6 +188,20 @@ function parseRangeHeader(value, size) {
   }
 }
 
+function responseRange(object) {
+  if (
+    !object.range
+    || !Number.isSafeInteger(object.range.offset)
+    || !Number.isSafeInteger(object.range.length)
+  ) {
+    return null
+  }
+  return {
+    offset: object.range.offset,
+    length: object.range.length,
+  }
+}
+
 function extensionForKey(key) {
   const filename = key.split('/').at(-1) ?? key
   const dot = filename.lastIndexOf('.')
@@ -310,9 +324,10 @@ async function serveGet(request, bucket, key) {
     })
   }
 
-  const range = options.range ?? null
+  const partial = options.range !== undefined
+  const range = partial ? responseRange(object) : null
   return new Response(object.body, {
-    status: range ? 206 : 200,
+    status: partial ? 206 : 200,
     headers: buildHeaders(object, key, range),
   })
 }

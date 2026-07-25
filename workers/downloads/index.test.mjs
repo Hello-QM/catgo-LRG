@@ -134,6 +134,25 @@ test('forwards byte ranges to R2 and emits resumable response metadata', async (
   )
 })
 
+test('uses R2 returned range metadata when the object shrinks after HEAD', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult: createObject({
+      body: new ReadableStream(),
+      size: 95,
+      range: { offset: 90, length: 5 },
+    }),
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: { Range: 'bytes=90-' },
+  })
+
+  assert.equal(response.status, 206)
+  assert.equal(response.headers.get('content-range'), 'bytes 90-94/95')
+  assert.equal(response.headers.get('content-length'), '5')
+})
+
 test('returns a complete GET response when R2 reports a full-object range', async () => {
   const bucket = createBucket({
     getResult: createObject({
