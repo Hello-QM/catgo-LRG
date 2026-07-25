@@ -5,7 +5,6 @@ pub mod fog;
 pub mod geom;
 pub mod orient;
 pub mod palette;
-mod perceive;
 pub mod preset;
 pub mod svg;
 pub mod types;
