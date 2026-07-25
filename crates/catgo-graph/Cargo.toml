@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Domain-agnostic DAG workflow runtime for CatGO"
 license-file = "../../license"
+publish = false
 
 [lib]
 name = "catgo_graph"

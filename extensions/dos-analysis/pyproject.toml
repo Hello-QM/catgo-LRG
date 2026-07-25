@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "catgo-dos"
 version = "0.1.0"
 description = "Electronic structure DOS analysis library for VASP HDF5 output"
+license = "LicenseRef-CatGo-Noncommercial-1.0"
 requires-python = ">=3.9"
+classifiers = [
+    "Private :: Do Not Upload",
+]
 dependencies = [
     "numpy>=1.22",
     "h5py>=3.0",
@@ -19,3 +23,9 @@ dev = ["pytest>=7.0", "matplotlib>=3.5", "pandas>=1.4", "pyyaml>=6.0"]
 
 [tool.setuptools.packages.find]
 include = ["catgo_dos*"]
+
+[tool.catgo.distribution]
+# This extension is shipped only as part of CatGo. The private classifier is
+# rejected by public indexes; this machine-readable flag feeds CatGo's policy
+# inventory and internal release tooling.
+publish = false

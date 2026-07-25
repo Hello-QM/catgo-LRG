@@ -32,7 +32,10 @@
     "pkg",
     "pkg-scalar",
     "pkg-threaded",
-    "license"
+    "license",
+    "CITATION.cff",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md"
   ],
   "scripts": {
     "build": "node ../../scripts/build-wasm.mjs --only ferrox",

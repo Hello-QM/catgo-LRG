@@ -84,3 +84,6 @@ artifacts = [
 "workflow" = "catgo/_bundled/workflow"
 "plugin_loader.py" = "catgo/_bundled/plugin_loader.py"
 "mcp_server.py" = "catgo/_bundled/mcp_server.py"
+"README-pypi.md" = "catgo/README.md"
+"CITATION.cff" = "catgo/CITATION.cff"
+"THIRD_PARTY_NOTICES.md" = "catgo/THIRD_PARTY_NOTICES.md"

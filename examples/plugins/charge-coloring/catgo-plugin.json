@@ -8,6 +8,7 @@
     "email": "catgo@example.com"
   },
   "license": "LicenseRef-CatGo-Noncommercial-1.0",
+  "publish": false,
   "keywords": ["visualization", "charge", "oxidation"],
   "catgo": {
     "apiVersion": "1.0",

@@ -40,7 +40,13 @@
  *                  `@catgo/ferrox-wasm` imports keep resolving.
  */
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, rmSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -289,6 +295,15 @@ function buildTarget(target) {
   return status
 }
 
+function hardenGeneratedPackage(target) {
+  const packagePath = resolve(target.cwd, target.outDir, 'package.json')
+  if (!existsSync(packagePath)) return
+  const manifest = JSON.parse(readFileSync(packagePath, 'utf8'))
+  manifest.private = true
+  manifest.license = 'LicenseRef-CatGo-Noncommercial-1.0'
+  writeFileSync(packagePath, `${JSON.stringify(manifest, null, 2)}\n`)
+}
+
 for (const t of pending) {
   console.log(`[build-wasm] building ${t.name} …`)
   const status = buildTarget(t)
@@ -299,6 +314,7 @@ for (const t of pending) {
     )
     process.exit(status)
   }
+  hardenGeneratedPackage(t)
   if (t.post) t.post()
 }
 console.log('[build-wasm] all WASM extensions built ✓')

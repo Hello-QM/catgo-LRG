@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -39,6 +40,19 @@ let attempts = 0
 try { attempts = Number(readFileSync(state, 'utf8')) } catch {}
 attempts += 1
 writeFileSync(state, String(attempts))
+if (process.env.FAKE_WASM_PACK_WRITE_PACKAGE === '1') {
+  const outIndex = process.argv.indexOf('--out-dir')
+  const outDir = require('node:path').resolve(process.cwd(), process.argv[outIndex + 1])
+  require('node:fs').mkdirSync(outDir, { recursive: true })
+  require('node:fs').writeFileSync(
+    require('node:path').join(outDir, 'package.json'),
+    JSON.stringify({
+      name: 'generated-wasm-package',
+      files: ['generated.js', 'generated_bg.wasm'],
+      license: '../../license'
+    }, null, 2)
+  )
+}
 if (process.env.FAKE_WASM_PACK_ALWAYS_FAIL === '1' || attempts === 1) {
   console.error('failed to download Binaryen')
   process.exit(73)
@@ -130,4 +144,28 @@ test('stops retrying wasm-pack after the configured attempt limit', (t) => {
   assert.equal(result.status, 73)
   assert.equal(readFileSync(fake.state, 'utf8'), '3')
   assert.match(result.stderr, /FAILED: chgdiff after 3 attempts/)
+})
+
+test('marks generated chgdiff and catrender npm manifests private', (t) => {
+  const generated = [
+    ['chgdiff', resolve(ROOT, 'src/lib/electronic/chgdiff-wasm-pkg')],
+    ['catrender', resolve(ROOT, 'src/lib/structure/catrender/catrender-wasm-pkg')],
+  ]
+  t.after(() => {
+    for (const [, dir] of generated) rmSync(dir, { recursive: true, force: true })
+  })
+
+  for (const [target, dir] of generated) {
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    const fake = fakeWasmPack(t)
+    const result = runBuildWasm([`--only=${target}`], {
+      ...fake.env,
+      FAKE_WASM_PACK_WRITE_PACKAGE: '1',
+    })
+    assert.equal(result.status, 0)
+    const manifest = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'))
+    assert.equal(manifest.private, true, target)
+    assert.equal(manifest.license, 'LicenseRef-CatGo-Noncommercial-1.0', target)
+  }
 })

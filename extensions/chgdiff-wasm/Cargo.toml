@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "VASP CHGCAR difference charge density — compiled to WebAssembly"
 license-file = "../../license"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]

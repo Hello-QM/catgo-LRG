@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
@@ -8,6 +9,190 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
+const CUSTOM_LICENSE = 'LicenseRef-CatGo-Noncommercial-1.0'
+
+const gitFiles = () =>
+  execFileSync('git', ['ls-files', '-z'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean)
+
+const manifestInventory = {
+  publishableFirstParty: [
+    'extensions/rust-wasm/package.json',
+    'extensions/vscode/package.json',
+    'package.json',
+    'server/pyproject.toml',
+  ],
+  explicitInternalFirstParty: [
+    'crates/catgo-graph/Cargo.toml',
+    'examples/plugins/charge-coloring/catgo-plugin.json',
+    'examples/plugins/lennard-jones-calculator/catgo-plugin.json',
+    'extensions/catrender-wasm/Cargo.toml',
+    'extensions/chgdiff-wasm/Cargo.toml',
+    'extensions/dos-analysis/pyproject.toml',
+    'extensions/rust/Cargo.toml',
+    'src-tauri/Cargo.toml',
+    'src-tauri/plugins/tauri-plugin-bg-grace/Cargo.toml',
+    'src-tauri/plugins/tauri-plugin-ios-speech/Cargo.toml',
+    'tools/cube-processor/Cargo.toml',
+    'workers/cors-relay/package.json',
+  ],
+  separatelyLicensedThirdParty: [
+    'extensions/rust/pyproject.toml',
+    'extensions/uff-relax/Cargo.toml',
+    'extensions/vsepr-rs/Cargo.toml',
+  ],
+}
+
+const workflowInventory = {
+  publishablePackageArchives: [
+    '.github/workflows/pypi-publish.yml',
+    '.github/workflows/vsix-publish.yml',
+  ],
+  bundledApplicationOrReleaseAssets: [
+    '.github/workflows/android-build.yml',
+    '.github/workflows/build-stt-accel.yml',
+    '.github/workflows/build-vscode-sidecars.yml',
+    '.github/workflows/docker-publish.yml',
+    '.github/workflows/hpc-bundle.yml',
+    '.github/workflows/ios-build.yml',
+    '.github/workflows/r2-release-mirror.yml',
+    '.github/workflows/tauri-build.yml',
+  ],
+  deploymentOrValidationOnly: [
+    '.github/workflows/deploy-cloudflare.yml',
+    '.github/workflows/lint.yml',
+    '.github/workflows/tauri-test-build.yml',
+    '.github/workflows/test.yml',
+  ],
+}
+
+const licenseClaimInventory = {
+  activeFirstParty: [
+    'COMMERCIAL_LICENSE.md',
+    'extensions/rust-wasm/README.md',
+    'extensions/vscode/readme.md',
+    'license',
+    'readme.md',
+    'readme.zh.md',
+    'server/README-pypi.md',
+  ],
+  historicalOnly: [
+    'CHANGELOG.md',
+    'docs/reference/changelog.md',
+    'docs/zh/reference/changelog.md',
+  ],
+  // Final-review I1 is owned by a separate remediation. Keep it classified
+  // here so a new active claim cannot evade this I3/I4 inventory branch.
+  parallelReviewRemediation: ['docs/.vitepress/config.ts'],
+}
+
+const flattenInventory = (inventory) =>
+  Object.values(inventory).flat().toSorted()
+
+const section = (path, name) => {
+  const text = read(path)
+  const header = `[${name}]`
+  const start = text.indexOf(`${header}\n`)
+  assert.notEqual(start, -1, `${path} has ${header}`)
+  const bodyStart = start + header.length + 1
+  const nextSection = text.indexOf('\n[', bodyStart)
+  return text.slice(bodyStart, nextSection === -1 ? undefined : nextSection)
+}
+
+test('every tracked package manifest has a distribution classification', () => {
+  const discovered = gitFiles()
+    .filter((path) =>
+      /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|catgo-plugin\.json)$/.test(path)
+    )
+    .toSorted()
+  assert.deepEqual(discovered, flattenInventory(manifestInventory))
+})
+
+test('every workflow has a release-surface classification', () => {
+  const discovered = gitFiles()
+    .filter((path) => path.startsWith('.github/workflows/'))
+    .toSorted()
+  assert.deepEqual(discovered, flattenInventory(workflowInventory))
+})
+
+test('every active or historical license claim has a classification', () => {
+  const manifests = new Set(flattenInventory(manifestInventory))
+  const packagedCopies = new Set([
+    'extensions/rust-wasm/license',
+    'extensions/vscode/license',
+    'server/LICENSE',
+  ])
+  const discovered = execFileSync(
+    'git',
+    [
+      'grep',
+      '-I',
+      '-l',
+      '-E',
+      'AGPL|GNU AFFERO|CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial-1\\.0',
+      '--',
+    ],
+    { cwd: ROOT, encoding: 'utf8' },
+  ).trim().split('\n').filter((path) =>
+    path &&
+    !path.startsWith('docs/superpowers/') &&
+    !path.startsWith('scripts/') &&
+    !manifests.has(path) &&
+    !packagedCopies.has(path)
+  ).toSorted()
+  assert.deepEqual(discovered, flattenInventory(licenseClaimInventory))
+})
+
+test('internal first-party manifests cannot be accidentally published', () => {
+  const privateNpm = JSON.parse(read('workers/cors-relay/package.json'))
+  assert.equal(privateNpm.private, true)
+
+  for (const file of [
+    'examples/plugins/charge-coloring/catgo-plugin.json',
+    'examples/plugins/lennard-jones-calculator/catgo-plugin.json',
+  ]) {
+    const plugin = JSON.parse(read(file))
+    assert.equal(plugin.publish, false, file)
+    assert.equal(plugin.license, CUSTOM_LICENSE, file)
+  }
+
+  const dosProject = section('extensions/dos-analysis/pyproject.toml', 'project')
+  assert.match(dosProject, /^license = "LicenseRef-CatGo-Noncommercial-1\.0"$/m)
+  assert.match(dosProject, /"Private :: Do Not Upload"/)
+  const dosDistribution = section(
+    'extensions/dos-analysis/pyproject.toml',
+    'tool.catgo.distribution',
+  )
+  assert.match(dosDistribution, /^publish = false$/m)
+
+  for (const file of [
+    'crates/catgo-graph/Cargo.toml',
+    'extensions/catrender-wasm/Cargo.toml',
+    'extensions/chgdiff-wasm/Cargo.toml',
+    'extensions/rust/Cargo.toml',
+    'src-tauri/Cargo.toml',
+    'src-tauri/plugins/tauri-plugin-bg-grace/Cargo.toml',
+    'src-tauri/plugins/tauri-plugin-ios-speech/Cargo.toml',
+    'tools/cube-processor/Cargo.toml',
+  ]) {
+    assert.match(section(file, 'package'), /^publish = false$/m, file)
+  }
+})
+
+test('separately licensed manifests retain semantic license fields', () => {
+  assert.match(
+    section('extensions/rust/pyproject.toml', 'project'),
+    /^license = \{ text = "MIT" \}$/m,
+  )
+  for (const file of [
+    'extensions/uff-relax/Cargo.toml',
+    'extensions/vsepr-rs/Cargo.toml',
+  ]) {
+    assert.match(section(file, 'package'), /^license = "MIT OR Apache-2\.0"$/m)
+  }
+})
 
 test('root license prohibits unauthorized commercial use', () => {
   const text = read('license')
@@ -52,6 +237,8 @@ const customCargo = [
   ['extensions/chgdiff-wasm/Cargo.toml', '../../license'],
   ['extensions/rust/Cargo.toml', '../../license'],
   ['src-tauri/Cargo.toml', '../license'],
+  ['src-tauri/plugins/tauri-plugin-bg-grace/Cargo.toml', '../../../license'],
+  ['src-tauri/plugins/tauri-plugin-ios-speech/Cargo.toml', '../../../license'],
   ['tools/cube-processor/Cargo.toml', '../../license'],
 ]
 
@@ -80,6 +267,64 @@ test('package-local license copies are byte-identical', () => {
   assert.equal(read('extensions/vscode/license'), rootLicense)
   const wasmPackage = JSON.parse(read('extensions/rust-wasm/package.json'))
   assert.ok(wasmPackage.files.includes('license'))
+})
+
+test('package-local redistribution bundles are byte-identical and acknowledged', () => {
+  for (const directory of [
+    'extensions/rust-wasm',
+    'extensions/vscode',
+    'server',
+  ]) {
+    for (const file of ['CITATION.cff', 'THIRD_PARTY_NOTICES.md']) {
+      const local = `${directory}/${file}`
+      assert.ok(existsSync(resolve(ROOT, local)), local)
+      assert.equal(read(local), read(file), local)
+    }
+  }
+  assert.match(read('extensions/rust-wasm/README.md'), new RegExp(
+    ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  ))
+  assert.match(read('extensions/vscode/readme.md'), new RegExp(
+    ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  ))
+  assert.match(read('server/README-pypi.md'), new RegExp(
+    ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  ))
+})
+
+test('published npm archive listings contain the redistribution bundle', () => {
+  for (const [directory, required] of [
+    [
+      '.',
+      ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md', 'readme.md'],
+    ],
+    [
+      'extensions/rust-wasm',
+      ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md', 'README.md'],
+    ],
+  ]) {
+    const output = execFileSync(
+      'npm',
+      ['pack', '--dry-run', '--json', '--ignore-scripts'],
+      {
+        cwd: resolve(ROOT, directory),
+        encoding: 'utf8',
+        env: { ...process.env, npm_config_loglevel: 'silent' },
+      },
+    )
+    const paths = JSON.parse(output)[0].files.map(({ path }) => path)
+    for (const file of required) assert.ok(paths.includes(file), `${directory}: ${file}`)
+  }
+})
+
+test('Python wheel configuration force-includes the redistribution bundle', () => {
+  const wheel = section('server/pyproject.toml', 'tool.hatch.build.targets.wheel.force-include')
+  assert.match(wheel, /^"README-pypi\.md" = "catgo\/README\.md"$/m)
+  assert.match(wheel, /^"CITATION\.cff" = "catgo\/CITATION\.cff"$/m)
+  assert.match(
+    wheel,
+    /^"THIRD_PARTY_NOTICES\.md" = "catgo\/THIRD_PARTY_NOTICES\.md"$/m,
+  )
 })
 
 test('example plugins declare the CatGo custom license', () => {
@@ -149,32 +394,20 @@ test('contribution guides disclose the relicensing authority requirement', () =>
 })
 
 test('active first-party surfaces contain no stale AGPL grant', () => {
-  const active = [
-    'license',
-    'package.json',
+  const active = new Set([
+    ...manifestInventory.publishableFirstParty,
+    ...manifestInventory.explicitInternalFirstParty,
+    ...licenseClaimInventory.activeFirstParty,
     'server/LICENSE',
-    'server/pyproject.toml',
     'extensions/rust-wasm/license',
-    'extensions/rust-wasm/package.json',
     'extensions/vscode/license',
-    'extensions/vscode/package.json',
-    'extensions/vscode/readme.md',
-    'crates/catgo-graph/Cargo.toml',
-    'extensions/catrender-wasm/Cargo.toml',
-    'extensions/chgdiff-wasm/Cargo.toml',
-    'extensions/rust/Cargo.toml',
-    'src-tauri/Cargo.toml',
-    'tools/cube-processor/Cargo.toml',
-    'examples/plugins/charge-coloring/catgo-plugin.json',
-    'examples/plugins/lennard-jones-calculator/catgo-plugin.json',
-    'readme.md',
-    'readme.zh.md',
-    'server/README-pypi.md',
+    'extensions/rust-wasm/CITATION.cff',
+    'extensions/vscode/CITATION.cff',
+    'server/CITATION.cff',
     'contributing.md',
     'contributing.zh.md',
     'CITATION.cff',
-    'COMMERCIAL_LICENSE.md',
-  ]
+  ])
   for (const file of active) {
     assert.doesNotMatch(read(file), /AGPL|GNU AFFERO/i, file)
   }

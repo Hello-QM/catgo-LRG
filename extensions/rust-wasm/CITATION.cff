@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: If you use CatGo, you must acknowledge and cite it as described below.
+version: 1.4.6
+title: CatGo
+authors:
+  - family-names: Li
+    given-names: Wanlu
+    affiliation: University of California, San Diego
+    email: gul026@ucsd.edu
+license-url: https://github.com/Hello-QM/catgo-LRG/blob/main/license
+repository-code: https://github.com/Hello-QM/catgo-LRG
+type: software
+url: https://github.com/Hello-QM/catgo-LRG
+preferred-citation:
+  type: article
+  title: "CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry"
+  authors:
+    - family-names: Liu
+      given-names: Guangsheng
+    - family-names: Ma
+      given-names: Xiao
+    - family-names: Zhang
+      given-names: Leshen
+    - family-names: Pascasio
+      given-names: Jenedith
+    - family-names: Yang
+      given-names: Jonathan
+    - family-names: Chen
+      given-names: Yuxiang
+    - family-names: Li
+      given-names: Wan-Lu
+  year: 2026
+  doi: 10.26434/chemrxiv.15002984/v1
+  url: https://doi.org/10.26434/chemrxiv.15002984/v1
+  publisher:
+    name: ChemRxiv
+  notes: Preprint

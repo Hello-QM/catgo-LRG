@@ -217,7 +217,9 @@
   },
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "CITATION.cff",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "pnpm": {
     "overrides": {
