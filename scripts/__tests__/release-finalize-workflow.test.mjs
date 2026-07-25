@@ -80,6 +80,24 @@ test('proves the TestFlight attestation came from the exact successful iOS workf
     runProof.run,
     /verify-ios-testflight-run\.mjs[\s\S]*--attestation[\s\S]*--run[\s\S]*--jobs[\s\S]*--source-commit/,
   )
+  assert.match(
+    runProof.run,
+    /verify-trusted-ios-workflow\.mjs[\s\S]*--source-root "\$TARGET_SOURCE"/,
+  )
+})
+
+test('proves macOS signatures came from the pinned successful Tauri workflow run', () => {
+  const validate = workflow().jobs.validate
+  const proof = stepNamed(validate, 'Verify macOS workflow provenance')
+  assert.match(proof.run, /catgo-macos-signing-\$\{RELEASE_TAG\}\.json/)
+  assert.match(
+    proof.run,
+    /gh api "repos\/\$REPOSITORY\/actions\/runs\/\$run_id"/,
+  )
+  assert.match(
+    proof.run,
+    /verify-macos-signing-run\.mjs[\s\S]*--source-commit "\$RELEASE_SOURCE_COMMIT"[\s\S]*--target-workflow[\s\S]*"\$TARGET_SOURCE\/\.github\/workflows\/tauri-build\.yml"/,
+  )
 })
 
 test('promotes and verifies Cloudflare before granting GitHub release visibility', () => {
@@ -93,6 +111,10 @@ test('promotes and verifies Cloudflare before granting GitHub release visibility
     contents: 'read',
   })
   assert.deepEqual(publish.needs, ['validate', 'promote-cloudflare'])
+  assert.equal(
+    promote.outputs.promotion_id,
+    '${{ steps.promotion.outputs.promotion_id }}',
+  )
 
   const promotion = stepNamed(
     promote,
@@ -100,7 +122,7 @@ test('promotes and verifies Cloudflare before granting GitHub release visibility
   )
   assert.match(
     promotion.run,
-    /gh workflow run r2-release-mirror\.yml[\s\S]*-f "tag=\$RELEASE_TAG"[\s\S]*-f "promote=true"/,
+    /gh workflow run r2-release-mirror\.yml[\s\S]*-f "tag=\$RELEASE_TAG"[\s\S]*-f "promote_root=true"/,
   )
   assert.match(promotion.run, /expected_source_commit=/)
   assert.match(promotion.run, /expected_asset_snapshot=/)
@@ -114,13 +136,27 @@ test('promotes and verifies Cloudflare before granting GitHub release visibility
     promotion.run,
     /curl[\s\S]*https:\/\/dl\.catgo-ucsd\.org\/index\.html/,
   )
+  assert.match(
+    promotion.run,
+    /promotion-receipts\/\$promotion_id\.json/,
+  )
+  assert.match(
+    promotion.run,
+    /verify-release-promotion-receipt\.mjs/,
+  )
 })
 
-test('preflight, publication, and postflight form one rollback-protected step', () => {
+test('globally serializes finalization across release tags', () => {
+  const current = workflow()
+  assert.equal(current.concurrency.group, 'finalize-release')
+  assert.equal(current.concurrency['cancel-in-progress'], false)
+})
+
+test('preflight, publication, and postflight revalidate Cloudflare in one rollback-protected step', () => {
   const current = workflow()
   const publish = current.jobs.publish
   assert.deepEqual(publish.permissions, {
-    actions: 'read',
+    actions: 'write',
     contents: 'write',
   })
 
@@ -142,8 +178,34 @@ test('preflight, publication, and postflight form one rollback-protected step', 
     mutation.run,
     /gh release edit "\$RELEASE_TAG"[\s\S]*--draft=true/,
   )
-  const firstSnapshot = mutation.run.indexOf('actual_snapshot=')
+  assert.match(
+    mutation.run,
+    /gh workflow run r2-release-mirror\.yml[\s\S]*-f "rollback_root=true"/,
+  )
+  assert.match(mutation.run, /gh run watch "\$rollback_run_id"/)
+  assert.match(
+    mutation.run,
+    /rollback-receipts\/\$PROMOTION_ID\.json/,
+  )
+  const cloudflareChecks = mutation.run.match(
+    /verify_cloudflare_promotion/g,
+  ) ?? []
+  assert.ok(cloudflareChecks.length >= 3)
+  const firstCloudflare = mutation.run.indexOf('verify_cloudflare_promotion')
   const publishIndex = mutation.run.indexOf('--draft=false')
+  const lastCloudflare = mutation.run.lastIndexOf('verify_cloudflare_promotion')
+  assert.ok(firstCloudflare >= 0 && firstCloudflare < publishIndex)
+  assert.ok(lastCloudflare > publishIndex)
+  assert.match(
+    mutation.run,
+    /verify-release-promotion-receipt\.mjs/,
+  )
+  assert.match(
+    mutation.run,
+    /(?:--head|-I)[\s\S]*http_code/,
+  )
+  assert.match(mutation.run, /requiredAssets/)
+  const firstSnapshot = mutation.run.indexOf('actual_snapshot=')
   const secondSnapshot = mutation.run.indexOf(
     'post_snapshot=',
     publishIndex,

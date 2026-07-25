@@ -9,7 +9,7 @@ on:
         required: true
 
 concurrency:
-  group: finalize-release-${{ inputs.tag }}
+  group: finalize-release
   cancel-in-progress: false
 
 permissions:
@@ -168,9 +168,33 @@ jobs:
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --assets-dir "$VALIDATION_ASSETS_DIR"
 
+      - name: Verify macOS workflow provenance
+        run: |
+          set -euo pipefail
+          attestation="$VALIDATION_ASSETS_DIR/catgo-macos-signing-${RELEASE_TAG}.json"
+          run_id=$(jq -er \
+            '.githubRunId |
+             select(type == "string" and test("^[1-9][0-9]*$"))' \
+            "$attestation")
+          run_json="$RUNNER_TEMP/macos-run.json"
+          jobs_json="$RUNNER_TEMP/macos-jobs.json"
+          gh api "repos/$REPOSITORY/actions/runs/$run_id" > "$run_json"
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+            > "$jobs_json"
+          node scripts/verify-macos-signing-run.mjs \
+            --attestation "$attestation" \
+            --run "$run_json" \
+            --jobs "$jobs_json" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --target-workflow \
+              "$TARGET_SOURCE/.github/workflows/tauri-build.yml"
+
       - name: Verify TestFlight workflow provenance
         run: |
           set -euo pipefail
+          node scripts/verify-trusted-ios-workflow.mjs \
+            --source-root "$TARGET_SOURCE"
           attestation="$VALIDATION_ASSETS_DIR/catgo-ios-testflight-${RELEASE_TAG}.json"
           run_id=$(jq -er '.githubRunId | select(type == "string" and test("^[1-9][0-9]*$"))' "$attestation")
           run_json="$RUNNER_TEMP/ios-run.json"
@@ -193,6 +217,8 @@ jobs:
     permissions:
       actions: write
       contents: read
+    outputs:
+      promotion_id: ${{ steps.promotion.outputs.promotion_id }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -201,16 +227,24 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}
     steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
       - name: Dispatch and verify Cloudflare release promotion
+        id: promotion
         run: |
           set -euo pipefail
           promotion_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
           promotion_title="R2 promote $RELEASE_TAG [$promotion_id]"
           gh workflow run r2-release-mirror.yml \
             --repo "$REPOSITORY" \
             --ref "$DEFAULT_BRANCH" \
             -f "tag=$RELEASE_TAG" \
-            -f "promote=true" \
+            -f "promote_root=true" \
             -f "expected_source_commit=$EXPECTED_SOURCE_COMMIT" \
             -f "expected_asset_snapshot=$EXPECTED_ASSET_SNAPSHOT" \
             -f "promotion_id=$promotion_id"
@@ -251,6 +285,7 @@ jobs:
              .headBranch == $branch' \
             "$promotion_result" > /dev/null
 
+          receipt=$(mktemp)
           manifest=$(mktemp)
           index_page=$(mktemp)
           promoted=false
@@ -270,9 +305,37 @@ jobs:
                  --header 'Cache-Control: no-cache' \
                  "https://dl.catgo-ucsd.org/index.html?promotion=$promotion_id" \
                  --output "$index_page" &&
-               grep -Fq "$RELEASE_TAG" "$index_page"; then
-              promoted=true
-              break
+               curl --fail --silent --show-error \
+                 --header 'Cache-Control: no-cache' \
+                 "https://dl.catgo-ucsd.org/promotion-receipts/$promotion_id.json?promotion=$promotion_id" \
+                 --output "$receipt" &&
+               grep -Fq "$RELEASE_TAG" "$index_page" &&
+               node scripts/verify-release-promotion-receipt.mjs \
+                 verify \
+                 --receipt "$receipt" \
+                 --tag "$RELEASE_TAG" \
+                 --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                 --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                 --promotion-id "$promotion_id" \
+                 --latest "$manifest" \
+                 --index "$index_page"; then
+              assets_available=true
+              while IFS= read -r asset; do
+                status=$(
+                  curl --head --silent --show-error \
+                    --output /dev/null \
+                    --write-out '%{http_code}' \
+                    "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$promotion_id"
+                )
+                if [ "$status" != "200" ]; then
+                  assets_available=false
+                  break
+                fi
+              done < <(jq -r '.requiredAssets[]' "$receipt")
+              if [ "$assets_available" = "true" ]; then
+                promoted=true
+                break
+              fi
             fi
             sleep 5
           done
@@ -286,12 +349,14 @@ jobs:
     needs: [validate, promote-cloudflare]
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: write
       contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
       EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      PROMOTION_ID: ${{ needs.promote-cloudflare.outputs.promotion_id }}
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}
     steps:
@@ -305,17 +370,152 @@ jobs:
         run: |
           set -Eeuo pipefail
           published=false
+          verify_cloudflare_promotion() {
+            receipt=$(mktemp)
+            manifest=$(mktemp)
+            index_page=$(mktemp)
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent --show-error \
+                   --header 'Cache-Control: no-cache' \
+                   "https://dl.catgo-ucsd.org/latest.json?promotion=$PROMOTION_ID" \
+                   --output "$manifest" &&
+                 curl --fail --silent --show-error \
+                   --header 'Cache-Control: no-cache' \
+                   "https://dl.catgo-ucsd.org/index.html?promotion=$PROMOTION_ID" \
+                   --output "$index_page" &&
+                 curl --fail --silent --show-error \
+                   --header 'Cache-Control: no-cache' \
+                   "https://dl.catgo-ucsd.org/promotion-receipts/$PROMOTION_ID.json?promotion=$PROMOTION_ID" \
+                   --output "$receipt" &&
+                 node scripts/verify-release-promotion-receipt.mjs \
+                   verify \
+                   --receipt "$receipt" \
+                   --tag "$RELEASE_TAG" \
+                   --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                   --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                   --promotion-id "$PROMOTION_ID" \
+                   --latest "$manifest" \
+                   --index "$index_page"; then
+                assets_available=true
+                while IFS= read -r asset; do
+                  status=$(
+                    curl --head --silent --show-error \
+                      --output /dev/null \
+                      --write-out '%{http_code}' \
+                      "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$PROMOTION_ID"
+                  )
+                  if [ "$status" != "200" ]; then
+                    assets_available=false
+                    break
+                  fi
+                done < <(jq -r '.requiredAssets[]' "$receipt")
+                if [ "$assets_available" = "true" ]; then
+                  rm -f "$receipt" "$manifest" "$index_page"
+                  return 0
+                fi
+              fi
+              sleep 5
+            done
+            rm -f "$receipt" "$manifest" "$index_page"
+            return 1
+          }
+          dispatch_cloudflare_rollback() {
+            rollback_title="R2 rollback $RELEASE_TAG [$PROMOTION_ID]"
+            gh workflow run r2-release-mirror.yml \
+              --repo "$REPOSITORY" \
+              --ref "$DEFAULT_BRANCH" \
+              -f "tag=$RELEASE_TAG" \
+              -f "rollback_root=true" \
+              -f "expected_source_commit=$EXPECTED_SOURCE_COMMIT" \
+              -f "expected_asset_snapshot=$EXPECTED_ASSET_SNAPSHOT" \
+              -f "promotion_id=$PROMOTION_ID" ||
+              return 1
+
+            rollback_run_id=
+            for attempt in $(seq 1 60); do
+              rollback_run_id=$(
+                gh run list \
+                  --repo "$REPOSITORY" \
+                  --workflow r2-release-mirror.yml \
+                  --event workflow_dispatch \
+                  --limit 100 \
+                  --json databaseId,displayTitle \
+                  --jq ".[] |
+                    select(.displayTitle == \"$rollback_title\") |
+                    .databaseId" |
+                  head -n 1
+              )
+              [ -n "$rollback_run_id" ] && break
+              sleep 2
+            done
+            [ -n "$rollback_run_id" ] || return 1
+            gh run watch "$rollback_run_id" \
+              --repo "$REPOSITORY" \
+              --exit-status \
+              --interval 15 ||
+              return 1
+            rollback_result=$(mktemp)
+            gh run view "$rollback_run_id" \
+              --repo "$REPOSITORY" \
+              --json status,conclusion,headBranch \
+              > "$rollback_result" ||
+              return 1
+            jq -e \
+              --arg branch "$DEFAULT_BRANCH" \
+              '.status == "completed" and
+               .conclusion == "success" and
+               .headBranch == $branch' \
+              "$rollback_result" > /dev/null ||
+              return 1
+
+            rollback_receipt=$(mktemp)
+            verified=false
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent --show-error \
+                   --header 'Cache-Control: no-cache' \
+                   "https://dl.catgo-ucsd.org/rollback-receipts/$PROMOTION_ID.json?rollback=$PROMOTION_ID" \
+                   --output "$rollback_receipt" &&
+                 jq -e \
+                   --arg promotionId "$PROMOTION_ID" \
+                   --arg releaseTag "$RELEASE_TAG" \
+                   --arg sourceCommit "$EXPECTED_SOURCE_COMMIT" \
+                   --arg assetSnapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                   '.schemaVersion == 1 and
+                    .promotionId == $promotionId and
+                    .releaseTag == $releaseTag and
+                    .sourceCommit == $sourceCommit and
+                    .assetSnapshot == $assetSnapshot and
+                    .status == "restored" and
+                    (.restoredRoot | type == "object")' \
+                   "$rollback_receipt" > /dev/null; then
+                verified=true
+                break
+              fi
+              sleep 5
+            done
+            [ "$verified" = "true" ]
+          }
           rollback() {
             status=$?
             trap - ERR
             set +e
+            compensation_failed=false
             if [ "$published" = "true" ]; then
               echo "::warning::Publication postflight failed; restoring draft state."
               if ! gh release edit "$RELEASE_TAG" \
                   --repo "$REPOSITORY" \
                   --draft=true; then
                 echo "::error::Failed to restore $RELEASE_TAG to draft."
+                compensation_failed=true
               fi
+            fi
+            echo "::warning::Restoring the previous Cloudflare root."
+            if ! dispatch_cloudflare_rollback; then
+              echo "::error::Failed to restore the previous Cloudflare root."
+              compensation_failed=true
+            fi
+            if [ "$compensation_failed" = "true" ]; then
+              echo "::error::Release compensation was incomplete."
             fi
             exit "$status"
           }
@@ -349,6 +549,8 @@ jobs:
           actual_snapshot=$(snapshot < "$release_json")
           [ "$actual_snapshot" = "$EXPECTED_ASSET_SNAPSHOT" ] ||
             fail "Draft assets changed after validation."
+          verify_cloudflare_promotion ||
+            fail "Cloudflare promotion failed critical-section preflight."
 
           gh release edit "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
@@ -369,4 +571,6 @@ jobs:
           post_source_commit=$(git rev-parse "$RELEASE_TAG^{commit}")
           [ "$post_source_commit" = "$EXPECTED_SOURCE_COMMIT" ] ||
             fail "Release tag moved during publication."
+          verify_cloudflare_promotion ||
+            fail "Cloudflare promotion failed critical-section postflight."
           trap - ERR

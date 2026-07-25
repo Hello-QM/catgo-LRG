@@ -117,10 +117,10 @@ test('R2 evaluates rights from the target release instead of the default branch'
   assert.ok(targetGate, 'R2 has an active release-rights verifier')
   assert.match(
     targetGate.run,
-    /git worktree add --detach "\$target_source" "\$tag\^\{commit\}"/,
+    /git worktree add --detach "\$target_rights_source" "\$rights_commit"/,
   )
   assert.match(
     targetGate.run,
-    /node scripts\/verify-release-rights\.mjs --root "\$target_source"/,
+    /rights_commit=\$\(git rev-parse "\$tag\^\{commit\}"\)[\s\S]*node scripts\/verify-release-rights\.mjs[\s\S]*--root "\$target_rights_source"/,
   )
 })

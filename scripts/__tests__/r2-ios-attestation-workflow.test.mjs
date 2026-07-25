@@ -18,7 +18,7 @@ test('blocks every R2 root publication until the exact TestFlight attestation pa
     'node scripts/verify-ios-testflight-attestation.mjs',
     validate,
   )
-  const sync = WORKFLOW.indexOf('- name: Sync to R2')
+  const sync = WORKFLOW.indexOf('- name: Sync versioned release to R2')
 
   assert.ok(validate >= 0)
   assert.ok(iosGate > validate, 'iOS attestation is checked in target validation')

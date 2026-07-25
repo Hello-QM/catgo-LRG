@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { load as loadYaml } from 'js-yaml'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WORKFLOW = readFileSync(
@@ -109,7 +110,6 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   const syncAssets = WORKFLOW.indexOf('aws s3 sync dist/')
   const uploadManifest = WORKFLOW.indexOf('aws s3 cp dist/latest.json')
   const uploadIndex = WORKFLOW.indexOf('aws s3 cp index.html')
-  const prune = WORKFLOW.indexOf('- name: Prune older app artifacts')
 
   assert.ok(syncAssets >= 0, 'release assets are uploaded')
   assert.match(
@@ -118,25 +118,15 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   )
   assert.ok(uploadIndex > syncAssets, 'index.html uploads after release assets')
   assert.ok(uploadManifest > uploadIndex, 'latest.json is the root commit marker')
-  assert.ok(prune > uploadManifest, 'pruning starts only after root metadata uploads')
   assert.doesNotMatch(WORKFLOW, /latest\.mirror\.json/)
 })
 
-test('pruning old app releases retains every version-coupled sidecar', () => {
-  const pruneStart = WORKFLOW.indexOf('- name: Prune older app artifacts')
-  const summaryStart = WORKFLOW.indexOf('- name: Summary')
-  assert.ok(pruneStart >= 0, 'old app artifact pruning step exists')
-  const pruneBlock = WORKFLOW.slice(pruneStart, summaryStart)
-
-  assert.match(
-    pruneBlock,
-    /aws s3 rm "s3:\/\/\$R2_BUCKET\/\$prefix" --recursive[\s\S]*--exclude ['"]catgo-server-\*['"]/,
-  )
+test('does not prune historical versions needed by rollback', () => {
+  assert.doesNotMatch(WORKFLOW, /Prune older app artifacts/)
   assert.doesNotMatch(
-    pruneBlock,
-    /aws s3 rm "s3:\/\/\$R2_BUCKET\/\$prefix" --recursive\s*$/,
+    WORKFLOW,
+    /aws s3 rm "s3:\/\/\$R2_BUCKET\/\$prefix" --recursive/,
   )
-  assert.match(pruneBlock, /retain|preserv/i)
 })
 
 test('keeps triggers but resolves only validated CatGo app releases', () => {
@@ -162,13 +152,16 @@ test('never interpolates event or output tags into secrets-bearing shell', () =>
 })
 
 test('manual old-tag backfills cannot replace public root metadata', () => {
-  const syncStart = WORKFLOW.indexOf('- name: Sync to R2')
-  const pruneStart = WORKFLOW.indexOf('- name: Prune older app artifacts')
-  const syncBlock = WORKFLOW.slice(syncStart, pruneStart)
-
-  assert.match(syncBlock, /latest_app_tag=/)
-  assert.match(
-    syncBlock,
-    /if \[ "\$PROMOTE_MODE" = "true" \] \|\| \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp index\.html[\s\S]*aws s3 cp dist\/latest\.json[\s\S]*fi/,
+  const parsed = loadYaml(WORKFLOW)
+  const sync = parsed.jobs.mirror.steps.find(
+    (step) => step.name === 'Sync versioned release to R2',
   )
+
+  assert.doesNotMatch(sync.run, /latest_app_tag=/)
+  assert.doesNotMatch(
+    sync.run,
+    /s3:\/\/\$R2_BUCKET\/(?:index\.html|latest\.json)/,
+  )
+  assert.match(WORKFLOW, /inputs\.promote_root/)
+  assert.doesNotMatch(WORKFLOW, /inputs\.promote(?![_A-Za-z0-9])/)
 })
