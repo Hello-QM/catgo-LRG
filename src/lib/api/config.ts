@@ -2,6 +2,8 @@
 // so each worktree automatically connects to its own backend port.
 // Override: set VITE_SERVER_URL env var or PORT env var.
 
+import { DOWNLOAD_HUB_URL } from '$lib/download-links'
+
 declare const __CATGO_SERVER_URL__: string
 declare const __CATGO_DESKTOP__: boolean
 declare const __CATGO_STATIC_ONLY__: boolean
@@ -54,7 +56,7 @@ if (STATIC_ONLY && typeof window !== `undefined`) {
         new Response(
           JSON.stringify({
             detail:
-              `This feature requires the CatGo desktop app. Visit github.com/Hello-QM/catgo-LRG to download.`,
+              `This feature requires the CatGo desktop app. Download it from ${DOWNLOAD_HUB_URL}`,
           }),
           {
             status: 503,
