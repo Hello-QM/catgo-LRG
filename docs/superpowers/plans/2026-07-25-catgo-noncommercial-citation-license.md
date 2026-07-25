@@ -210,6 +210,7 @@ rtk git commit -m "legal: adopt noncommercial citation license"
 - Modify: `scripts/__tests__/license-policy.test.mjs`
 - Modify: `package.json`
 - Modify: `extensions/rust-wasm/package.json`
+- Create: `extensions/rust-wasm/license`
 - Modify: `extensions/vscode/package.json`
 - Modify: `extensions/vscode/license`
 - Modify: `server/pyproject.toml`
@@ -264,6 +265,7 @@ test('first-party manifests resolve to the custom license', () => {
 test('package-local license copies are byte-identical', () => {
   const rootLicense = read('license')
   assert.equal(read('server/LICENSE'), rootLicense)
+  assert.equal(read('extensions/rust-wasm/license'), rootLicense)
   assert.equal(read('extensions/vscode/license'), rootLicense)
 })
 
@@ -287,9 +289,10 @@ AGPL values.
 
 - [ ] **Step 3: Update npm, Python, Rust, plugin, and VSIX metadata**
 
-Use `SEE LICENSE IN license` in the three npm manifests. Ensure the VS Code
-extension archive still contains `extensions/vscode/license`, copied
-byte-for-byte from the root.
+Use `SEE LICENSE IN license` in the three npm manifests. Copy the root license
+byte-for-byte to `extensions/rust-wasm/license` and add `"license"` to that
+package's `files` array. Ensure the VS Code extension archive still contains
+`extensions/vscode/license`, also copied byte-for-byte from the root.
 
 In `server/pyproject.toml`, use:
 
@@ -332,6 +335,7 @@ temporary directory if `/tmp/catgo-license-dist` already exists.
 
 ```bash
 rtk git add package.json extensions/rust-wasm/package.json \
+  extensions/rust-wasm/license \
   extensions/vscode/package.json extensions/vscode/license \
   server/pyproject.toml server/LICENSE \
   crates/catgo-graph/Cargo.toml extensions/catrender-wasm/Cargo.toml \
