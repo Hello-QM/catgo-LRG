@@ -2,7 +2,7 @@
 """Physics verification gates + verifiability layer for CatBot comp-chem outputs.
 
 Vendored (pure-stdlib) from the ai-agent verification-layer work. Two layers:
-  audit(result)              — 16 value gates over the silent-error taxonomy
+  audit(result)              — 17 value gates over the silent-error taxonomy
                                (A1 PAW / A2 range / A3 gas-thermo / B ZPE / C1-C3
                                convergence+exit / D1-D2 freq / E geometry / F3 MLIP
                                force / H k-grid / I field-prov / J label-prov).
@@ -184,16 +184,17 @@ def gate_residual_imag(n_imag, imag_max_cm=None):
               f"n_imag={n_imag}, max imag {imag_max_cm} cm^-1 vs tol {IMAG_TOL_CM}", "D3")
 
 
-# ---- G2 limiting-potential physical window (corpus-informed, same caveat as
-# D3: learned from the independent corpus — FeNi UL_OER=9.452 V from a
-# reference-mismatch artifact sailed through every per-step gate) -------------
-UL_RANGE_V = (-2.0, 3.5)  # V; thermodynamic limit + any plausible overpotential
+# ---- G2 limiting potential: NO value gate (see below) ----------------------
 
 
-def gate_ul_range(ul_v):
-    lo, hi = UL_RANGE_V
-    return _v("ul_range", lo <= ul_v <= hi,
-              f"U_L={ul_v:+.3f} V vs physical window [{lo},{hi}]", "G2")
+# RETIRED as a value gate (D-030). Measured on an information-isolated corpus, the
+# good and bad U_L populations OVERLAP: accepted results reach +6.550 V (strong-binder
+# regime, geometry verified) while a reference-mismatch artifact sits at +6.346 V. The
+# zero-false-alarm ceiling of ANY window is 2/4 catches; the deployed [-2.0,3.5] window
+# bought 2 catches at the price of every false alarm the suite had (6/79). Tuning it
+# would be fitting the test set. What separates the populations is not the magnitude but
+# which reaction, which reference state and which PCET convention produced it — so U_L
+# moves to the verifiability layer as the claim `limiting_potential`.
 
 
 # ---- E geometry parse sanity (min interatomic pair) ------------------------
@@ -257,7 +258,6 @@ _SPEC = [
     ("field_provenance",        "I",  ("pc_field_source",),                      lambda r: gate_field_provenance(r["pc_field_source"])),
     ("label_provenance",        "J",  ("netq_true", "netq_label"),               lambda r: gate_label_provenance(r["netq_true"], r["netq_label"])),
     ("residual_imag",           "D3", ("n_imag",),                               lambda r: gate_residual_imag(r["n_imag"], r.get("imag_max_cm"))),
-    ("ul_range",                "G2", ("ul_v",),                                 lambda r: gate_ul_range(r["ul_v"])),
 ]
 
 
@@ -346,6 +346,12 @@ PROVENANCE_SPEC = {
                      "why": "a stratification label must be traceable to the value actually fed to the calc (J)"},
     "converged_E":  {"all_of": [("opt_conv",)],
                      "why": "an energy is only usable if it comes from a converged geometry, not a mid-run frame (C2)"},
+    "limiting_potential":
+                    {"all_of": [("ul_reaction",), ("ul_reference",), ("ul_convention",)],
+                     "why": "U_L magnitude alone cannot separate a strong-binder result from a "
+                            "reference-mismatch artifact (their ranges overlap on the independent "
+                            "corpus: accepted +6.550 V vs artifact +6.346 V) — the reaction, the "
+                            "reference state and the PCET convention are what make it checkable (G2)"},
 }
 
 
