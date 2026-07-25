@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { RELEASE_TRUST_POLICY } from '../release-trust-policy.mjs'
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
 import {
   createTauriSigningFixture,
@@ -21,6 +22,10 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-mirrored-release.mjs')
+const FIXTURE_VERIFIER = resolve(
+  ROOT,
+  'scripts/__tests__/helpers/run-mirrored-release-verifier.mjs',
+)
 const PUBLIC_BASE_URL = 'https://dl.catgo-ucsd.org'
 const SIDECAR_ASSETS = [
   'catgo-server-linux-x64',
@@ -130,22 +135,41 @@ function fixture({
   }
 }
 
-function verify(options) {
+function verify(options, { productionPolicy = false } = {}) {
+  const args = productionPolicy
+    ? [
+        VERIFIER,
+        '--tag',
+        options.tag,
+        '--assets-dir',
+        options.assets,
+        '--source-root',
+        options.sourceRoot,
+      ]
+    : [
+        FIXTURE_VERIFIER,
+        options.tag,
+        options.assets,
+        options.sourceRoot,
+        options.publicBaseUrl,
+        'false',
+      ]
   return spawnSync(
     process.execPath,
-    [
-      VERIFIER,
-      '--tag',
-      options.tag,
-      '--assets-dir',
-      options.assets,
-      '--source-root',
-      options.sourceRoot,
-    ],
+    args,
     {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, R2_PUBLIC_BASE_URL: options.publicBaseUrl },
+      env: {
+        ...process.env,
+        R2_PUBLIC_BASE_URL: options.publicBaseUrl,
+        ...(productionPolicy
+          ? {}
+          : {
+              CATGO_TEST_APPROVED_TAURI_UPDATER_PUBKEY:
+                options.signer.updaterPubkey,
+            }),
+      },
     },
   )
 }
@@ -159,10 +183,31 @@ function withFixture(options, assertion) {
   }
 }
 
-test('accepts updater metadata whose version and Cloudflare asset paths match the tag', () => {
+test('accepts updater metadata signed by the trust-policy updater key', () => {
   withFixture({}, (result) => {
     assert.equal(result.status, 0, result.stderr || result.stdout)
   })
+})
+
+test('rejects a target-source key replacement even when it self-signs every updater', () => {
+  const current = fixture()
+  try {
+    const result = verify(current, { productionPolicy: true })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /updater public key.*approved.*trust policy/i)
+  } finally {
+    rmSync(current.root, { recursive: true, force: true })
+  }
+})
+
+test('pins the approved updater key to the default-branch Tauri config', () => {
+  const config = JSON.parse(
+    readFileSync(resolve(ROOT, 'src-tauri/tauri.conf.json'), 'utf8'),
+  )
+  assert.equal(
+    RELEASE_TRUST_POLICY.tauriUpdaterPubkey,
+    config.plugins.updater.pubkey,
+  )
 })
 
 test('rejects stale updater metadata version', () => {

@@ -13,11 +13,16 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { RELEASE_TRUST_POLICY } from '../release-trust-policy.mjs'
 import { requiredReleaseAssets } from '../release-asset-policy.mjs'
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
 import { createTauriSigningFixture } from './helpers/tauri-signing-fixture.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const FIXTURE_VERIFIER = resolve(
+  ROOT,
+  'scripts/__tests__/helpers/run-mirrored-release-verifier.mjs',
+)
 const SIDECAR_ASSETS = [
   'catgo-server-linux-x64',
   'catgo-server-darwin-arm64',
@@ -98,19 +103,32 @@ function addLegalArchive(parent, assets, sourceRoot, name = 'expected') {
 }
 
 function verify(tag, assets, sourceRoot) {
+  let approvedUpdaterPubkey = RELEASE_TRUST_POLICY.tauriUpdaterPubkey
+  const configPath = resolve(sourceRoot, 'src-tauri/tauri.conf.json')
+  try {
+    approvedUpdaterPubkey =
+      JSON.parse(readFileSync(configPath, 'utf8')).plugins.updater.pubkey
+  } catch {
+    // Historical rights checks execute before updater trust validation.
+  }
   return spawnSync(
     process.execPath,
     [
-      resolve(ROOT, 'scripts/verify-mirrored-release.mjs'),
-      '--tag',
+      FIXTURE_VERIFIER,
       tag,
-      '--assets-dir',
       assets,
-      '--source-root',
       sourceRoot,
-      '--json',
+      'https://dl.catgo-ucsd.org',
+      'true',
     ],
-    { cwd: ROOT, encoding: 'utf8' },
+    {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CATGO_TEST_APPROVED_TAURI_UPDATER_PUBKEY: approvedUpdaterPubkey,
+      },
+    },
   )
 }
 

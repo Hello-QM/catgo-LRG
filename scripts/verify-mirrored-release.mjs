@@ -27,6 +27,7 @@ import {
   requiredUpdaterPlatforms,
   verifyRequiredReleaseAssets,
 } from './release-asset-policy.mjs'
+import { RELEASE_TRUST_POLICY } from './release-trust-policy.mjs'
 import { syncLegalBundle } from './sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -183,7 +184,7 @@ function parseMinisignPublicKey(encoded) {
   }
 }
 
-function updaterPublicKey(sourceRoot) {
+function updaterPublicKey(sourceRoot, trustPolicy) {
   const configPath = resolve(sourceRoot, 'src-tauri/tauri.conf.json')
   if (!existsSync(configPath)) {
     throw new Error(
@@ -210,8 +211,20 @@ function updaterPublicKey(sourceRoot) {
       'Target release Tauri updater config has no plugins.updater.pubkey',
     )
   }
+  const approved = trustPolicy?.tauriUpdaterPubkey
+  if (typeof approved !== 'string' || approved.length === 0) {
+    throw new Error(
+      'Trusted release policy has no approved Tauri updater public key',
+    )
+  }
+  if (encoded !== approved) {
+    throw new Error(
+      'Target release Tauri updater public key does not match the approved ' +
+        'default-branch trust policy',
+    )
+  }
   try {
-    return parseMinisignPublicKey(encoded)
+    return parseMinisignPublicKey(approved)
   } catch (error) {
     throw new Error(
       `Target release Tauri updater public key is invalid: ${error.message}`,
@@ -446,7 +459,13 @@ async function verifyUpdaterUrls(
   }
 }
 
-async function verifyAppAssets(assetsDir, tag, baseUrl, sourceRoot) {
+async function verifyAppAssets(
+  assetsDir,
+  tag,
+  baseUrl,
+  sourceRoot,
+  trustPolicy,
+) {
   if (!existsSync(assetsDir) || !statSync(assetsDir).isDirectory()) {
     throw new Error(`Release assets directory does not exist: ${assetsDir}`)
   }
@@ -468,7 +487,7 @@ async function verifyAppAssets(assetsDir, tag, baseUrl, sourceRoot) {
   }
   const assets = readdirSync(assetsDir)
   const assetNames = new Set(assets)
-  const publicKey = updaterPublicKey(sourceRoot)
+  const publicKey = updaterPublicKey(sourceRoot, trustPolicy)
   await verifyUpdaterUrls(
     latest,
     tag,
@@ -613,19 +632,28 @@ function verifyLegalArchive(assetsDir, sourceRoot) {
   }
 }
 
-export async function verifyMirroredRelease({
-  tag,
-  assetsDir,
-  sourceRoot,
-  baseUrl = process.env.R2_PUBLIC_BASE_URL || DEFAULT_PUBLIC_BASE_URL,
-}) {
+export async function verifyMirroredRelease(
+  {
+    tag,
+    assetsDir,
+    sourceRoot,
+    baseUrl = process.env.R2_PUBLIC_BASE_URL || DEFAULT_PUBLIC_BASE_URL,
+  },
+  trustPolicy = RELEASE_TRUST_POLICY,
+) {
   if (!requiresNoncommercialBundle(tag)) {
     throw new Error(
       `Historical release redistribution is disabled for ${tag} until ` +
         `documented redistribution rights clearance is available`,
     )
   }
-  await verifyAppAssets(assetsDir, tag, baseUrl, sourceRoot)
+  await verifyAppAssets(
+    assetsDir,
+    tag,
+    baseUrl,
+    sourceRoot,
+    trustPolicy,
+  )
   await verifySidecarAssets(assetsDir)
   verifyLegalArchive(assetsDir, sourceRoot)
   return {
