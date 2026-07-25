@@ -80,7 +80,7 @@ const WORKFLOW_INVENTORY = {
     gate: {
       step: 'Verify release version',
       tagSource: /github\.ref_name/,
-      requireSource: /inputs\.release/,
+      requireSource: /RELEASE_VERSION_REQUIRE_TAG:.*refs\/tags/,
     },
   },
   'tauri-test-build.yml': {

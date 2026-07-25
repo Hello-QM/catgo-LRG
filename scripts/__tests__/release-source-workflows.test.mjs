@@ -22,8 +22,7 @@ const RELEASE_WORKFLOWS = [
       "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.ref }}",
     tag:
       "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}",
-    requireTag:
-      "${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}",
+    requireTag: "${{ startsWith(github.ref, 'refs/tags/') }}",
   },
   {
     file: 'android-build.yml',

@@ -9,7 +9,7 @@ import { load as loadYaml } from 'js-yaml'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WORKFLOW_PATH = resolve(ROOT, '.github/workflows/tauri-build.yml')
 const RELEASE_MACOS_CONDITION =
-  "runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)"
+  "runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')"
 const REQUIRED_SIGNING_SECRETS = [
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
@@ -19,21 +19,27 @@ const REQUIRED_SIGNING_SECRETS = [
   'APPLE_DEVELOPMENT_TEAM',
 ]
 
+function workflow() {
+  return loadYaml(readFileSync(WORKFLOW_PATH, 'utf8'))
+}
+
 function workflowSteps() {
-  return loadYaml(readFileSync(WORKFLOW_PATH, 'utf8')).jobs.build.steps
+  return workflow().jobs.build.steps
 }
 
 function stepNamed(steps, name) {
   return steps.find((step) => step.name === name)
 }
 
-test('smoke builds omit release inputs while publishers require exact tag source', () => {
+test('branch dispatch is smoke-only while tag push or dispatch publishes exact source', () => {
+  const current = workflow()
   const steps = workflowSteps()
   const sourceGate = stepNamed(steps, 'Verify release source')
   const eventIdentity = stepNamed(steps, 'Verify tag event source identity')
   const smoke = stepNamed(steps, 'Build Tauri app (no release)')
   const release = stepNamed(steps, 'Build and upload Tauri release')
 
+  assert.equal(current.on.workflow_dispatch?.inputs?.release, undefined)
   assert.ok(sourceGate)
   assert.equal(
     sourceGate.env.RELEASE_SOURCE_TAG,
@@ -41,7 +47,7 @@ test('smoke builds omit release inputs while publishers require exact tag source
   )
   assert.equal(
     sourceGate.env.RELEASE_SOURCE_REQUIRE_TAG,
-    "${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}",
+    "${{ startsWith(github.ref, 'refs/tags/') }}",
   )
   assert.ok(eventIdentity)
   assert.equal(eventIdentity.if, "startsWith(github.ref, 'refs/tags/')")
@@ -52,14 +58,14 @@ test('smoke builds omit release inputs while publishers require exact tag source
   assert.ok(smoke)
   assert.equal(
     smoke.if,
-    "!startsWith(github.ref, 'refs/tags/') && !inputs.release",
+    "!startsWith(github.ref, 'refs/tags/')",
   )
   assert.deepEqual(Object.keys(smoke.with).sort(), ['args'])
 
   assert.ok(release)
   assert.equal(
     release.if,
-    "startsWith(github.ref, 'refs/tags/') || inputs.release",
+    "startsWith(github.ref, 'refs/tags/')",
   )
   assert.equal(release.with.tagName, '${{ github.ref_name }}')
   assert.equal(release.with.releaseDraft, true)
@@ -166,4 +172,26 @@ test('uploads a hash-bound macOS signing attestation only after remote artifacts
     upload.run,
     /gh release upload "\$RELEASE_TAG" "\$ATTESTATION_PATH"[\s\S]*--clobber/,
   )
+})
+
+test('verifies the app inside the remote updater archive before attestation', () => {
+  const verify = stepNamed(
+    workflowSteps(),
+    'Verify macOS release signatures',
+  )
+  const downloadIndex = verify.run.indexOf('gh release download')
+  const extractIndex = verify.run.indexOf('tar -xzf')
+  const uniqueAppIndex = verify.run.indexOf(
+    'Expected exactly one app inside updater archive',
+  )
+  const signatureIndex = verify.run.indexOf(
+    'verify_app_signature "${updater_apps[0]}"',
+  )
+  const attestationIndex = verify.run.indexOf('attestation=')
+
+  assert.ok(downloadIndex >= 0)
+  assert.ok(extractIndex > downloadIndex)
+  assert.ok(uniqueAppIndex > extractIndex)
+  assert.ok(signatureIndex > uniqueAppIndex)
+  assert.ok(attestationIndex > signatureIndex)
 })

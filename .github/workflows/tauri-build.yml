@@ -5,12 +5,6 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      release:
-        description: 'Create a release'
-        required: false
-        default: false
-        type: boolean
 
 env:
   CARGO_NET_RETRY: "10"
@@ -82,13 +76,13 @@ jobs:
       - name: Verify release version
         env:
           RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: node scripts/verify-release-version.mjs
 
       - name: Verify release source
         env:
           RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: node scripts/verify-release-source.mjs
 
       - name: Verify tag event source identity
@@ -104,7 +98,7 @@ jobs:
           fi
 
       - name: Preflight macOS release signing
-        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -271,7 +265,7 @@ jobs:
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Build Tauri app (no release)
-        if: "!startsWith(github.ref, 'refs/tags/') && !inputs.release"
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: tauri-apps/tauri-action@v0.6
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
@@ -279,7 +273,7 @@ jobs:
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
       - name: Build and upload Tauri release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -370,7 +364,7 @@ jobs:
 
       - name: Verify macOS release signatures
         id: macos_signing
-        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -453,6 +447,16 @@ jobs:
             --pattern "$dmg_name" \
             --pattern "$updater_name"
 
+          updater_extract=$(mktemp -d "$RUNNER_TEMP/catgo-macos-updater.XXXXXX")
+          tar -xzf "$release_assets/$updater_name" -C "$updater_extract"
+          updater_apps=("$updater_extract"/*.app)
+          if (( ${#updater_apps[@]} != 1 )); then
+            printf 'Expected exactly one app inside updater archive %s, found %s\n' \
+              "$updater_name" "${#updater_apps[@]}" >&2
+            exit 1
+          fi
+          verify_app_signature "${updater_apps[0]}"
+
           local_dmg_sha=$(shasum -a 256 "${dmgs[0]}" | awk '{print $1}')
           remote_dmg_sha=$(shasum -a 256 "$release_assets/$dmg_name" | awk '{print $1}')
           if [ "$local_dmg_sha" != "$remote_dmg_sha" ]; then
@@ -493,7 +497,7 @@ jobs:
           echo "attestation=$attestation" >> "$GITHUB_OUTPUT"
 
       - name: Upload macOS signing attestation
-        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -512,7 +516,7 @@ jobs:
         run: bash scripts/ensure-v1.4.6-release-body.sh "$GITHUB_REF_NAME"
 
       - name: Upload canonical legal bundle to release
-        if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
