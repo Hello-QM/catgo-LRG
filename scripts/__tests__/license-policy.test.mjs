@@ -83,6 +83,7 @@ const workflowInventory = {
     '.github/workflows/build-stt-accel.yml',
     '.github/workflows/build-vscode-sidecars.yml',
     '.github/workflows/docker-publish.yml',
+    '.github/workflows/finalize-release.yml',
     '.github/workflows/hpc-bundle.yml',
     '.github/workflows/ios-build.yml',
     '.github/workflows/r2-release-mirror.yml',
