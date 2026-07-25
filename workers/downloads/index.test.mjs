@@ -134,6 +134,68 @@ test('forwards byte ranges to R2 and emits resumable response metadata', async (
   )
 })
 
+test('uses R2 returned range metadata when the object shrinks after HEAD', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult: createObject({
+      body: new ReadableStream(),
+      size: 95,
+      range: { offset: 90, length: 5 },
+    }),
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: { Range: 'bytes=90-' },
+  })
+
+  assert.equal(response.status, 206)
+  assert.equal(response.headers.get('content-range'), 'bytes 90-94/95')
+  assert.equal(response.headers.get('content-length'), '5')
+})
+
+test('rejects partial bodies with missing or invalid R2 range metadata', async () => {
+  for (const range of [undefined, { offset: 90, length: 0 }]) {
+    let cancellations = 0
+    const body = new ReadableStream({
+      cancel() {
+        cancellations += 1
+      },
+    })
+    const bucket = createBucket({
+      headResult: createObject({ size: 100 }),
+      getResult: createObject({ body, size: 95, range }),
+    })
+
+    const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+      headers: { Range: 'bytes=90-' },
+    })
+
+    assert.deepEqual(bucket.getCalls[0].options.range, {
+      offset: 90,
+      length: 10,
+    })
+    assert.equal(response.status, 502)
+    assert.equal(response.headers.get('content-range'), null)
+    assert.equal(cancellations, 1)
+  }
+})
+
+test('returns a complete GET response when R2 reports a full-object range', async () => {
+  const bucket = createBucket({
+    getResult: createObject({
+      body: new ReadableStream(),
+      size: 100,
+      range: { offset: 0, length: 100 },
+    }),
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe')
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-range'), null)
+  assert.equal(response.headers.get('content-length'), '100')
+})
+
 test('returns an empty 304 when an R2 conditional GET has no body', async () => {
   const bucket = createBucket({
     getResult: createObject({ body: undefined, key: 'latest.json' }),
