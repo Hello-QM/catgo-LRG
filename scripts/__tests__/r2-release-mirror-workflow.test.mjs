@@ -32,13 +32,38 @@ test('refreshes the mirror after every CatGo release-asset workflow', () => {
 })
 
 test('checks out trusted source and generates the page with the Node CLI', () => {
-  assert.match(WORKFLOW, /uses: actions\/checkout@v4/)
+  assert.match(
+    WORKFLOW,
+    /uses: actions\/checkout@v4[\s\S]*ref:\s*\$\{\{ github\.event\.repository\.default_branch \}\}[\s\S]*fetch-depth:\s*0/,
+  )
   assert.match(
     WORKFLOW,
     /node scripts\/generate-download-page\.mjs[\s\S]*--assets-dir dist[\s\S]*--tag "\$tag"[\s\S]*--base-url "\$R2_PUBLIC_BASE_URL"[\s\S]*--output index\.html/,
   )
   assert.doesNotMatch(WORKFLOW, /echo '<!doctype html>/)
   assert.doesNotMatch(WORKFLOW, /github\.com\/\$\{\{ github\.repository \}\}\/releases/)
+})
+
+test('resolves the release tag before validating target-tag legal material', () => {
+  const resolveTag = WORKFLOW.indexOf('- name: Resolve tag')
+  const validateTarget = WORKFLOW.indexOf(
+    '- name: Validate release assets against target tag',
+  )
+  assert.ok(resolveTag >= 0, 'tag is resolved')
+  assert.ok(validateTarget > resolveTag, 'target validation follows tag resolution')
+
+  const validationBlock = WORKFLOW.slice(
+    validateTarget,
+    WORKFLOW.indexOf('- name: Rewrite and validate latest.json URLs'),
+  )
+  assert.match(validationBlock, /refs\/tags\/\$tag:refs\/tags\/\$tag/)
+  assert.match(validationBlock, /git archive "\$tag"/)
+  assert.match(
+    validationBlock,
+    /node scripts\/verify-mirrored-release\.mjs[\s\S]*--tag "\$tag"[\s\S]*--source-root "\$target_source"/,
+  )
+  assert.doesNotMatch(validationBlock, /node scripts\/sync-legal-bundle\.mjs/)
+  assert.doesNotMatch(validationBlock, /diff -qr build\/legal-bundle/)
 })
 
 test('rewrites and validates every updater URL before publishing metadata', () => {

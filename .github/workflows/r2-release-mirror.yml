@@ -85,6 +85,11 @@ jobs:
 
       - uses: actions/checkout@v4
         if: steps.creds.outputs.configured == 'true'
+        with:
+          # Keep the verifier trusted: execute scripts from the default branch,
+          # then read legal material from the resolved release tag separately.
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
 
       - name: Resolve tag
         id: tag
@@ -164,15 +169,21 @@ jobs:
             --repo "$REPOSITORY" --dir dist
           ls -lh dist
 
-      - name: Verify mirrored legal bundle
+      - name: Validate release assets against target tag
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          test -f dist/catgo-legal-bundle.tar.gz
-          node scripts/sync-legal-bundle.mjs
-          extracted=$(mktemp -d)
-          tar xzf dist/catgo-legal-bundle.tar.gz -C "$extracted"
-          diff -qr build/legal-bundle "$extracted"
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          target_source=$(mktemp -d)
+          trap 'rm -rf "$target_source"' EXIT
+          git archive "$tag" | tar -x -C "$target_source"
+          node scripts/verify-mirrored-release.mjs \
+            --tag "$tag" \
+            --assets-dir dist \
+            --source-root "$target_source"
 
       - name: Rewrite and validate latest.json URLs
         # latest.json is the Tauri updater manifest; its asset URLs point at

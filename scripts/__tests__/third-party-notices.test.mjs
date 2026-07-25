@@ -95,12 +95,26 @@ test('the bundled MediaPipe model retains its verified model-card license mappin
   assert.match(text, /License: Apache-2\.0/)
   assert.match(
     text,
-    /\[Apache-2\.0 full text\]\(third_party\/licenses\/uff-relax-Apache-2\.0\.txt\)/,
+    /\[Apache-2\.0 full text\]\(third_party\/licenses\/Apache-2\.0\.txt\)/,
   )
 
-  const apache = read('third_party/licenses/uff-relax-Apache-2.0.txt')
+  const apachePath = resolve(ROOT, 'third_party/licenses/Apache-2.0.txt')
+  const apacheBytes = readFileSync(apachePath)
+  assert.equal(apacheBytes.byteLength, 11_358)
+  assert.equal(
+    createHash('sha256').update(apacheBytes).digest('hex'),
+    'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30',
+  )
+  const apache = apacheBytes.toString('utf8')
   assert.match(apache, /Apache License\s+Version 2\.0, January 2004/)
   assert.match(apache, /END OF TERMS AND CONDITIONS/)
+  assert.match(apache, /APPENDIX: How to apply the Apache License to your work/)
+
+  assert.match(
+    text,
+    /uff-relax:[\s\S]*third_party\/licenses\/uff-relax-Apache-2\.0\.txt/,
+    'the component-specific UFF license record remains unchanged',
+  )
 })
 
 test('the unlicensed KMC source is absent from reproducible source release surfaces', () => {

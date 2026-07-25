@@ -173,6 +173,21 @@ Material CatGo changes include WebGL2 GLSL3 syntax, Three.js uniforms,
 half-bond replica decoding, static atom-color lookup, analytic coverage,
 sparse ghost halves, and GPU picking.
 
+### whisper.cpp optional STT accelerator
+
+- Source: https://github.com/ggml-org/whisper.cpp
+- Recorded upstream revision:
+  `080bbbe85230f624f0b52127f1ae1218247989f9`
+- License: MIT
+- Scope: optional `whisper-cli` accelerator release archives
+- Preserved notice and full text:
+  [`third_party/licenses/whisper.cpp-MIT.txt`](third_party/licenses/whisper.cpp-MIT.txt)
+
+Every accelerator archive also retains the upstream file byte-for-byte at
+`whisper.cpp/LICENSE` and records the repository and exact revision in
+`whisper.cpp/SOURCE.json`. The CatGo noncommercial terms do not replace the
+MIT terms for whisper.cpp.
+
 ### Vendored PORMAKE
 
 - Source: https://github.com/Sangwon91/PORMAKE
@@ -225,7 +240,7 @@ Source Code Pro. Geist also retains its source-specific text at
 - Official model card linked by that guide:
   https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20%28Lite_Full%29%20with%20Fairness%20Oct%202021.pdf
 - License: Apache-2.0
-- [Apache-2.0 full text](third_party/licenses/uff-relax-Apache-2.0.txt)
+- [Apache-2.0 full text](third_party/licenses/Apache-2.0.txt)
 - Audited SHA-256:
   `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1`
 

@@ -13,12 +13,7 @@ export default defineConfig({
   cleanUrls: true,
 
   // Localhost links in install/dev docs are intentional, not navigable.
-  // VitePress does not recognize extensionless static license files as link
-  // targets, although public/legal/... is copied byte-for-byte and served.
-  ignoreDeadLinks: [
-    /^https?:\/\/localhost(:\d+)?/,
-    /^\.\/server\/catgo\/vendor\/pormake\/LICENSE$/,
-  ],
+  ignoreDeadLinks: [/^https?:\/\/localhost(:\d+)?/],
 
   // Locales — English at root, 简体中文 under /zh/
   locales: {
