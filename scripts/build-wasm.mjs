@@ -66,6 +66,15 @@ const SKIP_THREADED = process.env.CATGO_WASM_SKIP_THREADED === '1'
 // already); the floating 'nightly' default is for local dev convenience only.
 const NIGHTLY = process.env.CATGO_WASM_NIGHTLY_TOOLCHAIN || 'nightly'
 const WIN = process.platform === 'win32'
+const WASM_PACK_MAX_ATTEMPTS = Number.parseInt(
+  process.env.CATGO_WASM_MAX_ATTEMPTS || '3',
+  10,
+)
+const WASM_PACK_RETRY_DELAY_MS = Number.parseInt(
+  process.env.CATGO_WASM_RETRY_DELAY_MS || '2000',
+  10,
+)
+const RETRY_WAIT = new Int32Array(new SharedArrayBuffer(4))
 
 const FERROX_DIR = join(ROOT, 'extensions', 'rust')
 const FERROX_PKG = (name) => join(ROOT, 'extensions', 'rust-wasm', name)
@@ -252,17 +261,43 @@ if (pending.some((t) => t.threaded)) {
   }
 }
 
+function buildTarget(target) {
+  let status = 1
+  for (let attempt = 1; attempt <= WASM_PACK_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      console.error(
+        `[build-wasm] retrying ${target.name} ` +
+          `(attempt ${attempt}/${WASM_PACK_MAX_ATTEMPTS})`,
+      )
+    }
+    const result = spawnSync(
+      'wasm-pack',
+      ['build', '--target', 'web', '--out-dir', target.outDir, ...target.extra],
+      {
+        cwd: target.cwd,
+        stdio: 'inherit',
+        shell: WIN,
+        env: target.env,
+      },
+    )
+    if (result.status === 0) return 0
+    status = result.status || 1
+    if (attempt < WASM_PACK_MAX_ATTEMPTS && WASM_PACK_RETRY_DELAY_MS > 0) {
+      Atomics.wait(RETRY_WAIT, 0, 0, WASM_PACK_RETRY_DELAY_MS)
+    }
+  }
+  return status
+}
+
 for (const t of pending) {
   console.log(`[build-wasm] building ${t.name} …`)
-  const r = spawnSync('wasm-pack', ['build', '--target', 'web', '--out-dir', t.outDir, ...t.extra], {
-    cwd: t.cwd,
-    stdio: 'inherit',
-    shell: WIN,
-    env: t.env,
-  })
-  if (r.status !== 0) {
-    console.error(`[build-wasm] FAILED: ${t.name} (wasm-pack exited ${r.status})`)
-    process.exit(r.status || 1)
+  const status = buildTarget(t)
+  if (status !== 0) {
+    console.error(
+      `[build-wasm] FAILED: ${t.name} after ${WASM_PACK_MAX_ATTEMPTS} attempts ` +
+        `(wasm-pack exited ${status})`,
+    )
+    process.exit(status)
   }
   if (t.post) t.post()
 }
