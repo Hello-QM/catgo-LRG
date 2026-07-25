@@ -158,6 +158,7 @@ test('active first-party surfaces contain no stale AGPL grant', () => {
     'extensions/rust-wasm/package.json',
     'extensions/vscode/license',
     'extensions/vscode/package.json',
+    'extensions/vscode/readme.md',
     'crates/catgo-graph/Cargo.toml',
     'extensions/catrender-wasm/Cargo.toml',
     'extensions/chgdiff-wasm/Cargo.toml',
@@ -177,4 +178,17 @@ test('active first-party surfaces contain no stale AGPL grant', () => {
   for (const file of active) {
     assert.doesNotMatch(read(file), /AGPL|GNU AFFERO/i, file)
   }
+  const vscodeReadme = read('extensions/vscode/readme.md')
+  assert.match(vscodeReadme, /CatGo Noncommercial Research License 1\.0/)
+  assert.match(
+    vscodeReadme,
+    new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  )
+  assert.match(vscodeReadme, /must also cite CatGo/i)
+  assert.match(vscodeReadme, new RegExp(DOI.replaceAll('.', '\\.')))
+  assert.match(
+    vscodeReadme,
+    /Commercial use requires\s+prior written permission/i,
+  )
+  assert.match(vscodeReadme, /gul026@ucsd\.edu/)
 })

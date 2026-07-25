@@ -189,7 +189,18 @@ If you encounter any issues with CatGo, you can use the built-in bug reporting c
 
 ## 📄 License
 
-This extension is licensed under the [GNU AGPL-3.0](./license), matching the [catgo-LRG repository](https://github.com/Hello-QM/catgo-LRG).
+This extension is distributed under the
+[CatGo Noncommercial Research License 1.0](./license). Commercial use requires
+prior written permission; contact [gul026@ucsd.edu](mailto:gul026@ucsd.edu).
+
+Every public output resulting from CatGo use must visibly include:
+
+> This work used CatGo (https://catgo-ucsd.org).
+
+Every such public output must also cite CatGo using the preferred ChemRxiv DOI
+[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1).
+See the repository's [CITATION.cff](../../CITATION.cff) for the canonical
+citation metadata.
 
 ## 🔗 Related Projects
 
