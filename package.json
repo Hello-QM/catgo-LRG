@@ -219,7 +219,8 @@
   "files": [
     "dist",
     "CITATION.cff",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "third_party/licenses"
   ],
   "pnpm": {
     "overrides": {

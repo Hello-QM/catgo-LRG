@@ -15,6 +15,31 @@ the repository.
 
 ## Confirmed notices
 
+### Forblaze Project UFF and VSEPR crates
+
+- Components and source:
+  - `extensions/uff-relax/`:
+    https://github.com/ForblazeProject/uff-relax.git
+  - `extensions/vsepr-rs/`:
+    https://github.com/ForblazeProject/vsepr-rs.git
+- Author recorded by both component manifests: Forblaze Project
+- License recorded by both component manifests: MIT OR Apache-2.0, at the
+  recipient's option
+- Complete retained license texts:
+  - uff-relax:
+    [MIT](third_party/licenses/uff-relax-MIT.txt) or
+    [Apache-2.0](third_party/licenses/uff-relax-Apache-2.0.txt)
+  - vsepr-rs:
+    [MIT](third_party/licenses/vsepr-rs-MIT.txt) or
+    [Apache-2.0](third_party/licenses/vsepr-rs-Apache-2.0.txt)
+
+CatGo commit `dcb8a503245602dae82a4157de6a69ab1d795fe1` introduced both
+component directories with their manifests, source URLs, authors, and complete
+MIT and Apache-2.0 texts. Later CatGo history modifies each component's
+`src/optimizer.rs`, so this notice preserves the recorded license choice for
+the imported/upstream portions without claiming that every current line is
+third-party-authored.
+
 ### MatterViz / historical Janosh Riebesell snapshot
 
 - Source: https://github.com/janosh/matterviz
@@ -156,7 +181,7 @@ sparse ghost halves, and GPU picking.
 - License: MIT
 - Scope: `server/catgo/vendor/pormake/`
 - Retained upstream text:
-  [`server/catgo/vendor/pormake/LICENSE`](server/catgo/vendor/pormake/LICENSE)
+  [`third_party/licenses/PORMAKE-MIT.txt`](third_party/licenses/PORMAKE-MIT.txt)
 
 CatGo commit `5e7411ef1da98fd0139cf72e586b43f5451b94d9` records that
 the tree was copied from PORMAKE, `experimental/` was omitted, and

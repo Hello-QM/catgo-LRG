@@ -169,3 +169,35 @@ test('marks generated chgdiff and catrender npm manifests private', (t) => {
     assert.equal(manifest.license, 'LicenseRef-CatGo-Noncommercial-1.0', target)
   }
 })
+
+test('hardens Ferrox scalar, legacy, and threaded generated npm manifests', (t) => {
+  const generated = [
+    resolve(ROOT, 'extensions/rust-wasm/pkg-scalar'),
+    resolve(ROOT, 'extensions/rust-wasm/pkg'),
+    resolve(ROOT, 'extensions/rust-wasm/pkg-threaded'),
+  ]
+  t.after(() => {
+    for (const dir of generated) rmSync(dir, { recursive: true, force: true })
+  })
+  for (const dir of generated) rmSync(dir, { recursive: true, force: true })
+
+  const fake = fakeWasmPack(t)
+  const result = runBuildWasm(['--only=ferrox'], {
+    ...fake.env,
+    FAKE_WASM_PACK_WRITE_PACKAGE: '1',
+  })
+  assert.equal(result.status, 0)
+
+  const manifests = generated.map((dir) =>
+    JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'))
+  )
+  for (const [index, manifest] of manifests.entries()) {
+    assert.equal(manifest.private, true, generated[index])
+    assert.equal(
+      manifest.license,
+      'LicenseRef-CatGo-Noncommercial-1.0',
+      generated[index],
+    )
+  }
+  assert.deepEqual(manifests[1], manifests[0], 'pkg remains the scalar compatibility copy')
+})

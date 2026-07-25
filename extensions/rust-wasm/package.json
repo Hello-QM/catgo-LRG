@@ -35,6 +35,7 @@
     "license",
     "CITATION.cff",
     "THIRD_PARTY_NOTICES.md",
+    "third_party/licenses",
     "README.md"
   ],
   "scripts": {

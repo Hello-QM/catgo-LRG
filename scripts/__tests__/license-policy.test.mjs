@@ -10,6 +10,20 @@ const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
 const CUSTOM_LICENSE = 'LicenseRef-CatGo-Noncommercial-1.0'
+const FORBLAZE_IMPORT_COMMIT = 'dcb8a503245602dae82a4157de6a69ab1d795fe1'
+
+const noticeLinkTargets = (path) =>
+  [
+    ...new Set(
+      [...read(path).matchAll(/\]\(([^):\s]+)\)/g)]
+        .map((match) => match[1]),
+    ),
+  ].toSorted()
+
+const thirdPartyLicenseTargets = (path) =>
+  noticeLinkTargets(path).filter((target) =>
+    /^third_party\/licenses\/[^/]+\.txt$/.test(target)
+  )
 
 const gitFiles = () =>
   execFileSync('git', ['ls-files', '-z'], {
@@ -38,8 +52,10 @@ const manifestInventory = {
     'tools/cube-processor/Cargo.toml',
     'workers/cors-relay/package.json',
   ],
-  separatelyLicensedThirdParty: [
+  separatelyLicensedFirstParty: [
     'extensions/rust/pyproject.toml',
+  ],
+  separatelyLicensedThirdParty: [
     'extensions/uff-relax/Cargo.toml',
     'extensions/vsepr-rs/Cargo.toml',
   ],
@@ -185,11 +201,15 @@ test('internal first-party manifests cannot be accidentally published', () => {
   }
 })
 
-test('separately licensed manifests retain semantic license fields', () => {
-  assert.match(
-    section('extensions/rust/pyproject.toml', 'project'),
-    /^license = \{ text = "MIT" \}$/m,
-  )
+test('separately licensed first-party metadata retains its MIT provenance', () => {
+  const project = section('extensions/rust/pyproject.toml', 'project')
+  assert.match(project, /^license = \{ text = "MIT" \}$/m)
+  assert.match(project, /name = "LRG"/)
+  assert.match(project, /email = "gul026@ucsd\.edu"/)
+  assert.match(read('extensions/rust/pyproject.toml'), /Hello-QM/)
+})
+
+test('separately licensed third-party manifests retain semantic license fields', () => {
   for (const file of [
     'extensions/uff-relax/Cargo.toml',
     'extensions/vsepr-rs/Cargo.toml',
@@ -296,15 +316,94 @@ test('package-local redistribution bundles are byte-identical and acknowledged',
   ))
 })
 
+test('Forblaze UFF and VSEPR notices retain factual source and license evidence', () => {
+  const notice = read('THIRD_PARTY_NOTICES.md')
+  for (const [component, source] of [
+    ['uff-relax', 'https://github.com/ForblazeProject/uff-relax.git'],
+    ['vsepr-rs', 'https://github.com/ForblazeProject/vsepr-rs.git'],
+  ]) {
+    assert.match(notice, new RegExp(source.replace(/[.]/g, '\\.')), component)
+    assert.match(notice, new RegExp(component), component)
+  }
+  assert.match(notice, /Forblaze Project/)
+  assert.match(notice, /MIT OR Apache-2\.0/)
+  assert.match(notice, new RegExp(FORBLAZE_IMPORT_COMMIT))
+
+  for (const [target, source] of [
+    ['third_party/licenses/uff-relax-MIT.txt', 'extensions/uff-relax/LICENSE-MIT'],
+    [
+      'third_party/licenses/uff-relax-Apache-2.0.txt',
+      'extensions/uff-relax/LICENSE-APACHE',
+    ],
+    ['third_party/licenses/vsepr-rs-MIT.txt', 'extensions/vsepr-rs/LICENSE-MIT'],
+    [
+      'third_party/licenses/vsepr-rs-Apache-2.0.txt',
+      'extensions/vsepr-rs/LICENSE-APACHE',
+    ],
+  ]) {
+    assert.ok(thirdPartyLicenseTargets('THIRD_PARTY_NOTICES.md').includes(target), target)
+    assert.equal(read(target), read(source), target)
+  }
+})
+
+test('every package-local notice resolves its complete byte-identical license bundle', () => {
+  const canonicalTargets = thirdPartyLicenseTargets('THIRD_PARTY_NOTICES.md')
+  assert.ok(canonicalTargets.length > 0)
+  for (const target of canonicalTargets) {
+    assert.ok(existsSync(resolve(ROOT, target)), target)
+  }
+
+  for (const directory of [
+    'extensions/rust-wasm',
+    'extensions/vscode',
+    'server',
+  ]) {
+    const localNotice = `${directory}/THIRD_PARTY_NOTICES.md`
+    const localTargets = thirdPartyLicenseTargets(localNotice)
+    assert.deepEqual(localTargets, canonicalTargets, localNotice)
+    for (const target of localTargets) {
+      const local = `${directory}/${target}`
+      assert.ok(existsSync(resolve(ROOT, local)), local)
+      assert.equal(read(local), read(target), local)
+    }
+  }
+
+  for (const [directory, notice] of [
+    ['.', 'THIRD_PARTY_NOTICES.md'],
+    ['extensions/rust-wasm', 'extensions/rust-wasm/THIRD_PARTY_NOTICES.md'],
+    ['extensions/vscode', 'extensions/vscode/THIRD_PARTY_NOTICES.md'],
+    ['server', 'server/THIRD_PARTY_NOTICES.md'],
+  ]) {
+    for (const target of noticeLinkTargets(notice)) {
+      assert.ok(
+        existsSync(resolve(ROOT, directory, target)),
+        `${notice}: ${target}`,
+      )
+    }
+  }
+})
+
 test('published npm archive listings contain the redistribution bundle', () => {
   for (const [directory, required] of [
     [
       '.',
-      ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md', 'readme.md'],
+      [
+        'license',
+        'CITATION.cff',
+        'THIRD_PARTY_NOTICES.md',
+        'readme.md',
+        ...thirdPartyLicenseTargets('THIRD_PARTY_NOTICES.md'),
+      ],
     ],
     [
       'extensions/rust-wasm',
-      ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md', 'README.md'],
+      [
+        'license',
+        'CITATION.cff',
+        'THIRD_PARTY_NOTICES.md',
+        'README.md',
+        ...thirdPartyLicenseTargets('extensions/rust-wasm/THIRD_PARTY_NOTICES.md'),
+      ],
     ],
   ]) {
     const output = execFileSync(
@@ -329,6 +428,10 @@ test('Python wheel configuration force-includes the redistribution bundle', () =
     wheel,
     /^"THIRD_PARTY_NOTICES\.md" = "catgo\/THIRD_PARTY_NOTICES\.md"$/m,
   )
+  assert.match(
+    wheel,
+    /^"third_party\/licenses" = "catgo\/third_party\/licenses"$/m,
+  )
 })
 
 test('example plugins declare the CatGo custom license', () => {
@@ -347,7 +450,6 @@ test('example plugins declare the CatGo custom license', () => {
 test('separately licensed crates retain their own terms', () => {
   assert.match(read('extensions/uff-relax/Cargo.toml'), /MIT OR Apache-2\.0/)
   assert.match(read('extensions/vsepr-rs/Cargo.toml'), /MIT OR Apache-2\.0/)
-  assert.match(read('extensions/rust/pyproject.toml'), /MIT/)
 })
 
 const userDocs = ['readme.md', 'readme.zh.md', 'server/README-pypi.md']

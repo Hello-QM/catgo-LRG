@@ -87,3 +87,4 @@ artifacts = [
 "README-pypi.md" = "catgo/README.md"
 "CITATION.cff" = "catgo/CITATION.cff"
 "THIRD_PARTY_NOTICES.md" = "catgo/THIRD_PARTY_NOTICES.md"
+"third_party/licenses" = "catgo/third_party/licenses"
