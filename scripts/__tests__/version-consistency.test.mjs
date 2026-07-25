@@ -7,7 +7,6 @@ import test from 'node:test'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const source = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const APP_VERSION = '1.4.6'
-const PYTHON_VERSION = `${APP_VERSION}.post1`
 
 function tomlSectionVersion(path, section) {
   const content = source(path)
@@ -52,7 +51,7 @@ test('all CatGo application version surfaces target v1.4.6', () => {
   assert.equal(cargoLockMatch[1], APP_VERSION)
   assert.equal(
     tomlSectionVersion('server/pyproject.toml', 'project'),
-    PYTHON_VERSION,
+    APP_VERSION,
   )
 })
 
@@ -88,14 +87,7 @@ test('the desktop draft release notes describe v1.4.6', () => {
   assert.match(workflow, /Cloudflare-only app acquisition and updates/)
 })
 
-test('VSIX publishing verifies the release version and fails on duplicates', () => {
-  const verifyStep = workflowStep(
-    '.github/workflows/vsix-publish.yml',
-    'Verify extension release version',
-  )
-  assert.match(verifyStep, /test "\$extension_ver" = "\$root_ver"/)
-  assert.match(verifyStep, /test "\$GITHUB_REF_NAME" = "v\$root_ver"/)
-
+test('VSIX publishing fails on duplicate marketplace versions', () => {
   const marketplaceStep = workflowStep(
     '.github/workflows/vsix-publish.yml',
     'Publish to VS Code Marketplace',
@@ -117,4 +109,49 @@ test('PyPI publishing does not skip an already-used Python version', () => {
     'Publish to PyPI',
   )
   assert.doesNotMatch(publishStep, /skip-existing:\s*true/)
+})
+
+test('every release workflow delegates version policy to the shared verifier', () => {
+  const integrations = [
+    {
+      path: '.github/workflows/tauri-build.yml',
+      tagSource: /github\.ref_name/,
+      requireSource: /inputs\.release/,
+    },
+    {
+      path: '.github/workflows/android-build.yml',
+      tagSource: /inputs\.release_tag/,
+      requireSource: /inputs\.release_tag/,
+    },
+    {
+      path: '.github/workflows/pypi-publish.yml',
+      tagSource: /github\.event\.release\.tag_name/,
+      requireSource: /inputs\.dry_run/,
+    },
+    {
+      path: '.github/workflows/vsix-publish.yml',
+      tagSource: /github\.ref_name/,
+      requireSource: /inputs\.dry_run/,
+    },
+  ]
+
+  for (const { path, tagSource, requireSource } of integrations) {
+    const step = workflowStep(path, 'Verify release version')
+    assert.match(step, /node scripts\/verify-release-version\.mjs/, path)
+    assert.match(step, /RELEASE_VERSION_TAG:/, path)
+    assert.match(step, /RELEASE_VERSION_REQUIRE_TAG:/, path)
+    assert.match(step, tagSource, path)
+    assert.match(step, requireSource, path)
+  }
+})
+
+test('the package script and main CI run every Node script test', () => {
+  const packageJson = JSON.parse(source('package.json'))
+  assert.equal(
+    packageJson.scripts['test:node'],
+    'node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs',
+  )
+
+  const step = workflowStep('.github/workflows/test.yml', 'Run Node script tests')
+  assert.match(step, /pnpm test:node/)
 })

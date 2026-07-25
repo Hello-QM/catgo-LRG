@@ -272,6 +272,7 @@
     "bundle:windows": "pnpm backend:build:windows && pnpm tauri:build:windows",
     "bundle:mac-arm": "pnpm backend:build:mac-arm && pnpm tauri:build:mac-arm",
     "vitest": "vitest",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:node": "node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs"
   }
 }

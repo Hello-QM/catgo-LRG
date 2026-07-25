@@ -52,6 +52,12 @@ jobs:
         # APK to an existing release tag.
         uses: actions/checkout@v4
 
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ inputs.release_tag != '' }}
+        run: node scripts/verify-release-version.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 

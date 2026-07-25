@@ -73,6 +73,9 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
+      - name: Run Node script tests
+        run: pnpm test:node
+
       - name: Run unit tests
         run: pnpm exec vitest run
 

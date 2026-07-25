@@ -10,6 +10,10 @@ on:
         description: 'Package only — do not publish to marketplace'
         type: boolean
         default: false
+      release_tag:
+        description: 'Required for a manual marketplace publish (for example, v1.4.6)'
+        type: string
+        default: ''
 
 env:
   CARGO_NET_RETRY: "10"
@@ -28,6 +32,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        run: node scripts/verify-release-version.mjs
 
       - uses: pnpm/action-setup@v4
 
@@ -77,18 +87,6 @@ jobs:
 
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
-
-      # Release manifests are committed together. Refuse to publish when the
-      # extension or tag is stale instead of mutating package.json in CI.
-      - name: Verify extension release version
-        run: |
-          root_ver=$(node -p "require('./package.json').version")
-          extension_ver=$(node -p "require('./extensions/vscode/package.json').version")
-          test "$extension_ver" = "$root_ver"
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            test "$GITHUB_REF_NAME" = "v$root_ver"
-          fi
-          echo "Extension version verified at $root_ver"
 
       - name: Build extension
         working-directory: extensions/vscode

@@ -16,6 +16,10 @@ on:
         description: 'Build the wheel but do not publish'
         type: boolean
         default: false
+      release_tag:
+        description: 'Required for a manual publish (for example, v1.4.6)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -32,6 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ github.event_name == 'release' || !inputs.dry_run }}
+        run: node scripts/verify-release-version.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
