@@ -44,6 +44,14 @@ test('checks out trusted source and generates the page with the Node CLI', () =>
   assert.doesNotMatch(WORKFLOW, /github\.com\/\$\{\{ github\.repository \}\}\/releases/)
 })
 
+test('pins the official updater and download origin to CatGo Cloudflare', () => {
+  assert.match(
+    WORKFLOW,
+    /^\s*R2_PUBLIC_BASE_URL:\s*https:\/\/dl\.catgo-ucsd\.org\s*$/m,
+  )
+  assert.doesNotMatch(WORKFLOW, /vars\.R2_PUBLIC_BASE_URL/)
+})
+
 test('rewrites updater metadata before validating target-tag release material', () => {
   const resolveTag = WORKFLOW.indexOf('- name: Resolve tag')
   const rewrite = WORKFLOW.indexOf(

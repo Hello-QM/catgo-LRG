@@ -18,6 +18,10 @@ import { dirname, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+import {
+  requiredUpdaterPlatforms,
+  verifyRequiredReleaseAssets,
+} from './release-asset-policy.mjs'
 import { syncLegalBundle } from './sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -97,12 +101,13 @@ function publicBaseUrl(value) {
     base.password ||
     base.search ||
     base.hash ||
-    base.hostname === 'github.com' ||
-    base.hostname.endsWith('.github.com')
+    base.origin !== DEFAULT_PUBLIC_BASE_URL ||
+    base.pathname !== '/'
   ) {
-    throw new Error(`Invalid Cloudflare public base URL: ${value}`)
+    throw new Error(
+      `Cloudflare public base URL must be exactly ${DEFAULT_PUBLIC_BASE_URL}`,
+    )
   }
-  base.pathname = `${base.pathname.replace(/\/+$/, '')}/`
   return base
 }
 
@@ -117,6 +122,7 @@ function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
 
   const base = publicBaseUrl(baseUrl)
   const expectedPath = `${base.pathname}${tag}/`
+  const updaterAssets = new Map()
   for (const [platform, metadata] of Object.entries(latest.platforms)) {
     if (
       !metadata ||
@@ -190,6 +196,23 @@ function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
           asset,
       )
     }
+    updaterAssets.set(platform, asset)
+  }
+
+  for (const requirement of requiredUpdaterPlatforms(tag)) {
+    if (!updaterAssets.has(requirement.platform)) {
+      throw new Error(
+        `latest.json is missing required updater platform: ` +
+          requirement.platform,
+      )
+    }
+    const actualAsset = updaterAssets.get(requirement.platform)
+    if (actualAsset !== requirement.asset) {
+      throw new Error(
+        `latest.json updater platform ${requirement.platform} must target ` +
+          `${requirement.asset}; received ${actualAsset}`,
+      )
+    }
   }
 }
 
@@ -216,6 +239,7 @@ function verifyAppAssets(assetsDir, tag, baseUrl) {
   const assets = readdirSync(assetsDir)
   const assetNames = new Set(assets)
   verifyUpdaterUrls(latest, tag, baseUrl, assetNames)
+  verifyRequiredReleaseAssets(assetNames, tag)
   if (!assets.some(isTauriUpdaterAsset)) {
     throw new Error('Release has no recognized Tauri updater artifact')
   }

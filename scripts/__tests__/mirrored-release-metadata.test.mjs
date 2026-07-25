@@ -22,6 +22,15 @@ const SIDECAR_ASSETS = [
   'catgo-server-darwin-arm64',
   'catgo-server-win-x64.exe',
 ]
+const REQUIRED_RELEASE_ASSETS = [
+  'CatGo_1.4.6_x64_en-US.msi',
+  'CatGo_1.4.6_aarch64.dmg',
+  'CatGo_1.4.6_amd64.deb',
+  'CatGo-1.4.6-1.x86_64.rpm',
+  'CatGo-v1.4.6-android-universal.apk',
+  'catgo-hpc-bundle.tar.gz',
+  'catgo-1.4.6.vsix',
+]
 
 function addReleaseBundle(root, assets, sourceRoot) {
   mkdirSync(resolve(sourceRoot, 'third_party/licenses'), { recursive: true })
@@ -56,9 +65,12 @@ function fixture({
   tag = 'v1.4.6',
   version = tag.slice(1),
   signature = 'signature',
+  omitRequiredAsset = null,
+  publicBaseUrl = PUBLIC_BASE_URL,
+  platformNames = ['windows-x86_64', 'darwin-aarch64'],
   urls = [
     `${PUBLIC_BASE_URL}/${tag}/CatGo_${version}_x64-setup.exe`,
-    `${PUBLIC_BASE_URL}/${tag}/CatGo_${version}_aarch64.app.tar.gz`,
+    `${PUBLIC_BASE_URL}/${tag}/CatGo_aarch64.app.tar.gz`,
   ],
 } = {}) {
   const root = mkdtempSync(resolve(tmpdir(), 'catgo-r2-metadata-'))
@@ -68,7 +80,7 @@ function fixture({
   mkdirSync(sourceRoot)
   const platforms = Object.fromEntries(
     urls.map((url, index) => [
-      `platform-${index}`,
+      platformNames[index] ?? `platform-${index}`,
       {
         url,
         ...(signature === null
@@ -83,11 +95,17 @@ function fixture({
   )
   writeFileSync(resolve(assets, `CatGo_${version}_x64-setup.exe`), 'app\n')
   writeFileSync(
-    resolve(assets, `CatGo_${version}_aarch64.app.tar.gz`),
+    resolve(assets, 'CatGo_aarch64.app.tar.gz'),
     'updater\n',
   )
+  for (const name of REQUIRED_RELEASE_ASSETS) {
+    const versionedName = name.replaceAll('1.4.6', version)
+    if (versionedName !== omitRequiredAsset) {
+      writeFileSync(resolve(assets, versionedName), `release:${name}\n`)
+    }
+  }
   addReleaseBundle(root, assets, sourceRoot)
-  return { root, assets, sourceRoot, tag }
+  return { root, assets, sourceRoot, tag, publicBaseUrl }
 }
 
 function verify(options) {
@@ -105,7 +123,7 @@ function verify(options) {
     {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, R2_PUBLIC_BASE_URL: PUBLIC_BASE_URL },
+      env: { ...process.env, R2_PUBLIC_BASE_URL: options.publicBaseUrl },
     },
   )
 }
@@ -161,6 +179,22 @@ test('rejects mixed Cloudflare and GitHub updater URLs', () => {
   )
 })
 
+test('rejects a mutable non-CatGo HTTPS mirror origin', () => {
+  withFixture(
+    {
+      publicBaseUrl: 'https://example.com',
+      urls: [
+        'https://example.com/v1.4.6/CatGo_1.4.6_x64-setup.exe',
+        'https://example.com/v1.4.6/CatGo_aarch64.app.tar.gz',
+      ],
+    },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /must be exactly https:\/\/dl\.catgo-ucsd\.org/i)
+    },
+  )
+})
+
 test('rejects a Cloudflare URL outside the exact release-tag path', () => {
   withFixture(
     {
@@ -178,7 +212,7 @@ test('rejects a Cloudflare URL outside the exact release-tag path', () => {
 test('rejects updater metadata without an artifact signature', () => {
   withFixture({ signature: null }, (result) => {
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /signature.*platform-0/i)
+    assert.match(result.stderr, /signature.*windows-x86_64/i)
   })
 })
 
@@ -206,6 +240,31 @@ test('rejects a sidecar binary as a Tauri updater artifact', () => {
     (result) => {
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, /recognized Tauri updater artifact/i)
+    },
+  )
+})
+
+test('rejects a partial release even when updater metadata itself is valid', () => {
+  withFixture(
+    { omitRequiredAsset: 'CatGo-v1.4.6-android-universal.apk' },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /missing required release asset.*Android/i)
+    },
+  )
+})
+
+test('rejects updater metadata missing a required desktop updater platform', () => {
+  withFixture(
+    {
+      platformNames: ['windows-x86_64'],
+      urls: [
+        `${PUBLIC_BASE_URL}/v1.4.6/CatGo_1.4.6_x64-setup.exe`,
+      ],
+    },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /missing required updater platform.*darwin-aarch64/i)
     },
   )
 })

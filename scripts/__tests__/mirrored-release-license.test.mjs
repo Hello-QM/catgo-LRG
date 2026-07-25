@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { requiredReleaseAssets } from '../release-asset-policy.mjs'
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -57,21 +58,28 @@ function makeAssets(
 ) {
   const assets = resolve(parent, `assets-${tag}`)
   const version = tag.slice(1)
-  const appName = `CatGo_${version}_amd64.deb`
+  const windowsUpdater = `CatGo_${version}_x64-setup.exe`
+  const macosUpdater = 'CatGo_aarch64.app.tar.gz'
   mkdirSync(assets, { recursive: true })
   writeFileSync(
     resolve(assets, 'latest.json'),
     `${JSON.stringify({
       version: tag.slice(1),
       platforms: {
-        'linux-x86_64': {
-          url: `https://dl.catgo-ucsd.org/${tag}/${appName}`,
-          signature: 'signed-updater-fixture',
+        'windows-x86_64': {
+          url: `https://dl.catgo-ucsd.org/${tag}/${windowsUpdater}`,
+          signature: 'signed-windows-updater-fixture',
+        },
+        'darwin-aarch64': {
+          url: `https://dl.catgo-ucsd.org/${tag}/${macosUpdater}`,
+          signature: 'signed-macos-updater-fixture',
         },
       },
     })}\n`,
   )
-  writeFileSync(resolve(assets, appName), 'app\n')
+  for (const requirement of requiredReleaseAssets(tag)) {
+    writeFileSync(resolve(assets, requirement.name), `${requirement.label}\n`)
+  }
   if (includeSidecars) addSidecars(assets, { corrupt: corruptSidecar })
   return assets
 }

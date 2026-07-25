@@ -17,7 +17,7 @@
 #      bucket; add its credentials as repo secrets:
 #        R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
 #      (CLOUDFLARE_ACCOUNT_ID already exists as a secret.)
-#   Optional repo variables (defaults in env below): R2_BUCKET, R2_PUBLIC_BASE_URL.
+#   Optional repo variable: R2_BUCKET.
 #
 # Triggers include release publication, manual dispatch, and successful
 # completion of every workflow that can attach assets to the CatGo release.
@@ -55,7 +55,9 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   APP_TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+$'
   R2_BUCKET: ${{ vars.R2_BUCKET || 'catgo-releases' }}
-  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://dl.catgo-ucsd.org' }}
+  # Security boundary: official updater/download metadata must never be
+  # redirected through a mutable repository variable.
+  R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
   AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
   AWS_DEFAULT_REGION: auto
