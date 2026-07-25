@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.6] - 2026-07-25
+
+### Changed
+
+- **Noncommercial research license and mandatory citation** — new CatGo 1.4.6 distributions use the source-available `CatGo Noncommercial Research License 1.0`. Commercial use requires prior written permission, and every public output must include the required acknowledgement and citation. Third-party materials retain their own licenses. Historical copies remain governed by the license terms distributed with those copies.
+
 ## [1.4.4] - 2026-07-08
 
 ### Added

@@ -147,3 +147,34 @@ test('contribution guides disclose the relicensing authority requirement', () =>
   assert.match(chinese, /许可和维权/)
   assert.match(chinese, /不得削弱或抵触.*非商业条款/)
 })
+
+test('active first-party surfaces contain no stale AGPL grant', () => {
+  const active = [
+    'license',
+    'package.json',
+    'server/LICENSE',
+    'server/pyproject.toml',
+    'extensions/rust-wasm/license',
+    'extensions/rust-wasm/package.json',
+    'extensions/vscode/license',
+    'extensions/vscode/package.json',
+    'crates/catgo-graph/Cargo.toml',
+    'extensions/catrender-wasm/Cargo.toml',
+    'extensions/chgdiff-wasm/Cargo.toml',
+    'extensions/rust/Cargo.toml',
+    'src-tauri/Cargo.toml',
+    'tools/cube-processor/Cargo.toml',
+    'examples/plugins/charge-coloring/catgo-plugin.json',
+    'examples/plugins/lennard-jones-calculator/catgo-plugin.json',
+    'readme.md',
+    'readme.zh.md',
+    'server/README-pypi.md',
+    'contributing.md',
+    'contributing.zh.md',
+    'CITATION.cff',
+    'COMMERCIAL_LICENSE.md',
+  ]
+  for (const file of active) {
+    assert.doesNotMatch(read(file), /AGPL|GNU AFFERO/i, file)
+  }
+})
