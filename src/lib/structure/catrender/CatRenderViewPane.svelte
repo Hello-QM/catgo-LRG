@@ -220,7 +220,7 @@
   $effect(() => {
     const m = mirror
     void [
-      S.preset, S.show_h, S.show_cell, S.pbc_wrap, S.perceive_orders,
+      S.preset, S.show_h, S.show_cell, S.pbc_wrap,
       S.prune_long_bonds, S.hide_cross_cell_bonds, S.show_index, S.overrides, S.bond_overrides,
       S.atom_overrides, S.drag_rot, glow_opacity, glow_radius, m,
     ]
@@ -240,7 +240,6 @@
         atom_overrides: a_ov,
         style: {
           preset: S.preset, show_h: S.show_h,
-          perceive_orders: S.perceive_orders,
           prune_long_bonds: S.prune_long_bonds,
           hide_cross_cell_bonds: S.hide_cross_cell_bonds,
           show_index: S.show_index,

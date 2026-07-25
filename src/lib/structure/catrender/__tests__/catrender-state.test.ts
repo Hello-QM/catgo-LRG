@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   build_overrides, prune_atom_idx, KNOB_KEYS,
@@ -63,5 +64,19 @@ describe(`prune_atom_idx`, () => {
     expect(prune_atom_idx(3, 3)).toBeNull()
     expect(prune_atom_idx(-1, 3)).toBeNull()
     expect(prune_atom_idx(NaN, 3)).toBeNull()
+  })
+})
+
+describe(`retired bond-order perception control`, () => {
+  it(`is absent from CatRender state, controls, and render payload`, () => {
+    const source = [
+      `src/lib/structure/catrender/catrender-state.svelte.ts`,
+      `src/lib/structure/catrender/CatRenderParamsPane.svelte`,
+      `src/lib/structure/catrender/CatRenderViewPane.svelte`,
+    ]
+      .map((path) => readFileSync(path, `utf8`))
+      .join(`\n`)
+
+    expect(source).not.toMatch(/perceive_orders|perceive bond orders/i)
   })
 })
