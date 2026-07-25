@@ -49,6 +49,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cleanupWasmPackLicenseArtifacts } from './cleanup-wasm-pack-license-artifacts.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ARGS = process.argv.slice(2)
@@ -216,6 +217,8 @@ if (SKIP_THREADED) {
   pending = pending.filter((t) => !t.threaded)
 }
 
+cleanupWasmPackLicenseArtifacts(ROOT)
+
 if (pending.length === 0) {
   console.log('[build-wasm] all WASM extensions present — nothing to build')
   process.exit(0)
@@ -307,6 +310,7 @@ function hardenGeneratedPackage(target) {
 for (const t of pending) {
   console.log(`[build-wasm] building ${t.name} …`)
   const status = buildTarget(t)
+  cleanupWasmPackLicenseArtifacts(ROOT)
   if (status !== 0) {
     console.error(
       `[build-wasm] FAILED: ${t.name} after ${WASM_PACK_MAX_ATTEMPTS} attempts ` +

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -51,6 +52,17 @@ if (process.env.FAKE_WASM_PACK_WRITE_PACKAGE === '1') {
       files: ['generated.js', 'generated_bg.wasm'],
       license: '../../license'
     }, null, 2)
+  )
+}
+if (process.env.FAKE_WASM_PACK_LICENSE_ARTIFACT) {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  fs.mkdirSync(path.dirname(process.env.FAKE_WASM_PACK_LICENSE_ARTIFACT), {
+    recursive: true
+  })
+  fs.copyFileSync(
+    process.env.FAKE_ROOT_LICENSE,
+    process.env.FAKE_WASM_PACK_LICENSE_ARTIFACT
   )
 }
 if (process.env.FAKE_WASM_PACK_ALWAYS_FAIL === '1' || attempts === 1) {
@@ -144,6 +156,22 @@ test('stops retrying wasm-pack after the configured attempt limit', (t) => {
   assert.equal(result.status, 73)
   assert.equal(readFileSync(fake.state, 'utf8'), '3')
   assert.match(result.stderr, /FAILED: chgdiff after 3 attempts/)
+})
+
+test('removes the license artifact emitted by wasm-pack outside its output directory', (t) => {
+  const artifact = resolve(ROOT, 'src/lib/license')
+  rmSync(artifact, { force: true })
+  t.after(() => rmSync(artifact, { force: true }))
+  const fake = fakeWasmPack(t)
+
+  const result = runBuildWasm(['--only=chgdiff'], {
+    ...fake.env,
+    FAKE_ROOT_LICENSE: resolve(ROOT, 'license'),
+    FAKE_WASM_PACK_LICENSE_ARTIFACT: artifact,
+  })
+
+  assert.equal(result.status, 0)
+  assert.equal(existsSync(artifact), false)
 })
 
 test('marks generated chgdiff and catrender npm manifests private', (t) => {
