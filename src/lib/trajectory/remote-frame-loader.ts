@@ -15,6 +15,7 @@ import { create_trajectory_frame } from './parsers/common'
 import type {
   FrameIndex,
   FrameLoader,
+  FramePositionData,
   TrajectoryFrame,
   TrajectoryMetadata,
   TrajectoryType,
@@ -34,10 +35,44 @@ interface BackendFrame {
 /** Cap plot sampling so the metadata fetch stays small for 10k+ frames. */
 const MAX_PLOT_POINTS = 2000
 
-/** Frames fetched per HTTP request (backend caps `count` at 64). */
-const BATCH = 16
-/** Max frames kept in the per-loader LRU cache (~hundreds of MB headroom). */
-const CACHE_CAP = 400
+/** Keep one binary fetch around 4 MiB while amortizing request overhead. */
+export const REMOTE_BATCH_POSITION_BYTE_BUDGET = 4 * 1024 * 1024
+/** Retain at most about 64 MiB of compact Float32 position packets. */
+export const REMOTE_CACHE_POSITION_BYTE_BUDGET = 64 * 1024 * 1024
+const REMOTE_MAX_BATCH_FRAMES = 16
+const REMOTE_MAX_CACHE_FRAMES = 400
+const REMOTE_MIN_CACHE_CHUNKS = 3
+
+export interface RemoteFrameCachePlan {
+  batch_size: number
+  cache_capacity: number
+}
+
+/**
+ * Size remote fetches and the compact-position LRU by retained bytes.
+ *
+ * The binary display path keeps only 3N float32 coordinates plus an 80-byte
+ * frame header, so a 19,968-atom frame is about 234 KiB instead of tens of
+ * megabytes of nested site objects.
+ */
+export function remote_frame_cache_plan(n_atoms: number): RemoteFrameCachePlan {
+  const bytes_per_frame = Math.max(1, Math.floor(n_atoms) || 1) * 3 * 4 + 80
+  const batch_size = Math.min(
+    REMOTE_MAX_BATCH_FRAMES,
+    Math.max(
+      1,
+      Math.floor(REMOTE_BATCH_POSITION_BYTE_BUDGET / bytes_per_frame),
+    ),
+  )
+  const cache_capacity = Math.min(
+    REMOTE_MAX_CACHE_FRAMES,
+    Math.max(
+      batch_size * REMOTE_MIN_CACHE_CHUNKS,
+      Math.floor(REMOTE_CACHE_POSITION_BYTE_BUDGET / bytes_per_frame),
+    ),
+  )
+  return { batch_size, cache_capacity }
+}
 
 function backend_frame_to_trajectory_frame(bf: BackendFrame): TrajectoryFrame {
   // Periodic formats (XDATCAR) carry a per-frame cell; pass it through so the
@@ -56,8 +91,15 @@ function backend_frame_to_trajectory_frame(bf: BackendFrame): TrajectoryFrame {
   )
 }
 
+type RemoteFramePacket = FramePositionData
+
 function frames_url(path: string, start: number, count: number): string {
   return `${API_BASE}/trajectory/frames?path=${encodeURIComponent(path)}` +
+    `&start=${start}&count=${count}`
+}
+
+function positions_url(path: string, start: number, count: number): string {
+  return `${API_BASE}/trajectory/positions?path=${encodeURIComponent(path)}` +
     `&start=${start}&count=${count}`
 }
 
@@ -163,19 +205,22 @@ export async function materialize_file_if_large(
 }
 
 export class RemoteFrameLoader implements FrameLoader {
-  // Insertion-ordered LRU of parsed frames + in-flight chunk dedupe, so
-  // sequential playback costs ~1 HTTP request per BATCH frames and re-visited
-  // frames are instant.
-  private readonly cache = new Map<number, TrajectoryFrame>()
+  // Insertion-ordered LRU of compact binary position views + in-flight chunk
+  // dedupe. Full site graphs are materialized only by load_frame().
+  private readonly cache = new Map<number, RemoteFramePacket>()
   private readonly inflight = new Map<number, Promise<void>>()
+  private readonly cache_plan: RemoteFrameCachePlan
 
   constructor(
     private readonly path: string,
     private readonly total: number,
-  ) {}
+    private readonly n_atoms = 1,
+  ) {
+    this.cache_plan = remote_frame_cache_plan(n_atoms)
+  }
 
   fork(): FrameLoader {
-    return new RemoteFrameLoader(this.path, this.total)
+    return new RemoteFrameLoader(this.path, this.total, this.n_atoms)
   }
 
   // deno-lint-ignore require-await
@@ -184,21 +229,71 @@ export class RemoteFrameLoader implements FrameLoader {
   }
 
   private chunk_start(n: number): number {
-    return Math.floor(n / BATCH) * BATCH
+    const batch = this.cache_plan.batch_size
+    return Math.floor(n / batch) * batch
   }
 
-  /** Fetch (once) the BATCH-aligned chunk containing `start`; cache all frames. */
+  /** Fetch (once) the byte-budgeted binary chunk containing `start`. */
   private fetch_chunk(start: number): Promise<void> {
     const existing = this.inflight.get(start)
     if (existing) return existing
-    const count = Math.min(BATCH, this.total - start)
+    const count = Math.min(this.cache_plan.batch_size, this.total - start)
     const p = (async () => {
       try {
-        const resp = await fetch(frames_url(this.path, start, count))
+        const resp = await fetch(positions_url(this.path, start, count))
         if (!resp.ok) return
-        const data = await resp.json()
-        for (const bf of (data?.frames ?? []) as BackendFrame[]) {
-          this.cache.set(bf.frame_number, backend_frame_to_trajectory_frame(bf))
+        const buffer = await resp.arrayBuffer()
+        const view = new DataView(buffer)
+        if (view.byteLength < 16) throw new Error(`short CGTP header`)
+        const magic = String.fromCharCode(
+          view.getUint8(0),
+          view.getUint8(1),
+          view.getUint8(2),
+          view.getUint8(3),
+        )
+        const version = view.getUint32(4, true)
+        const frame_count = view.getUint32(8, true)
+        const n_atoms = view.getUint32(12, true)
+        if (magic !== `CGTP` || version !== 1 || n_atoms !== this.n_atoms) {
+          throw new Error(
+            `bad position packet ${magic} v${version} (${n_atoms} atoms)`,
+          )
+        }
+        let offset = 16
+        for (let idx = 0; idx < frame_count; idx++) {
+          if (offset + 80 > view.byteLength) throw new Error(`short frame header`)
+          const frame_number = view.getUint32(offset, true)
+          const flags = view.getUint32(offset + 4, true)
+          const has_lattice = (flags & 1) !== 0
+          const lattice_values = new Array<number>(9)
+          for (let value_idx = 0; value_idx < 9; value_idx++) {
+            lattice_values[value_idx] = view.getFloat64(
+              offset + 8 + value_idx * 8,
+              true,
+            )
+          }
+          offset += 80
+          const position_count = n_atoms * 3
+          const position_bytes = position_count * Float32Array.BYTES_PER_ELEMENT
+          if (offset + position_bytes > view.byteLength) {
+            throw new Error(`short position payload`)
+          }
+          const positions = new Float32Array(buffer, offset, position_count)
+          offset += position_bytes
+          this.cache.set(frame_number, {
+            step: frame_number,
+            positions,
+            forces: null,
+            lattice: has_lattice
+              ? [
+                  lattice_values.slice(0, 3),
+                  lattice_values.slice(3, 6),
+                  lattice_values.slice(6, 9),
+                ]
+              : null,
+            metadata: {},
+            topology_changed: (flags & 2) !== 0,
+          })
         }
         this.evict()
       } catch (error) {
@@ -210,7 +305,7 @@ export class RemoteFrameLoader implements FrameLoader {
   }
 
   private evict(): void {
-    let over = this.cache.size - CACHE_CAP
+    let over = this.cache.size - this.cache_plan.cache_capacity
     if (over <= 0) return
     for (const key of this.cache.keys()) {
       if (over-- <= 0) break
@@ -238,11 +333,27 @@ export class RemoteFrameLoader implements FrameLoader {
     frame_number: number,
   ): Promise<TrajectoryFrame | null> {
     if (frame_number < 0 || frame_number >= this.total) return null
+    try {
+      const resp = await fetch(frames_url(this.path, frame_number, 1))
+      if (!resp.ok) return null
+      const data = await resp.json()
+      const frame = (data?.frames ?? [])[0] as BackendFrame | undefined
+      return frame ? backend_frame_to_trajectory_frame(frame) : null
+    } catch (error) {
+      console.error(`RemoteFrameLoader.load_frame(${frame_number}) failed:`, error)
+      return null
+    }
+  }
+
+  async load_frame_positions(
+    _data: string | ArrayBuffer,
+    frame_number: number,
+  ): Promise<FramePositionData | null> {
+    if (frame_number < 0 || frame_number >= this.total) return null
     if (!this.cache.has(frame_number)) {
       await this.fetch_chunk(this.chunk_start(frame_number))
     }
-    // Prefetch the next chunk so forward playback never blocks on a fetch.
-    const next = this.chunk_start(frame_number) + BATCH
+    const next = this.chunk_start(frame_number) + this.cache_plan.batch_size
     if (next < this.total && !this.cache.has(next) && !this.inflight.has(next)) {
       void this.fetch_chunk(next)
     }
@@ -280,7 +391,7 @@ export class RemoteFrameLoader implements FrameLoader {
 export async function load_remote_trajectory(
   path: string,
   filename: string,
-  initial = 4,
+  initial = 1,
 ): Promise<TrajectoryType> {
   const idx_resp = await fetch(
     `${API_BASE}/trajectory/index?path=${encodeURIComponent(path)}`,
@@ -292,26 +403,29 @@ export async function load_remote_trajectory(
   const total: number = idx.total_frames ?? 0
   if (total <= 0) throw new Error(`no frames indexed in ${filename}`)
 
-  const loader = new RemoteFrameLoader(path, total)
-
   const n0 = Math.min(initial, total)
   const fr_resp = await fetch(frames_url(path, 0, n0))
   const fr_data = fr_resp.ok ? await fr_resp.json() : { frames: [] }
   const frames: TrajectoryFrame[] = (fr_data.frames ?? [])
     .map(backend_frame_to_trajectory_frame)
+  const loader = new RemoteFrameLoader(path, total, idx.n_atoms ?? 1)
 
-  // The plot-metadata scan walks every frame server-side (~2 s for a 48 MB
-  // file) — never block first render on it. Ship the trajectory now with the
-  // in-flight scan attached; Trajectory.svelte adopts it on arrival and the
-  // plot upgrades from the initial-frames series to the full sampled one.
+  // Reading ASE metadata walks every frame and contends with position packets.
+  // Keep it genuinely lazy: Structure-only playback never starts the scan;
+  // opening a plot starts it once and memoizes the promise.
   const stride = Math.max(1, Math.ceil(total / MAX_PLOT_POINTS))
-  const plot_metadata_promise = loader.extract_plot_metadata(``, { sample_rate: stride })
+  let pending_plot_metadata: Promise<TrajectoryMetadata[]> | undefined
+  const plot_metadata_loader = () =>
+    pending_plot_metadata ??= loader.extract_plot_metadata(
+      ``,
+      { sample_rate: stride },
+    )
 
   const trajectory: TrajectoryType = {
     frames,
     total_frames: total,
     is_indexed: true,
-    plot_metadata_promise,
+    plot_metadata_loader,
     metadata: {
       filename,
       source: `remote-stream`,

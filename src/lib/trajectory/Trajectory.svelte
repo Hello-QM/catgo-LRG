@@ -7,15 +7,15 @@
     Structure,
     toggle_fullscreen,
   } from '$lib'
-  import { add_atom, delete_atoms, replace_atom } from '$lib/structure'
   import type { AtomManipulationEvent } from '$lib/structure'
   import type { AnyStructure, PymatgenStructure } from '$lib/structure'
-  import { type Matrix3x3, matrix_inverse_3x3, transpose_3x3_matrix } from '$lib/math'
+  import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { writeRemoteFile } from '$lib/api/hpc'
   import { structure_to_poscar_str } from '$lib/structure/export'
   import { handle_url_drop, load_from_url } from '$lib/io'
   import FileSourceDialog from '$lib/electronic/FileSourceDialog.svelte'
   import { format_num, trajectory_property_config } from '$lib/labels'
+  import { calc_lattice_params, type Matrix3x3 } from '$lib/math'
   import type { ControlsConfig, DataSeries, Orientation, Point } from '$lib/plot'
   import { Histogram, ScatterPlot } from '$lib/plot'
   import { DEFAULTS, should_reduce_motion } from '$lib/settings'
@@ -25,9 +25,20 @@
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
   import { full_data_extractor } from './extract'
+  import {
+    create_frame_request_loader,
+    select_displayed_frame_owner,
+    select_displayed_frame_remote_origin,
+    select_displayed_frame_idx,
+    select_in_memory_frame,
+    select_pending_frame_publication,
+    type DisplayedFrameOwner,
+    type FrameRequestOutcome,
+  } from './frame-loading'
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
   import type {
     ParseProgress,
+    FramePositionData,
     TrajectoryDataExtractor,
     TrajectoryFrame,
     TrajectoryType,
@@ -36,7 +47,6 @@
   import { TrajectoryError, TrajectoryExportPane, TrajectoryInfoPane } from './index'
   import type { LoadingOptions } from './parse'
   import {
-    create_frame_loader,
     get_unsupported_format_message,
     MAX_BIN_FILE_SIZE,
     MAX_TEXT_FILE_SIZE,
@@ -59,7 +69,16 @@
     clamp_fps,
     get_keyboard_action,
   } from './trajectory-controls'
-  import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
+  import {
+    acknowledge_playback_frame,
+    acknowledgement_releases_due_playback,
+    advance_playback_deadline,
+    may_advance_playback,
+    may_start_prepared_playback,
+    playback_poll_interval_ms,
+    request_playback_frame,
+  } from './prepared-playback-state'
+  import { sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
   import { build_atom_graph } from '$lib/structure/atom-graph'
   import {
     register_viewer,
@@ -67,12 +86,34 @@
     set_active_viewer,
     type ViewerPosition,
   } from '$lib/structure/viewer-registry.svelte'
-  import { scale_structure_geometry, validate_uniform_topology } from './operations'
+  import {
+    apply_trajectory_edit_op_to_frame,
+    type TrajectoryEditOp,
+    validate_uniform_topology,
+  } from './operations'
   import type { PaneTrajectory } from './clone'
   import { clone_structure } from '$lib/structure/clone'
+  import { create_effective_frame_resolver } from './effective-frame-resolver'
+  import {
+    type LedgerEntry,
+    OperationLedger,
+    type OpScope,
+    scope_matches_frame,
+  } from './operation-ledger'
+  import {
+    commit_supercell_transaction,
+    create_trajectory_supercell_request_handler,
+    type SupercellTransactionCommitHooks,
+    toggle_supercell_history_entry,
+  } from './supercell-transactions'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
+  // Viewer manifests are bridge metadata, not render data. Publishing every
+  // playback frame adds avoidable fetch/JSON/console work to the hot path.
+  // Ten-frame buckets keep remote consumers within 0.5s at 20 FPS, while
+  // pausing changes the bucket to the exact current frame immediately.
+  const MANIFEST_PLAYBACK_FRAME_BUCKET = 10
 
   type EventHandlers = {
     on_play?: (data: TrajHandlerData) => void
@@ -276,6 +317,7 @@
         return trajectory?.frames?.[frame_idx]?.structure?.sites?.[0]?.xyz?.[0] ?? null
       },
       get_current_idx(): number { return current_step_idx },
+      get_prepared_ready_ahead(): number { return prepared_ready_ahead },
       get_frame_natoms(frame_idx: number): number | null {
         return trajectory?.frames?.[frame_idx]?.structure?.sites?.length ?? null
       },
@@ -309,6 +351,14 @@
     resume_disabled = false
   })
   let play_interval: ReturnType<typeof setInterval> | undefined = $state(undefined)
+  let playback_ack_timer: ReturnType<typeof setTimeout> | undefined
+  let next_playback_deadline_ms = 0
+  let presented_step_idx = $state(0)
+  let presented_positions_version = $state(0)
+  let playback_generation = $state(0)
+  let prepared_ready_ahead = $state(0)
+  let waiting_for_prepared_warmup = $state(false)
+  let presentation_pending = $derived(current_step_idx !== presented_step_idx)
 
   // Ensure fps is within the allowed range
   $effect(() => {
@@ -361,17 +411,19 @@
   let pushback_status = $state<`idle` | `saving` | `saved` | `error`>(`idle`)
   let pushback_message = $state(``)
   let pushback_timer: ReturnType<typeof setTimeout> | undefined = undefined
+  let displayed_frame_owner = $state.raw<DisplayedFrameOwner | null>(null)
 
-  // Remote origin from trajectory metadata (for push-back to remote HPC)
+  // A retained frame from an earlier trajectory must never inherit the active
+  // trajectory's remote destination after a replacement load fails.
   let remote_origin = $derived(
-    trajectory?.metadata?.remote_origin as { session_id: string; dir_path: string } | undefined,
+    select_displayed_frame_remote_origin(trajectory, displayed_frame_owner),
   )
   async function push_back_current_frame() {
     // Plan v3 Phase 4 fix: serialize current_frame.structure rather than
     // current_structure. Under Architecture P, current_structure freezes
     // at the first frame's topology; the actual frame to push back is
     // current_frame.structure (which holds the per-frame positions).
-    const frame_structure = current_frame?.structure
+    const frame_structure = trajectory?.frames?.[presented_step_idx]?.structure
     if (!remote_origin || !current_frame_source || !frame_structure) {
       console.warn(`Push-back guard failed:`, { remote_origin, current_frame_source, has_structure: !!frame_structure })
       return
@@ -384,7 +436,7 @@
     try {
       const content = structure_to_poscar_str(frame_structure)
       const full_path = `${remote_origin.dir_path}/${current_frame_source}`
-      console.log(`Push-back: writing frame ${current_step_idx} to ${full_path} (session: ${remote_origin.session_id})`)
+      console.log(`Push-back: writing frame ${presented_step_idx} to ${full_path} (session: ${remote_origin.session_id})`)
       const result = await writeRemoteFile(remote_origin.session_id, full_path, content)
       console.log(`Push-back result:`, result)
       if (result.success) {
@@ -420,7 +472,26 @@
   )
 
   // Current frame - load on demand for indexed trajectories
-  let current_frame = $state<TrajectoryFrame | null>(null)
+  // Streamed 20k-atom frames are immutable API responses and are always
+  // replaced as a whole. Deep $state would proxy every site/xyz read when
+  // flattening positions, adding hundreds of milliseconds and large transient
+  // heap churn per frame. Raw state still reacts to the assignments below
+  // without recursively wrapping the frame tree.
+  let current_frame = $state.raw<TrajectoryFrame | null>(null)
+  let displayed_frame_idx = $state<number | null>(null)
+  const frame_requests = create_frame_request_loader()
+
+  // A completion from an earlier trajectory must never replace the current
+  // trajectory's frame, even when no newer frame request has started yet.
+  $effect(() => {
+    const active_trajectory = trajectory
+    frame_requests.invalidate()
+    if (!active_trajectory) {
+      current_frame = null
+      displayed_frame_idx = null
+      displayed_frame_owner = null
+    }
+  })
 
   // Current frame structure for display — controlled $state instead of $derived
   // so we can freeze it during fast-path playback (moved up to avoid use-before-declaration)
@@ -428,7 +499,9 @@
 
   // Remote push-back derived values (depend on current_frame)
   let current_frame_source = $derived(
-    current_frame?.metadata?.source_file as string | undefined,
+    trajectory?.frames?.[presented_step_idx]?.metadata?.source_file as
+      | string
+      | undefined,
   )
   let can_push_back = $derived(
     // Plan v3 Phase 4 fix: read current_frame.structure rather than
@@ -437,7 +510,8 @@
     // displayed frame. Without this, can_push_back stays true after
     // navigating to any frame even when the user can't actually push the
     // current frame's positions.
-    !!remote_origin && !!current_frame_source && !!current_frame?.structure,
+    !!remote_origin && !!current_frame_source &&
+      !!trajectory?.frames?.[presented_step_idx]?.structure,
   )
 
   // Auto-play when trajectory changes (handles both props and file loading).
@@ -460,7 +534,6 @@
   // Update current frame when step changes
   $effect(() => {
     if (trajectory && current_step_idx >= 0 && current_step_idx < total_frames) {
-      // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
       if (trajectory.frame_loader) {
         // Load frame on demand (works for both indexed files and external streaming)
         load_frame_on_demand(current_step_idx)
@@ -469,36 +542,79 @@
         // inside `materialize_frame` replaces `trajectory.frames[idx]` with a
         // fresh object, so we re-read after to pick up the new reference.
         materialize_frame(current_step_idx)
-        current_frame = trajectory.frames[current_step_idx] || null
+        apply_frame_request_outcome(
+          select_in_memory_frame(
+            trajectory.frames[current_step_idx],
+            untrack(() => current_frame),
+            current_step_idx,
+          ),
+          current_step_idx,
+          trajectory,
+        )
       }
+    } else if (trajectory) {
+      apply_frame_request_outcome(
+        frame_requests.reject_out_of_bounds(
+          current_step_idx,
+          total_frames,
+          untrack(() => current_frame),
+        ),
+        current_step_idx,
+        trajectory,
+      )
     } else {
+      frame_requests.invalidate()
       current_frame = null
+      displayed_frame_idx = null
+      displayed_frame_owner = null
     }
   })
 
   // Load frame on demand - works for both indexed files and external streaming
   async function load_frame_on_demand(frame_idx: number) {
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
-    if (!trajectory?.frame_loader) return
+    const requested_trajectory = trajectory
+    if (!requested_trajectory?.frame_loader) return
+    const result = await frame_requests.load(
+      requested_trajectory,
+      frame_idx,
+      untrack(() => current_frame),
+      untrack(() => orig_data),
+    )
+    if (!frame_requests.is_current(result, trajectory)) return
+    apply_frame_request_outcome(result, frame_idx, requested_trajectory)
+  }
 
-    try {
-      // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
-      const frame = await trajectory.frame_loader.load_frame(
-        orig_data || ``, // Use original_data for indexed files, empty string for external streaming
-        frame_idx,
-      )
-      current_frame = frame
-    } catch (error) {
-      console.error(`Failed to load frame ${frame_idx}:`, error)
-      current_frame = null
-      on_error?.({
-        error_msg: `Failed to load frame ${frame_idx}: ${error}`,
-        filename: current_filename,
-        file_size,
-        step_idx: frame_idx,
-        frame_count: total_frames,
-      })
+  function apply_frame_request_outcome(
+    result: FrameRequestOutcome,
+    frame_idx: number,
+    requested_trajectory: TrajectoryType,
+  ) {
+    if (result.status === `stale`) return
+    displayed_frame_idx = select_displayed_frame_idx(
+      result,
+      frame_idx,
+      untrack(() => displayed_frame_idx),
+    )
+    displayed_frame_owner = select_displayed_frame_owner(
+      result,
+      requested_trajectory,
+      frame_idx,
+      untrack(() => displayed_frame_owner),
+    )
+    if (result.status === `loaded`) {
+      current_frame = result.frame
+      return
     }
+
+    current_frame = result.frame
+    if (is_playing) pause_playback()
+    on_error?.({
+      error_msg: result.error.message,
+      filename: current_filename,
+      file_size,
+      step_idx: frame_idx,
+      frame_count: total_frames,
+    })
   }
 
   // --- Trajectory fast-path: position-only GPU updates during playback/scrubbing ---
@@ -525,6 +641,12 @@
     if (frames_ref !== prev_frames_ref) {
       position_cache = null
       force_cache = null
+      // A replacement trajectory must not inherit the previous file's visual
+      // supercell label (Gate A follow-up). First adoption (prev null) keeps
+      // any parent-preset label.
+      if (prev_frames_ref !== null && supercell_scaling !== `1x1x1`) {
+        supercell_scaling = `1x1x1`
+      }
       prev_frames_ref = frames_ref
     }
   })
@@ -532,24 +654,43 @@
   $effect(() => {
     if (!trajectory?.frames?.length) { position_cache = null; return }
     // Only cache for in-memory trajectories with constant atom count
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
     if (trajectory.frame_loader) { position_cache = null; return }
-    // Invalidate cache while pending ops exist — ops may change atom counts
-    // or positions per-frame. Cache rebuilds automatically after
-    // `flush_pending_ops()` (which spreads `trajectory`, triggering this effect).
-    if (pending_ops.length > 0) { position_cache = null; force_cache = null; return }
+    // Never rebuild fixed-width caches while any in-memory frame still has
+    // unapplied ledger entries; those entries may change positions or topology.
+    if (trajectory.frames.some((_, idx) => frame_has_unmaterialized_ops(trajectory!, idx))) {
+      position_cache = null
+      force_cache = null
+      return
+    }
 
     const frames = trajectory.frames
+    const has_frame_topology_edit = trajectory.operation_ledger?.entries.some(
+      (entry) => entry.active && entry.scope.kind === `frame` &&
+        [`add`, `delete`, `replace`, `supercell`].includes(entry.op.kind),
+    )
+    if (has_frame_topology_edit) {
+      position_cache = null
+      force_cache = null
+      return
+    }
     const first_count = frames[0].structure.sites.length
-    // Verify constant atom count (sample check)
-    const sample_indices = [
-      0,
-      Math.floor(frames.length / 4),
-      Math.floor(frames.length / 2),
-      Math.floor(frames.length * 3 / 4),
-      frames.length - 1,
-    ]
-    const constant = sample_indices.every(
+    // A topology ledger can make one arbitrary frame differ, so verify every
+    // count in that case. The historical sample check remains for untouched
+    // trajectories where this avoids walking a very long frames array.
+    const has_topology_ledger = trajectory.operation_ledger?.entries.some(
+      (entry) => entry.active &&
+        [`add`, `delete`, `supercell`].includes(entry.op.kind),
+    )
+    const count_check_indices = has_topology_ledger
+      ? frames.map((_, idx) => idx)
+      : [
+        0,
+        Math.floor(frames.length / 4),
+        Math.floor(frames.length / 2),
+        Math.floor(frames.length * 3 / 4),
+        frames.length - 1,
+      ]
+    const constant = count_check_indices.every(
       (i) => (frames[i]?.structure.sites.length ?? first_count) === first_count,
     )
     if (!constant) { position_cache = null; force_cache = null; return }
@@ -670,6 +811,22 @@
       topology_initialized = false
       return
     }
+    const active_displayed_frame_idx =
+      displayed_frame_owner?.trajectory === trajectory
+        ? displayed_frame_idx
+        : null
+    if (active_displayed_frame_idx === null) {
+      const publication = select_pending_frame_publication(
+        active_displayed_frame_idx,
+        untrack(() => trajectory_frame_positions),
+        untrack(() => trajectory_frame_forces),
+      )
+      if (publication) {
+        trajectory_frame_positions = publication.positions
+        trajectory_frame_forces = publication.forces
+      }
+      return
+    }
     // Variable-cell trajectories (NPT / cell relaxation): publish the frame's
     // lattice so bond detection, cross-cell rendering (CPU + GPU uLattice) and
     // the cell wireframe track the displayed cell. Identity-stable when the
@@ -677,7 +834,8 @@
     // and fires no downstream effects.
     const frame_lat = stable_frame_lattice(
       last_frame_lattice,
-      (frame.structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix,
+      frame.position_data?.lattice ??
+        (frame.structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix,
     )
     if (frame_lat !== last_frame_lattice) {
       last_frame_lattice = frame_lat
@@ -696,6 +854,21 @@
     const traj_source = traj_meta?.source_format ?? traj_meta?.type
     const force_slow_path = traj_source === `doping_substitution` ||
       traj_source === `reaction_pathway`
+    const compact = frame.position_data
+    if (compact && !force_slow_path) {
+      // Remote constant-topology frames arrive as flat coordinates. Keep the
+      // first frame's structure as topology and publish the packet directly;
+      // this avoids allocating a 20k-object site graph on every timer tick.
+      if (!topology_initialized) {
+        current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
+          ? clone_structure(frame.structure)
+          : frame.structure
+        topology_initialized = true
+      }
+      trajectory_frame_positions = compact.positions
+      trajectory_frame_forces = compact.forces
+      return
+    }
     if (position_cache && !force_slow_path) {
       // Architecture P fast-path: write current_structure once on trajectory
       // load (or new trajectory). Subsequent frames update only the Float32Array,
@@ -707,8 +880,8 @@
         current_structure = frame.structure
         topology_initialized = true
       }
-      trajectory_frame_positions = position_cache[current_step_idx] ?? null
-      trajectory_frame_forces = force_cache?.[current_step_idx] ?? null
+      trajectory_frame_positions = position_cache[active_displayed_frame_idx] ?? null
+      trajectory_frame_forces = force_cache?.[active_displayed_frame_idx] ?? null
       // NOTE: do NOT call sync_structure_sites_to_frame_positions() here.
       // Architecture P requires `current_structure` to stay static during
       // playback / scrub — writing it per-frame triggers the bond pipeline
@@ -735,17 +908,33 @@
       // (element-swap frames), and pending edit ops keep the true
       // per-frame structure-write path.
       const frame_sites = frame.structure.sites
+      const supercell_ledger_active = trajectory?.operation_ledger?.entries.some(
+        (entry) => entry.active && entry.op.kind === `supercell`,
+      )
+      const frame_scoped_structure_ops = trajectory
+        ? has_frame_scoped_structure_ops(trajectory)
+        : false
       if (
-        !force_slow_path && topology_initialized &&
-        current_structure?.sites.length === frame_sites.length &&
-        pending_ops.length === 0
+        supercell_ledger_active && topology_initialized && current_structure &&
+        current_structure.sites.length !== frame_sites.length
       ) {
-        const entry = frame_pos_cache.get(current_step_idx, frame_sites)
+        // An all-scope transform preserves each frame's own N. If the source
+        // trajectory is variable-N, continuous interpolation is invalid: stop
+        // at the first differing frame and keep discrete scrub available.
+        if (is_playing) pause_playback()
+        resume_disabled = true
+      }
+      if (
+        !force_slow_path && !frame_scoped_structure_ops && topology_initialized &&
+        current_structure?.sites.length === frame_sites.length &&
+        (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
+      ) {
+        const entry = frame_pos_cache.get(active_displayed_frame_idx, frame_sites)
         trajectory_frame_positions = entry.positions
         trajectory_frame_forces = entry.forces
       } else {
-        // Streamed loaders no longer deep-clone every fetched frame (see
-        // fork_loader in ./clone.ts), so the loader-cached frame object must
+        // Forked streamed loaders serve immutable base frames (see clone.ts),
+        // so the loader-cached frame object must
         // not become `current_structure` directly — the T5 pause writeback
         // mutates current_structure.sites in place and would corrupt the
         // cached frame for later revisits. Clone once per topology init
@@ -753,7 +942,8 @@
         current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
           ? clone_structure(frame.structure)
           : frame.structure
-        topology_initialized = !force_slow_path && pending_ops.length === 0
+        topology_initialized = !force_slow_path && !frame_scoped_structure_ops &&
+          (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
         trajectory_frame_positions = null
         trajectory_frame_forces = null
       }
@@ -775,25 +965,32 @@
     if (!traj || !topology_initialized) return
     // Only the typed-positions playback path consumes frame_pos_cache.
     if (untrack(() => trajectory_frame_positions) == null) return
+    const loader = (traj as PaneTrajectory).frame_loader
+    // Remote compact packets are already Float32Array-backed. Warming those
+    // through effective_frames would defeat the packet path by materializing
+    // every frame's full 20k-site object graph in the background.
+    if (loader?.load_frame_positions) return
     const total = Math.min(
       traj.total_frames ?? traj.frames.length,
       FRAME_POS_CACHE_MAX,
     )
     if (total <= 1) return
     const gen = ++warmup_gen
-    const loader = (traj as PaneTrajectory).frame_loader
     let idx = 0
     const step = async (deadline?: IdleDeadline) => {
       while (idx < total && gen === warmup_gen) {
         if (deadline && deadline.timeRemaining() < 8) break
         const i = idx++
         try {
-          let frame: TrajectoryFrame | undefined = untrack(() => traj.frames[i])
-          if (!frame?.structure && loader) {
-            frame = (await loader.load_frame(
-              untrack(() => orig_data) ?? ``,
+          let frame: TrajectoryFrame | undefined
+          if (loader) {
+            const source = traj.frame_source_data ?? untrack(() => orig_data) ?? ``
+            frame = (await traj.effective_frames?.resolve(
               i,
+              (frame_idx) => loader.load_frame(source, frame_idx),
             )) ?? undefined
+          } else {
+            frame = untrack(() => traj.frames[i])
           }
           const sites = frame?.structure?.sites
           if (gen !== warmup_gen) return
@@ -835,7 +1032,10 @@
   // per streamed load.
   $effect(() => {
     const traj = trajectory
-    const pending = traj?.plot_metadata_promise
+    // A hidden plot must not kick off an ASE whole-file scan that starves the
+    // position packet endpoint during playback.
+    if (display_mode === `structure`) return
+    const pending = traj?.plot_metadata_promise ?? traj?.plot_metadata_loader?.()
     if (!traj || !pending || traj.plot_metadata) return
     let cancelled = false
     void pending.then((md) => {
@@ -895,6 +1095,13 @@
     }
   }
 
+  function get_presented_frame_data() {
+    return {
+      frame: trajectory?.frames?.[presented_step_idx],
+      frame_count: total_frames,
+    }
+  }
+
   // hide plot if all plotted values are constant (no variation)
   let show_plot = $derived(
     display_mode !== `structure` && !should_hide_plot(trajectory, plot_series),
@@ -912,7 +1119,7 @@
   // Step navigation functions
   function next_step() {
     if (current_step_idx < total_frames - 1) {
-      current_step_idx++
+      request_step(current_step_idx + 1)
       // Streaming frame loading handled by reactive effect
       if (trajectory) {
         const { frame } = get_current_frame_data()
@@ -928,7 +1135,7 @@
 
   function prev_step() {
     if (current_step_idx > 0) {
-      current_step_idx--
+      request_step(current_step_idx - 1)
       // Streaming frame loading handled by reactive effect
       if (trajectory) {
         const { frame } = get_current_frame_data()
@@ -944,7 +1151,7 @@
 
   function go_to_step(idx: number) {
     if (idx >= 0 && idx < total_frames) {
-      current_step_idx = idx
+      request_step(idx)
       // Note: streaming frame loading is handled by reactive effect
       // Handle callbacks for both traditional and streaming modes
       if (trajectory) {
@@ -980,7 +1187,8 @@
   // overwritten and re-applied by drag-commit. Mirror Structure.svelte's
   // Phase 2 override skip if that semantics ever needs to change.
   function sync_structure_sites_to_frame_positions(): void {
-    const positions = trajectory_frame_positions
+    const positions = get_trajectory_frame_source(presented_step_idx)?.positions ??
+      null
     const cur = current_structure
     if (!positions || !cur?.sites) return
     const sites = cur.sites
@@ -1003,9 +1211,18 @@
     // short-circuit on the identity-stable trajectory_frame_lattice being in
     // sync with the current matrix already.
     const cur_lattice = (cur as { lattice?: { matrix?: number[][] } }).lattice
-    const frame_lattice_obj =
-      (current_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
+    const presented_frame = trajectory?.frames?.[presented_step_idx]
+    const materialized_frame_lattice =
+      (presented_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
         ?.lattice
+    const compact_lattice = presented_frame?.position_data?.lattice
+    const frame_lattice_obj = compact_lattice
+      ? {
+          ...(materialized_frame_lattice ?? cur_lattice),
+          matrix: compact_lattice,
+          ...calc_lattice_params(compact_lattice as Matrix3x3),
+        }
+      : materialized_frame_lattice
     const lattice_changed = cur_lattice && frame_lattice_obj &&
       stable_frame_lattice(cur_lattice.matrix ?? null, frame_lattice_obj.matrix) !==
         (cur_lattice.matrix ?? null)
@@ -1023,9 +1240,11 @@
   }
   function start_playback() {
     if (total_frames <= 1) return
+    const show_bonds = trajectory_scene_props?.show_bonds
+    waiting_for_prepared_warmup = show_bonds !== `never`
     is_playing = true
     if (trajectory) {
-      on_play?.({ trajectory, step_idx: current_step_idx, frame_count: total_frames })
+      on_play?.({ trajectory, step_idx: presented_step_idx, frame_count: total_frames })
     }
   }
   function pause_playback() {
@@ -1064,11 +1283,66 @@
     if (trajectory) {
       on_pause?.({
         trajectory: trajectory,
-        step_idx: current_step_idx,
+        step_idx: presented_step_idx,
         frame_count: total_frames,
       })
     }
   }
+
+  function advance_playback_if_due(rate_ms: number): void {
+    if (!is_playing) return
+    const now_ms = performance.now()
+    if (now_ms < next_playback_deadline_ms) return
+    if (waiting_for_prepared_warmup) {
+      if (!may_start_prepared_playback(prepared_ready_ahead, total_frames)) {
+        return
+      }
+      waiting_for_prepared_warmup = false
+    }
+    if (!may_advance_playback({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    })) return
+    next_playback_deadline_ms = advance_playback_deadline(
+      next_playback_deadline_ms,
+      now_ms,
+      rate_ms,
+    )
+    if (current_step_idx >= total_frames - 1) {
+      const { frame } = get_presented_frame_data()
+      if (trajectory) {
+        on_end?.({
+          trajectory,
+          step_idx: presented_step_idx,
+          frame_count: total_frames,
+          frame,
+        })
+      }
+      go_to_step(0)
+      if (trajectory) {
+        on_loop?.({ trajectory, frame_count: total_frames })
+      }
+    } else next_step()
+  }
+
+  function schedule_acknowledged_playback_pump(): void {
+    const now_ms = performance.now()
+    if (!acknowledgement_releases_due_playback(
+      is_playing,
+      now_ms,
+      next_playback_deadline_ms,
+    )) return
+    if (playback_ack_timer !== undefined) return
+    // Leave the renderer acknowledgement stack before requesting the next
+    // packet. This preserves one complete Svelte publication per exact frame
+    // while avoiding up to one polling interval after a late ACK.
+    playback_ack_timer = setTimeout(() => {
+      playback_ack_timer = undefined
+      advance_playback_if_due(1000 / fps)
+    }, 0)
+  }
+
   $effect(() => { // Effect to manage playback interval
     // Only watch is_playing and frame_rate_ms, not play_interval itself
     const playing = is_playing
@@ -1079,24 +1353,15 @@
       const current_interval = untrack(() => play_interval)
       if (current_interval !== undefined) clearInterval(current_interval)
 
-      // Create new interval with current frame rate
+      // Poll backpressure more frequently than the requested frame cadence.
+      // A full-rate interval loses an entire 33 ms slot whenever preparation
+      // completes just after its tick. The monotonic deadline still caps
+      // playback at the requested FPS; short polling only recovers a missed
+      // deadline promptly once the exact frame has been acknowledged.
+      next_playback_deadline_ms = performance.now() + rate_ms
       play_interval = setInterval(() => {
-        if (current_step_idx >= total_frames - 1) {
-          const { frame } = get_current_frame_data()
-          if (trajectory) {
-            on_end?.({
-              trajectory,
-              step_idx: current_step_idx,
-              frame_count: total_frames,
-              frame,
-            })
-          }
-          go_to_step(0) // Loop back to 1st step
-          if (trajectory) {
-            on_loop?.({ trajectory, frame_count: total_frames })
-          }
-        } else next_step()
-      }, rate_ms)
+        advance_playback_if_due(rate_ms)
+      }, playback_poll_interval_ms(rate_ms))
     } else {
       // Clear interval when not playing - use untrack to avoid circular dependency
       const current_interval = untrack(() => play_interval)
@@ -1104,12 +1369,18 @@
         clearInterval(current_interval)
         play_interval = undefined
       }
+      if (playback_ack_timer !== undefined) {
+        clearTimeout(playback_ack_timer)
+        playback_ack_timer = undefined
+      }
+      next_playback_deadline_ms = 0
     }
   })
 
   // Cleanup interval on component destroy
   $effect(() => () => {
     if (play_interval !== undefined) clearInterval(play_interval)
+    if (playback_ack_timer !== undefined) clearTimeout(playback_ack_timer)
     if (pushback_timer) clearTimeout(pushback_timer)
   })
 
@@ -1286,17 +1557,22 @@
         )
       }
 
-      // New trajectory loaded — synchronously reset the pending-ops queue.
-      // (The length-change $effect also resets, but it runs async; the
-      // synchronous code below reads `trajectory.frames[0].structure` and
-      // must not see ops queued against the PREVIOUS trajectory.)
-      pending_ops = []
-      frame_op_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      // New trajectory loaded — synchronously reset pane-local ledger cursors.
+      // The owner-change effect also resets, but later synchronous reads must
+      // not inherit cursor state from the previous trajectory.
+      if (trajectory) ensure_operation_ledger(trajectory)
+      ledger_cursor_ledger = trajectory?.operation_ledger ?? null
+      frame_ledger_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      if (trajectory) trajectory.materialized_ledger_cursors = frame_ledger_cursor
       position_cache = null
       force_cache = null
       traj_load_seq += 1
 
       current_step_idx = 0
+      presented_step_idx = 0
+      presented_positions_version = trajectory_positions_version.v
+      playback_generation++
+      prepared_ready_ahead = 0
       current_filename = filename
 
       const file_size_bytes = data instanceof ArrayBuffer
@@ -1335,19 +1611,16 @@
       const parsed = await parse_trajectory_async(data, filename, (progress) => {
         parsing_progress = progress
       }, { use_indexing: true, ...loading_options })
-      // Attach the frame loader BEFORE publishing: with the trajectory
-      // container exempt from the deep proxy (mark_raw_trajectory), a
-      // post-assignment property write emits no notification of its own —
-      // and consumers must never observe a loader-less indexed trajectory
-      // anyway.
-      // @ts-expect-error - dynamically adding frame_loader for indexed trajectories
-      parsed.frame_loader = create_frame_loader(filename)
+      // Compatibility fallback for older external trajectory objects that
+      // provide a loader without the typed frame_source_data contract.
       orig_data = data
       trajectory = mark_raw_trajectory(parsed)
 
-      // New trajectory — synchronously reset pending-ops queue.
-      pending_ops = []
-      frame_op_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      // New trajectory — synchronously reset pane-local ledger cursors.
+      if (trajectory) ensure_operation_ledger(trajectory)
+      ledger_cursor_ledger = trajectory?.operation_ledger ?? null
+      frame_ledger_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      if (trajectory) trajectory.materialized_ledger_cursors = frame_ledger_cursor
       position_cache = null
       force_cache = null
       traj_load_seq += 1
@@ -1425,286 +1698,537 @@
   let trajectory_export_open = $state(false)
   let fullscreen = $state(false)
 
-  // Cross-frame editing: apply atom manipulations to all frames
+  // Cross-frame editing: one ordered ledger covers physical-site edits,
+  // geometry transforms, and true supercells. In-memory frames keep a cursor
+  // into that ledger; streamed frames resolve from their immutable loader base
+  // through effective_frames.
   type EditMode = 'view' | 'edit-current' | 'edit-all'
   let edit_mode = $state<EditMode>('edit-current')
   let cross_frame_busy = $state(false)
+  let frame_ledger_cursor = $state.raw<number[]>([])
+  let ledger_cursor_ledger: OperationLedger | null = null
 
-  // ─── Pending cross-frame ops (lazy materialization) ───
-  //
-  // Replaces the eager "iterate every frame NOW" model with "record an op
-  // once, apply per-frame when that frame is read". Cross-frame edit cost at
-  // the edit site becomes O(1); per-frame cost is paid lazily on access, or
-  // in bulk via `flush_pending_ops()` before save/export.
-  //
-  // Invariants:
-  //   - `pending_ops` grows append-only. Each entry is an immutable op.
-  //   - `frame_op_cursor[idx] === N` means frame `idx` has applied ops[0..N-1].
-  //   - When `cursor[idx] === pending_ops.length`, frame `idx` is up to date.
-  //   - `flush_pending_ops()` materializes every frame, clears the queue, and
-  //     zeroes all cursors.
-  //
-  // Producers (handle_atoms_deleted enqueues at HEAD; add/replace/manipulate remain
-  // eager and call flush_pending_ops first) push ops via enqueue_pending_op. Consumers
-  // (materialize_frame on read, flush_pending_ops on save/export, _chunked_cross_frame_edit's
-  // flush pre-pass, drag's flush pre-pass) drain. Search "enqueue_pending_op" for the
-  // live producer set.
-  type PendingOp =
-    | { kind: 'delete';     site_indices: number[] }
-    | { kind: 'add';        element: ElementSymbol; position: Vec3 }
-    | { kind: 'replace';    site_indices: number[]; new_element: ElementSymbol }
-    | { kind: 'manipulate'; displacements: Map<number, Vec3> }
-
-  let pending_ops     = $state<PendingOp[]>([])
-  let frame_op_cursor = $state<number[]>([])
-
-  // Bumped whenever the CURRENT frame's positions change in place (atom
-  // edit). Passed to <Structure> → bond-cache driver so bonds recompute
-  // even though current_step_idx didn't move (issue #51 bond defect).
-  // `all` = drop every frame's bond cache (edit-all fan-out), else just idx.
+  // Bumped whenever trajectory positions/topology change. `all` selects whole
+  // trajectory versus captured-frame bond-cache invalidation.
   let trajectory_positions_version = $state<{ v: number; all: boolean }>({ v: 0, all: false })
+  let trajectory_topology_version = $state(0)
 
-  // Keep `frame_op_cursor` length in sync with `trajectory.frames.length`.
-  // The only way the frame count changes in steady state is a brand-new
-  // trajectory being loaded — in that case the old queue is stale and we
-  // discard it. `trajectory = { ...trajectory }` refreshes (same frame count)
-  // do NOT trigger this branch, so in-flight ops survive internal refreshes.
+  function ensure_operation_ledger(owner: TrajectoryType): OperationLedger {
+    owner.operation_ledger ??= new OperationLedger()
+    owner.effective_frames ??= create_effective_frame_resolver(
+      owner.operation_ledger,
+    )
+    return owner.operation_ledger
+  }
+
+  function materialized_cursors(owner: TrajectoryType): number[] {
+    const n = owner.frames.length
+    let cursors = owner.materialized_ledger_cursors
+    if (!cursors || cursors.length !== n) {
+      cursors = new Array(n).fill(0)
+      owner.materialized_ledger_cursors = cursors
+    }
+    if (trajectory === owner && frame_ledger_cursor !== cursors) {
+      frame_ledger_cursor = cursors
+    }
+    return cursors
+  }
+
   $effect(() => {
-    const n = trajectory?.frames?.length ?? 0
-    if (frame_op_cursor.length !== n) {
-      pending_ops = []
-      frame_op_cursor = new Array(n).fill(0)
+    const owner = trajectory
+    const ledger = owner ? ensure_operation_ledger(owner) : null
+    const n = owner?.frames?.length ?? 0
+    if (ledger !== ledger_cursor_ledger || frame_ledger_cursor.length !== n) {
+      ledger_cursor_ledger = ledger
+      frame_ledger_cursor = owner ? materialized_cursors(owner) : []
     }
   })
 
-  /** Pure: apply a single op to a structure, return a new structure. */
-  function apply_op(structure: AnyStructure, op: PendingOp): AnyStructure {
-    switch (op.kind) {
-      case 'delete':
-        return delete_atoms(structure, op.site_indices)
-      case 'add':
-        return add_atom(structure, op.element, op.position)
-      case 'replace': {
-        let s = structure
-        for (const idx of op.site_indices) {
-          s = replace_atom(s, idx, op.new_element)
-        }
-        return s
-      }
-      case 'manipulate': {
-        if (!structure?.sites) return structure
-        // Same xyz+abc delta-add primitive as the directly-committed current
-        // frame, so fanned-out frames stay consistent for fractional export.
-        let inv_flat:
-          | [number, number, number, number, number, number, number, number, number]
-          | null = null
-        if (`lattice` in structure && (structure as PymatgenStructure).lattice) {
-          const li = matrix_inverse_3x3(
-            transpose_3x3_matrix((structure as PymatgenStructure).lattice.matrix),
-          )
-          inv_flat = [
-            li[0][0], li[0][1], li[0][2],
-            li[1][0], li[1][1], li[1][2],
-            li[2][0], li[2][1], li[2][2],
-          ]
-        }
-        return {
-          ...structure,
-          sites: apply_displacements(structure.sites, op.displacements, inv_flat),
-        }
-      }
+  function frame_has_unmaterialized_ops(owner: TrajectoryType, idx: number): boolean {
+    if (owner.frame_loader) return false
+    const ledger = owner.operation_ledger
+    if (!ledger) return false
+    const cursor = materialized_cursors(owner)[idx] ?? 0
+    for (let i = cursor; i < ledger.entries.length; i++) {
+      const entry = ledger.entries[i]
+      if (entry.active && scope_matches_frame(entry.scope, idx)) return true
+    }
+    return false
+  }
+
+  function get_trajectory_frame_source(
+    frame_idx: number,
+  ): TrajectoryFrameSource | null {
+    const frame = trajectory?.frames?.[frame_idx]
+    const sites = frame?.structure?.sites
+    const cached_frame = sites?.length
+      ? frame_pos_cache.get(frame_idx, sites)
+      : null
+    const positions = position_cache?.[frame_idx] ??
+      frame?.position_data?.positions ??
+      cached_frame?.positions ??
+      null
+    if (!positions) return null
+    const first_frame = trajectory?.frames?.[0]
+    const base_lattice = first_frame?.position_data?.lattice ??
+      (first_frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      null
+    const lattice = frame?.position_data?.lattice ??
+      (frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      base_lattice
+    const metadata = trajectory?.metadata as
+      | { source_format?: string; type?: string }
+      | undefined
+    const trajectory_source = metadata?.source_format ?? metadata?.type
+    return {
+      frame_idx,
+      positions,
+      forces: force_cache?.[frame_idx] ??
+        frame?.position_data?.forces ??
+        cached_frame?.forces ??
+        null,
+      lattice: lattice ?? null,
+      positions_version: trajectory_positions_version.v,
+      topology_stable: !frame?.position_data?.topology_changed &&
+        trajectory_source !== `doping_substitution` &&
+        trajectory_source !== `reaction_pathway`,
     }
   }
 
-  /** Apply any unapplied pending ops to frame[idx], cache the result back on
-   *  the frame, advance the cursor, and return the materialized structure.
-   *  Returns `undefined` if idx is out of range or no trajectory. */
+  async function request_trajectory_frame_source(
+    frame_idx: number,
+  ): Promise<TrajectoryFrameSource | null> {
+    const cached = get_trajectory_frame_source(frame_idx)
+    if (cached) return cached
+    const owner = trajectory
+    const loader = (owner as PaneTrajectory | undefined)?.frame_loader
+    if (!owner || !loader || frame_has_unmaterialized_ops(owner, frame_idx)) {
+      return null
+    }
+    const source_data = owner.frame_source_data ?? untrack(() => orig_data) ?? ``
+    const first_frame = owner.frames?.[0]
+    const base_lattice = first_frame?.position_data?.lattice ??
+      (first_frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      null
+    if (loader.load_frame_positions) {
+      const data: FramePositionData | null =
+        await loader.load_frame_positions(source_data, frame_idx)
+      if (trajectory !== owner || !data?.positions) return null
+      return {
+        frame_idx,
+        positions: data.positions,
+        forces: data.forces ?? null,
+        lattice: data.lattice ?? base_lattice,
+        positions_version: trajectory_positions_version.v,
+        topology_stable: !data.topology_changed,
+      }
+    }
+    const frame = await owner.effective_frames?.resolve(
+      frame_idx,
+      (idx) => loader.load_frame(source_data, idx),
+    )
+    if (trajectory !== owner || !frame?.structure?.sites?.length) return null
+    const cached_frame = frame_pos_cache.get(frame_idx, frame.structure.sites)
+    return {
+      frame_idx,
+      positions: cached_frame.positions,
+      forces: frame.position_data?.forces ?? cached_frame.forces ?? null,
+      lattice: frame.position_data?.lattice ??
+        (frame.structure as
+          | { lattice?: { matrix?: number[][] } }
+          | undefined)?.lattice?.matrix ??
+        base_lattice,
+      positions_version: trajectory_positions_version.v,
+      topology_stable: false,
+    }
+  }
+
+  function handle_trajectory_frame_presented(
+    frame_idx: number,
+    positions_version: number,
+  ): void {
+    if (
+      frame_idx !== current_step_idx ||
+      positions_version !== trajectory_positions_version.v
+    ) return
+    const next = acknowledge_playback_frame({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    }, frame_idx)
+    presented_step_idx = next.presented_idx
+    presented_positions_version = positions_version
+    schedule_acknowledged_playback_pump()
+  }
+
+  function handle_trajectory_buffer_state(state: {
+    frame_idx: number
+    ready_ahead: number
+    preparing: boolean
+    error: string | null
+  }): void {
+    if (state.frame_idx !== current_step_idx) return
+    prepared_ready_ahead = state.ready_ahead
+    if (state.error) {
+      error_msg = state.error
+      pause_playback()
+    }
+  }
+
+  function request_step(frame_idx: number): void {
+    const next = request_playback_frame({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    }, frame_idx)
+    current_step_idx = next.requested_idx
+    playback_generation = next.generation
+  }
+
+  $effect(() => {
+    const positions = trajectory_frame_positions
+    const show_bonds = trajectory_scene_props?.show_bonds
+    if (positions && show_bonds === `never`) {
+      handle_trajectory_frame_presented(
+        current_step_idx,
+        trajectory_positions_version.v,
+      )
+    }
+  })
+
+  function has_frame_scoped_structure_ops(owner: TrajectoryType): boolean {
+    return owner.operation_ledger?.entries.some(
+      (entry) => entry.active && entry.scope.kind === `frame` &&
+        [`add`, `delete`, `replace`, `supercell`].includes(entry.op.kind),
+    ) ?? false
+  }
+
+  /** Apply active ledger entries not yet materialized into an in-memory frame. */
   function materialize_frame(idx: number): AnyStructure | undefined {
-    if (!trajectory) return undefined
-    const frames = trajectory.frames
+    const owner = trajectory
+    if (!owner) return undefined
+    const frames = owner.frames
     if (idx < 0 || idx >= frames.length) return undefined
-    const frame = frames[idx]
+    let frame = frames[idx]
     if (!frame) return undefined
-    const cursor = frame_op_cursor[idx] ?? 0
-    if (cursor >= pending_ops.length) return frame.structure
-    let s: AnyStructure = frame.structure
-    for (let i = cursor; i < pending_ops.length; i++) {
-      s = apply_op(s, pending_ops[i])
+    const ledger = ensure_operation_ledger(owner)
+    const cursors = materialized_cursors(owner)
+    const cursor = cursors[idx] ?? 0
+    if (cursor >= ledger.entries.length) return frame.structure
+    for (let i = cursor; i < ledger.entries.length; i++) {
+      const entry = ledger.entries[i]
+      if (entry.active && scope_matches_frame(entry.scope, idx)) {
+        frame = apply_trajectory_edit_op_to_frame(frame, entry.op)
+      }
     }
-    frames[idx] = { ...frame, structure: s }
-    frame_op_cursor[idx] = pending_ops.length
-    return s
+    frames[idx] = frame
+    cursors[idx] = ledger.entries.length
+    return frame.structure
   }
 
-  /** Force all pending ops to be applied to every frame. Call before any
-   *  consumer that reads all frames at once (save, export, bulk serialize).
-   *  After this returns, the queue is empty and every cursor is at zero. */
+  /** Materialize the pane ledger into every in-memory frame before a bulk
+   * consumer reads `trajectory.frames` directly. Streamed consumers already
+   * resolve through effective_frames and remain lazy. */
   function flush_pending_ops(): void {
-    if (!trajectory || pending_ops.length === 0) return
-    for (let i = 0; i < trajectory.frames.length; i++) {
-      materialize_frame(i)
+    const owner = trajectory
+    if (!owner || owner.frame_loader) return
+    const ledger = ensure_operation_ledger(owner)
+    if (!ledger.entries.length) return
+    for (let i = 0; i < owner.frames.length; i++) materialize_frame(i)
+    trajectory = mark_raw_trajectory({ ...owner })
+  }
+
+  function append_edit_op(
+    owner: TrajectoryType,
+    scope: { kind: `all` } | { kind: `frame`; frame_idx: number },
+    op: TrajectoryEditOp,
+    materialized_frame_idx?: number,
+  ): void {
+    const ledger = ensure_operation_ledger(owner)
+    ledger.append(scope, op)
+    if (materialized_frame_idx !== undefined) {
+      materialized_cursors(owner)[materialized_frame_idx] = ledger.entries.length
     }
-    pending_ops = []
-    frame_op_cursor = new Array(trajectory.frames.length).fill(0)
-    // Notify consumers that a bulk update happened (matches the pattern used
-    // by `_chunked_cross_frame_edit` when it completes).
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    if (scope.kind === `all`) owner.effective_frames?.clear()
+    else owner.effective_frames?.invalidate(scope.frame_idx)
+    frame_pos_cache.clear()
+    warmup_gen += 1
   }
 
-  /** Record a cross-frame op without touching any frames. O(1). */
-  function enqueue_pending_op(op: PendingOp): void {
-    pending_ops = [...pending_ops, op]
+  // ── External history (Build T5) ──
+  // Structure's undo/redo routes `{kind:'external'}` entries back here by
+  // token. A record is captured at commit time: indexed owners need only the
+  // ledger entry id (undo/redo toggles its active flag and the effective-frame
+  // resolver re-resolves), in-memory owners also keep the pre-op immutable
+  // frame REFERENCES plus materialization cursors so undo restores them
+  // without cloning and redo replays the toggled ledger over the same base.
+  type ExternalHistoryRecord = {
+    owner: TrajectoryType
+    entry_id: string
+    scope: OpScope
+    frames_before?: TrajectoryFrame[]
+    cursors_before?: number[]
+  }
+  const external_history = new Map<string, ExternalHistoryRecord>()
+  // Structure trims its undo stack at 50; keep a little headroom, evict oldest.
+  const EXTERNAL_HISTORY_LIMIT = 64
+
+  function record_external_history(token: string, record: ExternalHistoryRecord) {
+    external_history.set(token, record)
+    if (external_history.size > EXTERNAL_HISTORY_LIMIT) {
+      const oldest = external_history.keys().next().value
+      if (oldest !== undefined) external_history.delete(oldest)
+    }
   }
 
-  /** True when this trajectory is in-memory (frames mutable, position_cache
-   *  usable). Indexed/streaming trajectories have a frame_loader. */
-  function _is_in_memory(): boolean {
-    if (!trajectory) return false
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
-    return !trajectory.frame_loader
+  /** The one hooks builder both the supercell commit and external undo/redo
+   * toggles share — cache invalidation, republish, and version-bump behavior
+   * must stay identical between the two paths. */
+  function trajectory_supercell_txn_hooks(
+    owner: TrajectoryType,
+    ledger: OperationLedger,
+    opts: {
+      disable_resume?: boolean
+      on_history?: (entry: LedgerEntry) => void
+    } = {},
+  ): SupercellTransactionCommitHooks {
+    return {
+      ledger,
+      replace_frame: (frame_idx, frame) => {
+        if (owner.frame_loader) return
+        owner.frames[frame_idx] = frame
+        materialized_cursors(owner)[frame_idx] = ledger.entries.length
+      },
+      publish_captured_frame: (frame_idx, frame) => {
+        if (
+          trajectory === owner &&
+          displayed_frame_owner?.trajectory === owner &&
+          displayed_frame_idx === frame_idx
+        ) {
+          current_frame = frame
+          current_structure = frame.structure
+        }
+      },
+      clear_position_cache: () => { position_cache = null },
+      clear_force_cache: () => { force_cache = null },
+      invalidate_effective_frames: (scope) => {
+        if (scope.kind === `all`) owner.effective_frames?.clear()
+        else owner.effective_frames?.invalidate(scope.frame_idx)
+      },
+      clear_typed_frame_buffers: () => {
+        frame_pos_cache.clear()
+        trajectory_frame_positions = null
+        trajectory_frame_forces = null
+        last_frame_lattice = null
+        trajectory_frame_lattice = null
+      },
+      reset_topology: () => {
+        topology_initialized = false
+        supercell_scaling = `1x1x1`
+        if (opts.disable_resume) resume_disabled = true
+      },
+      // Structure's bond cache consumes the version bump below; keeping the
+      // invalidation hook explicit documents that this transaction covers it.
+      invalidate_bond_caches: () => {},
+      invalidate_warmup: () => { warmup_gen += 1 },
+      bump_position_version: (scope) => {
+        trajectory_positions_version = {
+          v: trajectory_positions_version.v + 1,
+          all: scope.kind === `all`,
+        }
+      },
+      bump_topology_version: () => {
+        trajectory_topology_version += 1
+        if (trajectory === owner) {
+          trajectory = mark_raw_trajectory({ ...owner })
+        }
+      },
+      history_token: (entry) => {
+        opts.on_history?.(entry)
+        return `trajectory-supercell-${entry.id}`
+      },
+    }
   }
-  /** Gate for cross-frame propagation of add/delete/replace edits: true only
-   *  in edit-all on an in-memory trajectory. In the default `edit-current`
-   *  mode these edits stay current-frame-scoped (intentional per the 3-state
-   *  model — issue #51). */
-  function _can_cross_frame_edit(): boolean {
-    return edit_mode === 'edit-all' && _is_in_memory()
+
+  /** Undo (`active=false`) / redo (`active=true`) one external history token.
+   * Returns false when the token is unknown or its owner is no longer the
+   * pane's live trajectory (a replacement load orphans old tokens). */
+  function handle_external_history_toggle(
+    history_token: string,
+    active: boolean,
+  ): boolean {
+    const record = external_history.get(history_token)
+    if (!record) return false
+    const { owner, entry_id, scope } = record
+    if (trajectory !== owner) return false
+    const ledger = ensure_operation_ledger(owner)
+    const restore = record.frames_before
+      ? () => {
+        const frames_before = record.frames_before!
+        const cursors_before = record.cursors_before ?? []
+        // Index-assign so the frames ARRAY identity is preserved — the B3
+        // frames-identity effect must not read this restoration as a new
+        // trajectory (that would wrongly reset the supercell label).
+        for (let idx = 0; idx < frames_before.length; idx++) {
+          owner.frames[idx] = frames_before[idx]
+        }
+        const cursors = materialized_cursors(owner)
+        for (let idx = 0; idx < cursors.length; idx++) {
+          cursors[idx] = cursors_before[idx] ?? 0
+        }
+        const idx = current_step_idx
+        if (idx < 0 || idx >= owner.frames.length) return undefined
+        // Re-materialize the displayed frame against the toggled active set
+        // so the republished frame reflects the undone/redone ledger state.
+        materialize_frame(idx)
+        const frame = owner.frames[idx]
+        return frame ? { frame_idx: idx, frame } : undefined
+      }
+      : undefined
+    return toggle_supercell_history_entry(
+      { entry_id, active, scope, restore },
+      trajectory_supercell_txn_hooks(owner, ledger),
+    )
+  }
+
+  const request_trajectory_supercell = create_trajectory_supercell_request_handler({
+    capture: () => {
+      const owner = trajectory
+      const frame_idx = displayed_frame_idx
+      const owner_token = displayed_frame_owner
+      const frame = current_frame
+      if (
+        !owner || frame_idx === null || !frame ||
+        owner_token?.trajectory !== owner || owner_token.frame_idx !== frame_idx
+      ) return null
+      return {
+        owner,
+        frame_idx,
+        frame,
+        mode: edit_mode,
+        ledger: ensure_operation_ledger(owner),
+      }
+    },
+    get_active_owner: () => trajectory,
+    get_mode: () => edit_mode,
+    is_captured_frame_current: (token) =>
+      !!token.owner.frame_loader || token.owner.frames[token.frame_idx] === token.frame,
+    snapshot: (structure) => $state.snapshot(structure),
+    prepare_current_topology_edit: () => {
+      if (is_playing) pause_playback()
+    },
+    commit: (publication) => {
+      const { owner, ledger, mode } = publication.token
+      // Capture pre-op immutable frame references + cursors BEFORE the commit
+      // mutates them; undo restores these exact references (in-memory only —
+      // indexed owners resolve through the ledger, nothing to capture).
+      const in_memory = !owner.frame_loader
+      const frames_before = in_memory ? [...owner.frames] : undefined
+      const cursors_before = in_memory ? [...materialized_cursors(owner)] : undefined
+      return commit_supercell_transaction(
+        publication,
+        trajectory_supercell_txn_hooks(owner, ledger, {
+          disable_resume: mode === `edit-current`,
+          on_history: (entry) =>
+            record_external_history(`trajectory-supercell-${entry.id}`, {
+              owner,
+              entry_id: entry.id,
+              scope: entry.scope,
+              frames_before,
+              cursors_before,
+            }),
+        }),
+      )
+    },
+  })
+  let supercell_busy_request = 0
+  async function handle_trajectory_supercell_request(
+    op: Parameters<typeof request_trajectory_supercell>[0],
+  ) {
+    if (presentation_pending) {
+      throw new Error(`Wait for the requested trajectory frame to be presented.`)
+    }
+    const request = ++supercell_busy_request
+    cross_frame_busy = true
+    try {
+      return await request_trajectory_supercell(op)
+    } finally {
+      if (request === supercell_busy_request) cross_frame_busy = false
+    }
+  }
+
+  function current_edit_frame(owner: TrajectoryType, idx: number): TrajectoryFrame | null {
+    if (!owner.frame_loader) {
+      materialize_frame(idx)
+      return owner.frames[idx] ?? null
+    }
+    if (
+      displayed_frame_owner?.trajectory === owner &&
+      displayed_frame_idx === idx
+    ) return current_frame
+    return null
+  }
+
+  function commit_physical_edit(op: TrajectoryEditOp, topology_change: boolean): void {
+    const owner = trajectory
+    if (!owner || edit_mode === `view` || presentation_pending) return
+    const idx = presented_step_idx
+    const source = current_edit_frame(owner, idx)
+    if (!source?.structure) return
+
+    // apply_trajectory_edit_op_to_frame clears supercell provenance BEFORE an
+    // individual physical-site mutation, then returns the complete new frame.
+    const edited = apply_trajectory_edit_op_to_frame(source, op)
+    const scope = edit_mode === `edit-all`
+      ? { kind: `all` as const }
+      : { kind: `frame` as const, frame_idx: idx }
+    if (!owner.frame_loader) owner.frames[idx] = edited
+    append_edit_op(owner, scope, op, owner.frame_loader ? undefined : idx)
+
+    if (
+      displayed_frame_owner?.trajectory === owner &&
+      displayed_frame_idx === idx
+    ) {
+      current_frame = edited
+      current_structure = edited.structure
+    }
+
+    if (topology_change || edit_mode === `edit-all`) {
+      position_cache = null
+      force_cache = null
+      frame_pos_cache.clear()
+    } else {
+      const slice = position_cache?.[idx]
+      if (slice) write_sites_to_cache_slice(slice, edited.structure.sites)
+    }
+    if (topology_change) {
+      topology_initialized = false
+      trajectory_topology_version += 1
+    }
+    trajectory_positions_version = {
+      v: trajectory_positions_version.v + 1,
+      all: scope.kind === `all`,
+    }
+    trajectory = mark_raw_trajectory({ ...owner })
   }
 
   function handle_atoms_manipulated(event: AtomManipulationEvent) {
-    if (!trajectory) return
-    const { displacements } = event
-    if (displacements.size === 0) return
-
-    // view mode: edits disabled. (Edits shouldn't fire, but guard anyway —
-    // never silently mutate while the user is in inspect mode.)
-    if (edit_mode === `view`) return
-    if (!_is_in_memory()) {
-      // Indexed/streaming: positions live in frame.structure already (slow
-      // path writes current_structure = frame.structure each frame). Just
-      // refresh so the change is observed.
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // Catch every frame (incl. the current one) up to the pending queue
-    // before this eager in-place edit, so we commit on top of the latest
-    // materialized state and a prior lazy op can't be skipped on the
-    // current frame (its cursor is pre-advanced below). No-op when the
-    // queue is empty. Restores the guard the old `_chunked_cross_frame_edit`
-    // ran before every eager edit.
-    flush_pending_ops()
-
-    const frames = trajectory.frames
-    const idx = current_step_idx
-
-    // Build inverse-lattice once (cartesian Δ → fractional Δ for abc).
-    let inv: Matrix3x3 | null = null
-    const ref = frames[idx]?.structure
-    if (ref && `lattice` in ref && (ref as PymatgenStructure).lattice) {
-      const lat = (ref as PymatgenStructure).lattice
-      inv = matrix_inverse_3x3(transpose_3x3_matrix(lat.matrix))
-    }
-    const inv_flat = inv
-      ? [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]] as
-        [number, number, number, number, number, number, number, number, number]
-      : null
-
-    // ── Single write path: always commit the CURRENT frame first ──────────
-    const cur = frames[idx]
-    if (cur?.structure?.sites) {
-      const new_sites = apply_displacements(cur.structure.sites, displacements, inv_flat)
-      frames[idx] = { ...cur, structure: { ...cur.structure, sites: new_sites } }
-      // Mirror straight into the render source so Phase-2 GPU + bond getter
-      // see the edit. The snap-back window is fully closed once Task 6
-      // reorders interaction.svelte.ts to fire this BEFORE clearing
-      // realtime_position_overrides.
-      const slice = position_cache?.[idx]
-      if (slice) write_sites_to_cache_slice(slice, new_sites)
-    }
-
-    if (edit_mode === `edit-current`) {
-      // Signal bond pipeline THIS frame changed (drop only idx's cache).
-      trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: false }
-      // Other frames stay independent (use-case 2).
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // ── edit-all: fan out lazily via the pending-ops machinery ────────────
-    // (use-case 3: many frames, must not freeze). Other frames materialize
-    // their copy of this displacement on next read (scrub / export / flush)
-    // exactly like the proven `delete` path. The current frame is already
-    // committed above, so record the op with its cursor pre-advanced past
-    // the current frame.
-    enqueue_pending_op({ kind: `manipulate`, displacements: new Map(displacements) })
-    frame_op_cursor[idx] = pending_ops.length // current frame already applied
-    // Drop EVERY frame's bond cache (lazy recompute via keyframe/prefetch
-    // scheduler keeps long trajectories smooth).
-    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    if (event.displacements.size === 0) return
+    commit_physical_edit({
+      kind: `manipulate`,
+      displacements: new Map(event.displacements),
+    }, false)
   }
 
-  /**
-   * Unified topology-edit write path (add / delete / replace), mirroring the
-   * #51 manipulate path. Always commits the CURRENT frame (the fast-path
-   * renders position_cache / slow-path renders frames[idx].structure — NOT
-   * the bound current_structure — so the current frame must be committed
-   * here, never skipped). Topology changes atom count → drop position_cache
-   * (slow-path renders the edited frame; bond cache invalidated via the
-   * {all:true} positions-version). edit-current stops; edit-all fans the op
-   * out lazily via the existing pending-ops machinery.
-   */
-  function _apply_topology_op(op: PendingOp) {
-    // W5: a topology-altering edit while paused disables resume (even in the
-    // not-in-memory case the local topology / position_cache is now invalid).
+  function _apply_topology_op(op: TrajectoryEditOp) {
     if (!is_playing) resume_disabled = true
-    if (!trajectory) return
-    if (edit_mode === `view`) return
-    if (!_is_in_memory()) {
-      // Indexed/streaming slow path already renders frame.structure each
-      // frame; the editing UI mutated the current structure via bind. Just
-      // refresh so the change is observed.
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // Catch every frame up to the pending queue before this eager topology
-    // edit, so the current frame is committed on top of the latest
-    // materialized state and a prior lazy op can't be skipped on it (its
-    // cursor is pre-advanced below). No-op when the queue is empty.
-    // Restores the guard the old `_chunked_cross_frame_edit` ran first.
-    flush_pending_ops()
-
-    const frames = trajectory.frames
-    const idx = current_step_idx
-    const cur = frames[idx]
-    if (!cur?.structure) return
-
-    // Commit the CURRENT frame.
-    frames[idx] = { ...cur, structure: apply_op(cur.structure, op) }
-
-    // Topology changed: the Float32 position cache (fixed per-frame length)
-    // is invalid. Dropping it makes the render fall back to the slow path
-    // (current_structure = frames[idx].structure) so the edit is visible on
-    // the current frame; the {all:true} bump invalidates every bond frame.
-    position_cache = null
-    force_cache = null
-    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-
-    if (edit_mode === `edit-current`) {
-      // Other frames stay independent (use-case 2).
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // edit-all: fan out lazily (use-case 3 — many frames, must not freeze).
-    // Other frames materialize this op on next read (scrub / export / flush)
-    // exactly like the proven delete path. Current frame already applied →
-    // pre-advance its cursor so materialize_frame won't re-apply it.
-    enqueue_pending_op(op)
-    frame_op_cursor[idx] = pending_ops.length
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    commit_physical_edit(op, true)
   }
 
   function handle_atom_added(event: { element: ElementSymbol; position: Vec3 }) {
@@ -1727,8 +2251,8 @@
   // recompute.
   const manifest_formula_cache = new WeakMap<object, string>()
   function manifest_formula(): string {
-    const structure = current_structure ?? current_frame?.structure ??
-      trajectory?.frames?.[current_step_idx]?.structure
+    const structure = trajectory?.frames?.[presented_step_idx]?.structure ??
+      current_structure
     if (!structure) return ``
     const cached = manifest_formula_cache.get(structure as object)
     if (cached !== undefined) return cached
@@ -1746,13 +2270,12 @@
   }
 
   function inspect_trajectory_atoms() {
-    const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+    const structure = trajectory?.frames?.[presented_step_idx]?.structure
     return build_atom_graph(structure)
   }
 
   function require_editable_memory_trajectory(): TrajectoryType {
     if (!trajectory) throw new Error(`No trajectory loaded.`)
-    // @ts-expect-error frame_loader is a runtime extension
     if (trajectory.frame_loader) {
       throw new Error(`All-frame edits on streamed trajectories are not available until every frame is materialized.`)
     }
@@ -1763,21 +2286,24 @@
   }
 
   function scale_all_frames(factor: number): TrajectoryType {
-    if (!trajectory) throw new Error(`No trajectory loaded.`)
+    const owner = trajectory
+    if (!owner) throw new Error(`No trajectory loaded.`)
     if (!Number.isFinite(factor) || factor <= 0) {
       throw new Error(`Scale factor must be positive.`)
     }
-    flush_pending_ops()
-    trajectory.frames = trajectory.frames.map((frame) => ({
-      ...frame,
-      structure: scale_structure_geometry(frame.structure, factor),
-    }))
-    const pane_trajectory = trajectory as PaneTrajectory
-    if (pane_trajectory.frame_loader) {
-      pane_trajectory.pane_transformations ??= []
-      pane_trajectory.pane_transformations.push({ kind: `scale_geometry`, factor })
-    }
-    return trajectory
+    const current = owner.frame_loader
+      ? current_edit_frame(owner, current_step_idx)
+      : null
+    const op: TrajectoryEditOp = { kind: `scale_geometry`, factor }
+    append_edit_op(owner, { kind: `all` }, op)
+    if (owner.frame_loader) {
+      if (current) {
+        const edited = apply_trajectory_edit_op_to_frame(current, op)
+        current_frame = edited
+        current_structure = edited.structure
+      }
+    } else flush_pending_ops()
+    return owner
   }
 
   function refresh_after_external_edit(): void {
@@ -1790,7 +2316,16 @@
   }
 
   function handle_trajectory_command(action: string, args: Record<string, unknown>) {
-    if (action === `inspect`) return { atoms: inspect_trajectory_atoms(), current_frame: current_step_idx, total_frames }
+    if (action === `inspect`) {
+      return {
+        atoms: inspect_trajectory_atoms(),
+        current_frame: presented_step_idx,
+        total_frames,
+      }
+    }
+    if (presentation_pending) {
+      throw new Error(`Wait for the requested trajectory frame to be presented.`)
+    }
     if (action === `add_atom`) {
       const target = require_editable_memory_trajectory()
       const element = String(args.element ?? ``) as ElementSymbol
@@ -1798,14 +2333,12 @@
       if (!element || position.length !== 3 || !position.every(Number.isFinite)) {
         throw new Error(`element and a 3D Cartesian position are required.`)
       }
-      target.frames = target.frames.map((frame) => ({
-        ...frame,
-        structure: add_atom(
-          frame.structure,
-          element,
-          [position[0], position[1], position[2]],
-        ),
-      }))
+      append_edit_op(target, { kind: `all` }, {
+        kind: `add`,
+        element,
+        position: [position[0], position[1], position[2]],
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1815,9 +2348,11 @@
       const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
         .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
       if (!indices.length) throw new Error(`At least one valid atom index is required.`)
-      for (let i = 0; i < target.frames.length; i++) {
-        target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
-      }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `delete`,
+        site_indices: indices,
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1830,15 +2365,11 @@
           moves.set(Number(move.index), [d[0], d[1], d[2]])
         }
       }
-      for (let i = 0; i < target.frames.length; i++) {
-        const structure = target.frames[i].structure
-        let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
-        if (`lattice` in structure && structure.lattice) {
-          const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
-          inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
-        }
-        target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, moves, inv_flat) } }
-      }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `manipulate`,
+        displacements: moves,
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1849,11 +2380,12 @@
       const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
         .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
       if (!element || !indices.length) throw new Error(`element and atom indices are required.`)
-      target.frames = target.frames.map((frame) => {
-        let structure = frame.structure
-        for (const index of indices) structure = replace_atom(structure, index, element)
-        return { ...frame, structure }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `replace`,
+        site_indices: indices,
+        new_element: element,
       })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1879,18 +2411,20 @@
         formula: manifest_formula(),
         kind: trajectory ? `trajectory` : `empty`,
         active: is_active,
-        current_frame: current_step_idx,
+        current_frame: presented_step_idx,
         total_frames,
-        atom_count: (current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure)?.sites?.length ?? 0,
-        // @ts-expect-error frame_loader is a runtime extension
+        atom_count: trajectory?.frames?.[presented_step_idx]?.structure?.sites
+          ?.length ?? 0,
         streaming: !!trajectory?.frame_loader,
-        // @ts-expect-error frame_loader is a runtime extension
         editable: !!trajectory && !trajectory.frame_loader,
       }),
-      get_structure: () => current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure,
+      get_structure: () => trajectory?.frames?.[presented_step_idx]?.structure,
       set_structure: (next) => {
-        if (!trajectory?.frames?.[current_step_idx]) return
-        trajectory.frames[current_step_idx] = { ...trajectory.frames[current_step_idx], structure: next }
+        if (presentation_pending || !trajectory?.frames?.[presented_step_idx]) return
+        trajectory.frames[presented_step_idx] = {
+          ...trajectory.frames[presented_step_idx],
+          structure: next,
+        }
         refresh_after_external_edit()
       },
       set_scene_prop: (key, value) => {
@@ -1898,7 +2432,7 @@
       },
       set_selection: (indices) => { selected_sites = indices },
       select_by_element: (element) => {
-        const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+        const structure = trajectory?.frames?.[presented_step_idx]?.structure
         const indices = (structure?.sites ?? [])
           .map((site, idx) => site.species?.[0]?.element === element ? idx : -1)
           .filter((idx) => idx >= 0)
@@ -1909,42 +2443,40 @@
       inspect_atoms: inspect_trajectory_atoms,
       add_atom: (element, position) => {
         const target = require_editable_memory_trajectory()
-        target.frames = target.frames.map((frame) => ({
-          ...frame,
-          structure: add_atom(frame.structure, element as ElementSymbol, position),
-        }))
+        append_edit_op(target, { kind: `all` }, {
+          kind: `add`,
+          element: element as ElementSymbol,
+          position,
+        })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       delete_atoms: (indices) => {
         const target = require_editable_memory_trajectory()
-        for (let i = 0; i < target.frames.length; i++) {
-          target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
-        }
+        append_edit_op(target, { kind: `all` }, { kind: `delete`, site_indices: indices })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       replace_atoms: (indices, element) => {
         const target = require_editable_memory_trajectory()
-        target.frames = target.frames.map((frame) => {
-          let structure = frame.structure
-          for (const index of indices) structure = replace_atom(structure, index, element as ElementSymbol)
-          return { ...frame, structure }
+        append_edit_op(target, { kind: `all` }, {
+          kind: `replace`,
+          site_indices: indices,
+          new_element: element as ElementSymbol,
         })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       move_atoms: (displacements) => {
         const target = require_editable_memory_trajectory()
-        for (let i = 0; i < target.frames.length; i++) {
-          const structure = target.frames[i].structure
-          let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
-          if (`lattice` in structure && structure.lattice) {
-            const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
-            inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
-          }
-          target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, displacements, inv_flat) } }
-        }
+        append_edit_op(target, { kind: `all` }, {
+          kind: `manipulate`,
+          displacements,
+        })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
@@ -1957,15 +2489,21 @@
     return cleanup
   })
 
+  const manifest_frame_bucket = $derived(
+    is_playing
+      ? Math.floor(presented_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)
+      : presented_step_idx,
+  )
   $effect(() => {
     if (!viewer_id) return
     trajectory
-    current_step_idx
-    current_frame
+    manifest_frame_bucket
     pane_position
     is_active
     filename
-    refresh_viewer_manifest(viewer_id)
+    // get_manifest reads the exact current frame. Keep that read outside this
+    // effect's dependency collection or it defeats the playback bucket above.
+    untrack(() => refresh_viewer_manifest(viewer_id))
     if (is_active) set_active_viewer(viewer_id)
   })
 </script>
@@ -2028,18 +2566,17 @@
   {:else if trajectory}
     <!-- Trajectory Controls -->
     {#if supercell_scaling !== `1x1x1`}
-      <div class="traj-supercell-warning" data-testid="traj-supercell-warning" role="alert">
-        Supercell + trajectory: positions only cover the base cell. Atoms in
-        supercell replicas display the topology-load positions, not the
-        per-frame trajectory data.
+      <div class="traj-supercell-warning" data-testid="traj-supercell-warning" role="status">
+        Supercell + trajectory: replicas render the current base frame and
+        share its atom and bond topology.
       </div>
     {/if}
     {#if show_controls}
       <div class="trajectory-controls">
         {#if trajectory_controls}
-          {@render trajectory_controls({
+      {@render trajectory_controls({
         trajectory,
-        current_step_idx,
+        current_step_idx: presented_step_idx,
         total_frames: total_frames,
         on_step_change: go_to_step,
       })}
@@ -2109,7 +2646,9 @@
               type="number"
               min="0"
               max={total_frames - 1}
-              bind:value={current_step_idx}
+              value={presented_step_idx}
+              onchange={(event) =>
+                go_to_step(Number((event.currentTarget as HTMLInputElement).value))}
               class="step-input"
               title="Enter step number to jump to"
               aria-label="Step input"
@@ -2121,7 +2660,10 @@
                 type="range"
                 min="0"
                 max={total_frames - 1}
-                bind:value={current_step_idx}
+                value={current_step_idx}
+                oninput={(event) =>
+                  go_to_step(Number((event.currentTarget as HTMLInputElement).value))}
+                aria-busy={presentation_pending}
                 class="step-slider"
                 title="Drag to navigate steps"
               />
@@ -2180,7 +2722,7 @@
                   ? `Saved to ${remote_origin?.dir_path}/${pushback_message}`
                   : pushback_status === `error`
                     ? `Error: ${pushback_message}`
-                    : `Push frame ${current_step_idx} back to ${remote_origin?.dir_path}/${current_frame_source}`}
+                    : `Push frame ${presented_step_idx} back to ${remote_origin?.dir_path}/${current_frame_source}`}
                 class="push-back-btn"
                 class:saved={pushback_status === `saved`}
                 class:error={pushback_status === `error`}
@@ -2213,7 +2755,7 @@
                 : `Edit all frames (sync) — applies to every frame`}
               class="cross-frame-toggle"
               class:active={edit_mode !== `view`}
-              disabled={cross_frame_busy}
+              disabled={cross_frame_busy || presentation_pending}
             >
               {#if cross_frame_busy}
                 <Spinner style="width: 14px; height: 14px;" />
@@ -2224,7 +2766,7 @@
             {#if trajectory}
               <TrajectoryInfoPane
                 {trajectory}
-                {current_step_idx}
+                current_step_idx={presented_step_idx}
                 {current_filename}
                 {current_file_path}
                 {file_size}
@@ -2342,26 +2884,18 @@
           {tab_id}
           {viewer_id}
           {is_active}
-          bridge_structure={current_frame?.structure}
+          bridge_structure={trajectory?.frames?.[presented_step_idx]?.structure}
           handle_viewer_command={handle_trajectory_command}
           {trajectory_frame_positions}
           {trajectory_frame_forces}
           {trajectory_frame_lattice}
           trajectory_step_idx={current_step_idx}
           trajectory_positions_version={trajectory_positions_version}
-          get_trajectory_frame_positions={(i: number) => {
-            const c = position_cache?.[i]
-            if (c) return c
-            // position_cache transiently null (an edit-all enqueued a
-            // pending op in the same flush that nulled it): fall back to
-            // the already-committed frame sites so the bond pipeline never
-            // reads null mid-edit (issue #60). Indexed/streaming frames
-            // have no in-memory structure → null (slow path handles it).
-            const sites = (
-              trajectory?.frames?.[i]?.structure as { sites?: { xyz: [number, number, number] }[] } | undefined
-            )?.sites
-            return sites ? sites_to_float32(sites) : null
-          }}
+          trajectory_frame_count={total_frames}
+          {get_trajectory_frame_source}
+          {request_trajectory_frame_source}
+          on_trajectory_frame_presented={handle_trajectory_frame_presented}
+          on_trajectory_buffer_state={handle_trajectory_buffer_state}
           allow_file_drop={false}
           style="height: 100%; min-height: 0; z-index: 3; border-radius: 0"
           {...{
@@ -2380,6 +2914,8 @@
           on_atom_added={handle_atom_added}
           on_atoms_deleted={handle_atoms_deleted}
           on_atom_replaced={handle_atom_replaced}
+          on_supercell_request={handle_trajectory_supercell_request}
+          on_external_history_toggle={handle_external_history_toggle}
           hide_extra_tools={structure_props?.hide_extra_tools ?? true}
           trajectory_context={{ total_frames, on_step: (idx: number) => go_to_step(idx) }}
         />
@@ -2393,7 +2929,7 @@
             {y_axis}
             {y2_axis}
             controls={scatter_controls}
-            current_x_value={current_step_idx}
+            current_x_value={presented_step_idx}
             change={plot_skimming ? handle_plot_change : undefined}
             padding={{ t: 20, b: 60, l: 100, r: has_y2_series ? 100 : 20 }}
             range_padding={0}

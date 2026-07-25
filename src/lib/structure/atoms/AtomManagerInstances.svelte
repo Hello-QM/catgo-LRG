@@ -36,13 +36,19 @@
    */
 
   import type { Vec3 } from '$lib'
-  import { untrack } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import type { InstancedMesh } from 'three'
   import { Color, PlaneGeometry, ShaderMaterial, Vector3 } from 'three'
+  import WebGLReplicaLayer from '../gpu/WebGLReplicaLayer.svelte'
+  import { SharedPositionTexture } from '../gpu/webgl2/shared-position-texture'
+  import type { RenderPacket } from '../scene/render-packet'
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
   import { get_atom_matcap, type MatcapPreset } from './matcap-texture'
+  // Shared style mapping (#533) — the legacy material and the packet/replica
+  // impostor path must agree on what each Appearance → Material style means.
+  import { render_style_to_int, style_pbr } from './render-style'
 
   interface Props {
     atom_manager: AtomManager
@@ -99,6 +105,16 @@
      *  static cap is simpler + safer than dynamic grow-on-demand (which has
      *  an effect-ordering race — see git history for details). */
     max_capacity?: number
+    /**
+     * gpu-visual-supercell packet path (Task 4). For ANY non-null packet —
+     * including 1×1×1 — the persistent WebGL2 replica impostor layer draws
+     * from base-sized buffers and the legacy InstancedMesh is not mounted at
+     * all (therefore no hidden capacity-sized instanceMatrix). `null` keeps
+     * the legacy path byte-identical. Task 6 plumbs the packet from the scene.
+     */
+    render_packet?: RenderPacket | null
+    /** The scene-level combined layer owns packet visuals for this manager. */
+    packet_renderer_owned?: boolean
   }
 
   let {
@@ -119,34 +135,13 @@
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
     highlight_strength = 1.0,
     max_capacity = 200_000,
+    render_packet = null,
+    packet_renderer_owned = false,
   }: Props = $props()
 
-  // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
-  function render_style_to_int(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
-  ): number {
-    // Map onto the shader branches (0 glossy/Blinn-Phong, 1 matte diffuse,
-    // 2 toon, 3 matcap). Metallic reuses the specular branch; 2.5D-soft and
-    // 2D-flat reuse the matte branch — their distinct look comes from the
-    // per-style lighting profile, not a new GLSL branch.
-    if (style === `toon`) return 2
-    if (style === `matcap`) return 3
-    if (style === `matte` || style === `soft` || style === `flat`) return 1
-    return 0
-  }
-
-  // Per-render-style PBR (roughness, metalness) for the GGX specular branch,
-  // ported from pretty-lattice's material presets: glossy = crisp dielectric
-  // hot spot, metallic = a bigger/softer, element-colour-tinted highlight.
-  function style_pbr(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
-  ): { roughness: number; metalness: number } {
-    return style === `metallic`
-      ? { roughness: 0.4, metalness: 0.4 }
-      : { roughness: 0.2, metalness: 0.0 }
-  }
-
   const threlte = useThrelte()
+  const packet_position_resource = new SharedPositionTexture()
+  onDestroy(() => packet_position_resource.dispose())
 
   // Render-loop refactor (R4c): all canvas-paint requests in this component
   // route through mark_dirty() — single grep target + DEV counter contribution.
@@ -670,13 +665,31 @@
   })
 </script>
 
-<!-- Single mesh, fixed `max_capacity` (default 200k) avoids the remount race
-     between capacity-growth and main-sync $effects. See the "Mesh refs"
-     comment above for why we don't replicate AtomImpostors's opaque /
-     transparent two-mesh split. -->
-<T.InstancedMesh
-  args={[opaque_geometry, opaque_material, max_capacity]}
-  bind:ref={opaque_mesh}
-  frustumCulled={false}
-  raycast={null}
-/>
+{#if packet_renderer_owned}
+  <!-- The scene-level combined packet layer owns all atom visuals. -->
+{:else if render_packet}
+  <!-- Packet path is persistent from 1× upward. Do not mount a hidden legacy
+       InstancedMesh: its unused capacity-sized instanceMatrix is exactly the
+       allocation this path removes, and 1×↔N× must not remount resources. -->
+  <WebGLReplicaLayer
+    packet={render_packet}
+    position_resource={packet_position_resource}
+    show_bonds={false}
+    {ambient_light}
+    {directional_light}
+    {light_dir}
+    {render_style}
+    {matcap_preset}
+    {highlight_strength}
+    ghost_opacity={image_atom_opacity}
+  />
+{:else}
+  <!-- Legacy non-packet path: fixed `max_capacity` avoids the historic
+       capacity-growth/main-sync remount race. -->
+  <T.InstancedMesh
+    args={[opaque_geometry, opaque_material, max_capacity]}
+    bind:ref={opaque_mesh}
+    frustumCulled={false}
+    raycast={null}
+  />
+{/if}

@@ -27,3 +27,32 @@ export {
   is_atom_pickable as is_atom_pickable_pure,
   build_highlight_entries,
 } from './picking'
+
+export { assert_render_packet, diff_render_packet } from './render-packet'
+export type {
+  BaseBondGraph,
+  BaseTopology,
+  BoundaryPolicy,
+  FrameGeometry,
+  ImageInstanceTable,
+  RenderPacket,
+  RenderPacketDiff,
+  ReplicaLayout,
+  ReplicaPickResult,
+  ReplicaSemantics,
+} from './render-packet'
+
+export {
+  build_image_instance_table,
+  decode_replica_instance,
+  encode_cell_index,
+  logical_site_for_pick,
+  replica_translation,
+  resolve_periodic_edge,
+} from './replica-layout'
+export type {
+  PeriodicBond,
+  ReplicaInstance,
+  ResolvedEdge,
+  ResolvedEdgeState,
+} from './replica-layout'

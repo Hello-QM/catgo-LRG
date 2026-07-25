@@ -7,6 +7,7 @@ import {
   parse_trajectory_async,
   TrajFrameReader,
 } from '$lib/trajectory/parse'
+import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
 import { generate_streaming_plot_series } from '$lib/trajectory/plotting'
 import { describe, expect, it } from 'vitest'
 
@@ -75,6 +76,45 @@ describe(`Trajectory Streaming`, () => {
       current_offset += 8 + frame_data.length
     }
 
+    return buffer
+  }
+
+  const strip_ase_numbers_after_first = (
+    buffer: ArrayBuffer,
+    num_frames: number,
+  ): ArrayBuffer => {
+    const view = new DataView(buffer)
+    const offsets_pos = Number(view.getBigInt64(40, true))
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const token = `"numbers":[1,1],`
+    for (let idx = 1; idx < num_frames; idx++) {
+      const frame_offset = Number(view.getBigInt64(offsets_pos + idx * 8, true))
+      const json_length = Number(view.getBigInt64(frame_offset, true))
+      const bytes = new Uint8Array(buffer, frame_offset + 8, json_length)
+      const json = decoder.decode(bytes)
+      const stripped = json.replace(token, ` `.repeat(token.length))
+      expect(stripped).not.toBe(json)
+      bytes.set(encoder.encode(stripped))
+    }
+    return buffer
+  }
+
+  const change_ase_number = (
+    buffer: ArrayBuffer,
+    frame_idx: number,
+  ): ArrayBuffer => {
+    const view = new DataView(buffer)
+    const offsets_pos = Number(view.getBigInt64(40, true))
+    const frame_offset = Number(view.getBigInt64(offsets_pos + frame_idx * 8, true))
+    const json_length = Number(view.getBigInt64(frame_offset, true))
+    const bytes = new Uint8Array(buffer, frame_offset + 8, json_length)
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const json = decoder.decode(bytes)
+    const changed = json.replace(`"numbers":[1,1]`, `"numbers":[1,8]`)
+    expect(changed).not.toBe(json)
+    bytes.set(encoder.encode(changed))
     return buffer
   }
 
@@ -453,6 +493,63 @@ describe(`Trajectory Streaming`, () => {
   })
 
   describe(`Regression Tests`, () => {
+    it(`loads compact ASE positions and truthfully reports topology stability`, async () => {
+      const stable_data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
+      const stable_loader = new TrajFrameReader(`stable.traj`)
+
+      expect(stable_loader.load_frame_positions).toBeTypeOf(`function`)
+      const topology = await stable_loader.load_frame_positions?.(stable_data, 0)
+      const compact = await stable_loader.load_frame_positions?.(stable_data, 4)
+
+      expect(topology?.positions).toBeInstanceOf(Float32Array)
+      expect(Array.from(compact?.positions ?? [])).toEqual([0, 0, 0, 1, 0, 0])
+      expect(compact?.topology_changed).toBe(false)
+      expect(compact).not.toHaveProperty(`structure`)
+
+      const changed_data = change_ase_number(create_synthetic_ase(5), 4)
+      const changed_loader = new TrajFrameReader(`changed.traj`)
+      await changed_loader.load_frame_positions?.(changed_data, 0)
+      const changed = await changed_loader.load_frame_positions?.(changed_data, 4)
+      expect(changed?.topology_changed).toBe(true)
+    })
+
+    it(`preserves ASE global numbers when a reader is forked`, async () => {
+      const data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
+      const original = new TrajFrameReader(`local.traj`)
+      expect(await original.load_frame(data, 0)).not.toBeNull()
+
+      const fork = original.fork!()
+      const frame_4 = await fork.load_frame(data, 4)
+
+      expect(frame_4?.step).toBe(4)
+      expect(frame_4?.structure.sites).toHaveLength(2)
+    })
+
+    it(`keeps the first non-preloaded local ASE frame loadable after pane cloning`, async () => {
+      const source = create_synthetic_ase(5)
+      const parsed = await parse_trajectory_async(
+        source,
+        `local.traj`,
+        undefined,
+        { extract_plot_metadata: false },
+      )
+
+      expect(parsed.frames).toHaveLength(4)
+      expect(parsed.total_frames).toBe(5)
+
+      const pane = clone_trajectory_for_pane(parsed)
+      expect(pane.frame_loader).toBeDefined()
+      expect(pane.frame_source_data).toBe(source)
+      expect(pane.frame_loader).not.toBe(parsed.frame_loader)
+
+      const frame_4 = await pane.frame_loader!.load_frame(
+        pane.frame_source_data!,
+        4,
+      )
+      expect(frame_4?.step).toBe(4)
+      expect(frame_4?.structure.sites).toHaveLength(2)
+    })
+
     it(`should maintain compatibility with existing trajectory interface`, async () => {
       const data = create_synthetic_xyz(5)
 

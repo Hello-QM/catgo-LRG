@@ -1,17 +1,16 @@
 # 安装
 
-CatGo 是一个桌面应用。大多数用户可以直接从 GitHub Releases 下载预构建安装包。需要从源码构建的开发者可以使用下面的快速开始流程。
+CatGo 是一个桌面应用。大多数用户可以直接从 [CatGo 下载中心](https://dl.catgo-ucsd.org/)下载预构建安装包。需要从源码构建的开发者可以使用下面的快速开始流程。
 
 ## 下载预构建安装包
 
-每个 release 的预构建安装包都会发布在 [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases/latest)。所有安装包都内置 Python 后端（通过 PyInstaller）和 agent-bridge sidecar，不需要用户额外安装 Python 或 Node。
+当前 release 的预构建安装包由 [CatGo 下载中心](https://dl.catgo-ucsd.org/)直接提供。所有安装包都内置 Python 后端（通过 PyInstaller）和 agent-bridge sidecar，不需要用户额外安装 Python 或 Node。
 
 | 平台 | 文件 | 说明 |
 |----------|------|-------|
 | **macOS (Apple Silicon)** | `CatGo_<version>_aarch64.dmg` | 拖到 `/Applications`。首次启动可能需要右键 -> Open（未签名）。 |
-| **macOS (Intel)** | `CatGo_<version>_x64.dmg` | 也提供 universal 构建，文件名包含 `universal`。 |
 | **Windows** | `CatGo_<version>_x64-setup.exe` 或 `.msi` | 如果缺少 WebView2 runtime，会自动安装。 |
-| **Linux (`.AppImage`)** | `CatGo_<version>_amd64.AppImage` | `chmod +x` 后运行。多数发行版无需 root 权限。 |
+| **Linux (`.AppImage`)** | `CatGo_<version>_amd64.AppImage` | 提供该格式时，`chmod +x` 后运行。多数发行版无需 root 权限。 |
 | **Linux (`.deb`)** | `CatGo_<version>_amd64.deb` | 在 Ubuntu / Debian 上使用 `sudo apt install ./CatGo_*.deb`。 |
 
 安装后，从启动器打开 *CatGo*。Linux 也可以在终端中运行：

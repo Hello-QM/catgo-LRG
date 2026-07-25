@@ -1,156 +1,137 @@
-// Trajectory bond scheduling + frame-cache sizing (fix #2).
-//
-// #2: the frame-keyed connectivity LRU cache must hold a full typical
-//     trajectory (>32 frames) so loops/scrubs are O(1) hits, not recomputes.
-//
-// Trajectory frames run on the zero-latency sync path for ALL strategies at
-// small N. (A #3 experiment that routed solid_angle to the async worker was
-// reverted: it regressed desktop/web with a one-frame-stale render and was
-// redundant with the extension-only solid_angle -> atom_radii downgrade.) The
-// throttled async dispatch remains the fallback for large structures or when
-// the sync WASM is not yet ready.
-//
-// The worker API is mocked so the routing is observable without WASM.
-
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-vi.mock('$lib/structure/workers/bond-worker-api', () => ({
-  compute_bonds_sync: vi.fn(() => null),
-  compute_bonds_async: vi.fn(() => Promise.resolve([])),
-  compute_hbonds_worker: vi.fn(() => Promise.resolve([])),
-  // Typed worker unavailable → dispatch falls back to the JSON path, keeping
-  // these tests' compute_bonds_async assertions meaningful.
-  compute_bonds_typed_worker: vi.fn(() => Promise.resolve(null)),
-  effective_strategy: vi.fn((strategy: string) => strategy),
-}))
-
+import { describe, expect, test, vi } from 'vitest'
+import type { RenderPacket } from '$lib/structure/scene/render-packet'
 import {
-  compute_bonds_async,
-  compute_bonds_sync,
-} from '$lib/structure/workers/bond-worker-api'
-import {
-  clear_trajectory_bond_frame_cache,
-  compute_bond_connectivity_for_frame,
-  create_bond_state,
-} from '$lib/structure/bond-computation-controller.svelte'
-import type { AnyStructure, BondPair, Site } from '$lib'
+  create_prepared_frame_pipeline,
+  prepared_frame_byte_size,
+  type PreparedFrameKey,
+  type PreparedTrajectoryFrame,
+} from '$lib/structure/trajectory-prepared-frame'
 
-const sync_mock = vi.mocked(compute_bonds_sync)
-const async_mock = vi.mocked(compute_bonds_async)
-
-function fake_site(el: string, x: number): Site {
+function key(owner: object, frame_idx: number): PreparedFrameKey {
   return {
-    species: [{ element: el, occu: 1, oxidation_state: 0 }],
-    abc: [0, 0, 0],
-    xyz: [x, 0, 0],
-    label: el,
-    properties: {},
-  } as unknown as Site
-}
-
-// Small, non-periodic structure (no lattice → pbc-less, like the diagnosed file).
-function make_structure(n: number): AnyStructure {
-  const sites: Site[] = []
-  for (let i = 0; i < n; i++) sites.push(fake_site(i % 2 === 0 ? 'C' : 'H', i))
-  return { sites } as unknown as AnyStructure
-}
-
-function make_frame(n: number): Float32Array {
-  const f = new Float32Array(n * 3)
-  for (let i = 0; i < f.length; i++) f[i] = Math.random()
-  return f
-}
-
-function fake_bond(i: number, j: number): BondPair {
-  return {
-    pos_1: [0, 0, 0],
-    pos_2: [0, 0, 0],
-    site_idx_1: i,
-    site_idx_2: j,
-    bond_length: 1,
-    strength: 1,
-    transform_matrix: new Float32Array(16),
-    jimage: [0, 0, 0],
+    owner,
+    frame_idx,
+    positions_version: 1,
+    topology_version: 1,
+    rules_version: `exact`,
   }
 }
 
-beforeEach(() => {
-  clear_trajectory_bond_frame_cache()
-  sync_mock.mockReset()
-  async_mock.mockReset()
-  sync_mock.mockReturnValue([fake_bond(0, 1)])
-  async_mock.mockImplementation(() => new Promise<BondPair[]>(() => {})) // pending
-})
-
-describe('fix #2 — trajectory frame cache holds a full trajectory (>32 frames)', () => {
-  it('keeps >32 frames so an early frame is a cache HIT after 64 distinct frames', () => {
-    const st = create_bond_state()
-    const structure = make_structure(4)
-    const frames = Array.from({ length: 64 }, () => make_frame(4))
-
-    const first = frames.map((f) =>
-      compute_bond_connectivity_for_frame(st, f, structure, 'always', null, 'atom_radii', {})
-    )
-    expect(sync_mock).toHaveBeenCalledTimes(64)
-
-    sync_mock.mockClear()
-    // Re-request frame 0. At the old cap of 32 it would have been evicted by the
-    // 63 newer frames (perpetual miss → recompute). At 512 it is still cached.
-    const again = compute_bond_connectivity_for_frame(
-      st, frames[0], structure, 'always', null, 'atom_radii', {},
-    )
-    expect(sync_mock).not.toHaveBeenCalled() // cache hit, no recompute
-    expect(again).toBe(first[0]) // same array reference (the cached connectivity)
-  })
-
-  it('still bounds the cache (eviction past the 512 cap)', () => {
-    const st = create_bond_state()
-    const structure = make_structure(4)
-    const frames = Array.from({ length: 600 }, () => make_frame(4))
-    for (const f of frames) {
-      compute_bond_connectivity_for_frame(st, f, structure, 'always', null, 'atom_radii', {})
-    }
-    sync_mock.mockClear()
-    // frame 0 was inserted first; after 599 newer frames (>512) it is evicted →
-    // miss → one recompute. Proves the LRU eviction still bounds memory.
-    compute_bond_connectivity_for_frame(st, frames[0], structure, 'always', null, 'atom_radii', {})
-    expect(sync_mock).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('trajectory frames run on the zero-latency sync path at small N', () => {
-  it.each(['atom_radii', 'electroneg_ratio', 'solid_angle'] as const)(
-    'strategy %s uses the sync path (no async worker) for a small frame',
-    (strat) => {
-      const st = create_bond_state()
-      const structure = make_structure(4)
-      const frame = make_frame(4)
-
-      const result = compute_bond_connectivity_for_frame(
-        st, frame, structure, 'always', null, strat, {},
-      )
-
-      // The #3 async routing for solid_angle was reverted: every strategy now
-      // runs synchronously at small N (desktop/web were already smooth there).
-      expect(sync_mock).toHaveBeenCalledTimes(1)
-      expect(sync_mock.mock.calls[0][1]).toBe(strat)
-      expect(async_mock).not.toHaveBeenCalled()
-      expect(result.length).toBe(1)
+function prepared(frame_key: PreparedFrameKey): PreparedTrajectoryFrame {
+  const positions = new Float32Array([frame_key.frame_idx, 0, 0])
+  const graph = {
+    version: frame_key.frame_idx + 1,
+    pairs: new Uint32Array([0, 0]),
+    jimages: new Int8Array([frame_key.frame_idx + 1, 0, 0]),
+    kinds: new Uint8Array([0]),
+    strengths: new Float32Array([1]),
+  }
+  const packet: RenderPacket = {
+    topology: {
+      version: 1,
+      atom_count: 1,
+      site_ids: new Uint32Array([0]),
+      atomic_numbers: new Uint8Array([1]),
+      radii: new Float32Array([1]),
+      colors: new Float32Array([1, 1, 1]),
+      bond_graph: graph,
     },
-  )
+    frame: {
+      owner: frame_key.owner,
+      frame_idx: frame_key.frame_idx,
+      positions_version: 1,
+      positions,
+      lattice: new Float32Array(9),
+    },
+    replicas: {
+      version: 1,
+      dims: [1, 1, 1],
+      boundary_policy: `stub`,
+      semantics: `visual-shared-base`,
+    },
+  }
+  const rgba = new Float32Array([frame_key.frame_idx, 0, 0, 1])
+  return {
+    key: frame_key,
+    packet,
+    graph,
+    gpu_positions_rgba: rgba,
+    forces: null,
+    graph_hash: `${frame_key.frame_idx}`,
+    byte_size: prepared_frame_byte_size(packet, rgba, null),
+    compute_ms: 1,
+  }
+}
 
-  it('falls back to the throttled async dispatch (latest-wins) when sync WASM is unavailable', () => {
-    const st = create_bond_state()
-    sync_mock.mockReturnValue(null) // WASM not ready → sync path can't resolve
-    const structure = make_structure(4)
-    const frame_a = make_frame(4)
-    const frame_b = make_frame(4)
+describe(`exact trajectory scheduling`, () => {
+  test(`64 distinct requested frames cause 64 exact computes`, async () => {
+    const owner = {}
+    const pipeline = create_prepared_frame_pipeline({
+      max_frames: 64,
+      max_bytes: 1_000_000,
+    })
+    const compute = vi.fn(async (frame_key: PreparedFrameKey) =>
+      prepared(frame_key)
+    )
+    for (let frame_idx = 0; frame_idx < 64; frame_idx++) {
+      const frame_key = key(owner, frame_idx)
+      const generation = pipeline.begin_request(frame_key)
+      const outcome = await pipeline.request({
+        key: frame_key,
+        priority: `current`,
+        estimated_bytes: 128,
+        prepare: () => compute(frame_key),
+      }, generation)
+      expect(outcome.status).toBe(`ready`)
+      if (outcome.status === `ready`) {
+        expect(outcome.value.packet.frame.frame_idx).toBe(frame_idx)
+        expect(outcome.value.graph.jimages[0]).toBe(frame_idx + 1)
+      }
+    }
+    expect(compute).toHaveBeenCalledTimes(64)
 
-    compute_bond_connectivity_for_frame(st, frame_a, structure, 'always', null, 'solid_angle', {})
-    compute_bond_connectivity_for_frame(st, frame_b, structure, 'always', null, 'solid_angle', {})
+    const first_key = key(owner, 0)
+    const outcome = await pipeline.request({
+      key: first_key,
+      priority: `current`,
+      estimated_bytes: 128,
+      prepare: () => compute(first_key),
+    }, pipeline.begin_request(first_key))
+    expect(outcome).toMatchObject({ status: `ready`, cache_hit: true })
+    expect(compute).toHaveBeenCalledTimes(64)
+  })
 
-    expect(async_mock).toHaveBeenCalledTimes(1) // only one in-flight dispatch
-    expect(st.traj_in_flight_frame).toBe(frame_a)
-    expect(st.traj_pending_frame).toBe(frame_b)
+  test(`a stale seek result never replaces the requested frame graph`, async () => {
+    const owner = {}
+    const pipeline = create_prepared_frame_pipeline()
+    let resolve_old!: (value: PreparedTrajectoryFrame) => void
+    const old_key = key(owner, 4)
+    const old_generation = pipeline.begin_request(old_key)
+    const old = pipeline.request({
+      key: old_key,
+      priority: `current`,
+      estimated_bytes: 128,
+      prepare: () => new Promise((resolve) => {
+        resolve_old = resolve
+      }),
+    }, old_generation)
+
+    const new_key = key(owner, 19)
+    const new_generation = pipeline.begin_request(new_key)
+    resolve_old(prepared(old_key))
+    expect(await old).toEqual({ status: `stale` })
+
+    const current = await pipeline.request({
+      key: new_key,
+      priority: `current`,
+      estimated_bytes: 128,
+      prepare: async () => prepared(new_key),
+    }, new_generation)
+    expect(current.status).toBe(`ready`)
+    if (current.status === `ready`) {
+      expect(current.value.packet.frame.frame_idx).toBe(19)
+      expect(current.value.graph.jimages[0]).toBe(20)
+    }
+    expect(pipeline.peek(old_key)).toBeNull()
   })
 })

@@ -67,7 +67,8 @@ done
 # Check WASM is pre-built
 if [[ ! -f "$REPO_ROOT/extensions/rust-wasm/pkg/ferrox_bg.wasm" ]]; then
     echo "ERROR: WASM not built. Run from repo root:"
-    echo "  cd extensions/rust && wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm"
+    echo "  pnpm build:wasm"
+    echo "  node scripts/verify-wasm-artifacts.mjs"
     exit 1
 fi
 

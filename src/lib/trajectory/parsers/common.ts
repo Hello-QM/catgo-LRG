@@ -54,9 +54,7 @@ export const create_structure = (
   // Pre-compute fractional coords for all atoms so the wrap-decision pass
   // can do a near-neighbor check in raw Cartesian without re-deriving abc.
   const initial_abcs: Vec3[] = positions.map((pos) =>
-    inv_matrix
-      ? math.mat3x3_vec3_multiply(inv_matrix, pos as Vec3)
-      : [0, 0, 0] as Vec3
+    inv_matrix ? math.mat3x3_vec3_multiply(inv_matrix, pos as Vec3) : [0, 0, 0] as Vec3
   )
   // Threshold for the heuristic-wrap near-neighbor check. Conservative
   // covalent bond max (Å). Larger than typical bond lengths; smaller than
@@ -156,6 +154,25 @@ export const create_structure = (
       },
     }
     : { sites }
+}
+
+/**
+ * Extract the extended-XYZ `Lattice="ax ay az bx by bz cx cy cz"` field from a
+ * frame comment line (row-major, 9 floats). Returns undefined when absent or
+ * malformed. Shared by the eager XYZ parser and the indexed frame loader so
+ * the two paths can never disagree on lattice handling (#536: the indexed
+ * loader used to drop the lattice entirely for >2 MB files).
+ */
+export const parse_xyz_lattice = (comment: string): Matrix3x3 | undefined => {
+  const lattice_match = comment.match(/Lattice\s*=\s*"([^"]+)"/i)
+  if (!lattice_match) return undefined
+  const values = lattice_match[1].split(/\s+/).map(Number)
+  if (values.length !== 9) return undefined
+  return [
+    [values[0], values[1], values[2]],
+    [values[3], values[4], values[5]],
+    [values[6], values[7], values[8]],
+  ]
 }
 
 export const create_trajectory_frame = (

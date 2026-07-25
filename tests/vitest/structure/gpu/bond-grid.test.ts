@@ -1,12 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
+  aabb_grid_dims,
+  compute_aabb,
   MAX_PER_CELL,
   MIN_GRID_DIM,
   periodic_grid_dims,
-  compute_aabb,
-  aabb_grid_dims,
   plan_grid,
 } from '$lib/structure/gpu/bond-grid'
+import { plan_bond_dispatch } from '$lib/structure/workers/bond-backend-policy'
 
 const ortho = (a: number, b: number, c: number) =>
   new Float32Array([a, 0, 0, 0, b, 0, 0, 0, c])
@@ -101,5 +102,35 @@ describe(`plan_grid`, () => {
     expect(plan.dims).toEqual([3, 1, 2])
     expect(plan.n_cells).toBe(6)
     expect(plan.aabb_min).toEqual([0, 0, 0])
+  })
+})
+
+describe(`plan_bond_dispatch thin-cell routing`, () => {
+  it(`routes periodic grid dimensions 1 and 2 to rust wasm`, () => {
+    // Large N so it cannot be the direct plan; a thin periodic cell (a grid dim
+    // of 1 or 2) must route to Rust WASM — NOT the old use_grid=false all-pairs
+    // GPU path — because N ≈ 20k may never enter an all-pairs × 27-image shader.
+    const thin = (lattice: Float32Array) =>
+      plan_bond_dispatch({
+        periodic: true,
+        lattice,
+        max_bond_dist: 3,
+        positions: new Float32Array(0),
+        n: 19_968,
+        atom_count: 19_968,
+        direct_limit: 1024,
+        max_storage_bytes: 1 << 30,
+      })
+
+    // b-axis dim = floor(2/3) = 0, clamped to 1 by periodic_grid_dims (< MIN_GRID_DIM).
+    expect(thin(new Float32Array([30, 0, 0, 0, 2, 0, 0, 0, 30]))).toEqual({
+      kind: `rust-wasm`,
+      reason: `periodic-thin-cell`,
+    })
+    // b-axis dim = floor(8/3) = 2 (< MIN_GRID_DIM).
+    expect(thin(new Float32Array([30, 0, 0, 0, 8, 0, 0, 0, 30]))).toEqual({
+      kind: `rust-wasm`,
+      reason: `periodic-thin-cell`,
+    })
   })
 })

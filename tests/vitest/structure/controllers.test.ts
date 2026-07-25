@@ -53,6 +53,61 @@ function make_structure(
 
 // ─── transform-controller ───
 
+// Visual T6 — semantic routing for the viewer's bottom-right visual
+// replication control. Pure, backend-free helpers: renderer mode (WebGPU
+// overlay vs WebGL2 vs legacy) must NEVER participate in deciding whether
+// the scientific structure expands. Dynamic import so a missing export
+// fails only these tests (RED) without breaking the rest of the suite.
+describe('visual replication routing (Visual T6)', () => {
+  test('parse_visual_dims parses NxNxN and falls back to identity', async () => {
+    const mod = await import('$lib/structure/controllers/transform-controller')
+    const { parse_visual_dims } = mod as unknown as {
+      parse_visual_dims: (scaling: string) => [number, number, number]
+    }
+    expect(parse_visual_dims('2x3x4')).toEqual([2, 3, 4])
+    expect(parse_visual_dims('1x1x1')).toEqual([1, 1, 1])
+    expect(parse_visual_dims('2')).toEqual([2, 2, 2])
+    expect(parse_visual_dims('')).toEqual([1, 1, 1])
+    expect(parse_visual_dims('garbage')).toEqual([1, 1, 1])
+  })
+
+  test('visual_replication_active depends only on periodicity + dims + trajectory', async () => {
+    const mod = await import('$lib/structure/controllers/transform-controller')
+    const { visual_replication_active } = mod as unknown as {
+      visual_replication_active: (opts: {
+        has_lattice: boolean
+        dims: [number, number, number]
+        trajectory_packet_active: boolean
+      }) => boolean
+    }
+    const off = { trajectory_packet_active: false }
+    expect(
+      visual_replication_active({ has_lattice: true, dims: [2, 2, 2], ...off }),
+    ).toBe(true)
+    expect(
+      visual_replication_active({ has_lattice: true, dims: [1, 1, 2], ...off }),
+    ).toBe(true)
+    expect(
+      visual_replication_active({ has_lattice: true, dims: [1, 1, 1], ...off }),
+    ).toBe(false)
+    // Molecules: no lattice, nothing to replicate.
+    expect(
+      visual_replication_active({ has_lattice: false, dims: [2, 2, 2], ...off }),
+    ).toBe(false)
+    // Trajectory packets own the visual base cell from 1× upward.
+    expect(
+      visual_replication_active({
+        has_lattice: true,
+        dims: [1, 1, 1],
+        trajectory_packet_active: true,
+      }),
+    ).toBe(true)
+    // Backend-free by construction: exactly one semantic options bag, no
+    // renderer/backend parameter exists.
+    expect(visual_replication_active.length).toBe(1)
+  })
+})
+
 describe('is_image_atom', () => {
   test('returns false when structure is undefined', () => {
     expect(is_image_atom(undefined, 0)).toBe(false)

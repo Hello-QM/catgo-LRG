@@ -1,7 +1,7 @@
 /**
  * Lattice operations: parameter editing, transformation, and vacuum layer addition
  */
-import type { PymatgenMolecule, PymatgenStructure, Vec3 } from '$lib'
+import type { Matrix3x3, PymatgenMolecule, PymatgenStructure, Site, Vec3 } from '$lib'
 
 export interface LatticeParams {
   a: number
@@ -449,13 +449,37 @@ function mat3_mul(A: [Vec3, Vec3, Vec3], B: [Vec3, Vec3, Vec3]): [Vec3, Vec3, Ve
   return r
 }
 
-/** Transpose 3x3 matrix */
-function mat3_T(M: [Vec3, Vec3, Vec3]): [Vec3, Vec3, Vec3] {
-  return [
-    [M[0][0], M[1][0], M[2][0]],
-    [M[0][1], M[1][1], M[2][1]],
-    [M[0][2], M[1][2], M[2][2]],
+/**
+ * Compute the rigid rotation Rc that reorients a lattice into the standard
+ * crystallographic frame: a1 along +x and a3 in the xz-plane (ASE/pymatgen
+ * convention). Applying Rc uniformly to each lattice vector, each atom's
+ * Cartesian position, and every Cartesian vector site property (forces, magmom
+ * vectors) rotates the whole system consistently while leaving fractional
+ * coordinates invariant (since new_matrix[i] = Rc · matrix[i] and
+ * xyz_new = Rc · xyz_old).
+ */
+export function compute_reorient_rotation(
+  matrix: [Vec3, Vec3, Vec3],
+): [Vec3, Vec3, Vec3] {
+  // Step 1: R1 aligns a1 to the x-axis.
+  const R1 = rotation_matrix_from_vectors(matrix[0], [1, 0, 0])
+  // Rotate each lattice row by R1 (M1 rows = R1 · matrix[i]).
+  const M1: [Vec3, Vec3, Vec3] = [
+    mat_vec_multiply(R1, matrix[0]),
+    mat_vec_multiply(R1, matrix[1]),
+    mat_vec_multiply(R1, matrix[2]),
   ]
+  // Step 2: rotate about x so a3 lands in the xz-plane.
+  const theta = Math.atan2(M1[2][1], M1[2][2])
+  const cos_t = Math.cos(-theta)
+  const sin_t = Math.sin(-theta)
+  const R2: [Vec3, Vec3, Vec3] = [
+    [1, 0, 0],
+    [0, cos_t, -sin_t],
+    [0, sin_t, cos_t],
+  ]
+  // Combined rotation Rc = R2 · R1.
+  return mat3_mul(R2, R1)
 }
 
 /**
@@ -470,29 +494,13 @@ export function reorient_lattice(structure: PymatgenStructure): PymatgenStructur
 
   const M = structure.lattice.matrix as [Vec3, Vec3, Vec3]
 
-  // Step 1: R1 aligns a1 to x-axis
-  const a1 = M[0]
-  const R1 = rotation_matrix_from_vectors(a1, [1, 0, 0])
-
-  // Apply R1: M_new = M * R1^T (rotates each row vector by R1)
-  const R1T = mat3_T(R1)
-  const M1 = mat3_mul(M, R1T)
-
-  // Step 2: Rotate around x-axis to put a3 in xz-plane
-  const a3_y = M1[2][1]
-  const a3_z = M1[2][2]
-  const theta = Math.atan2(a3_y, a3_z)
-  const cos_t = Math.cos(-theta)
-  const sin_t = Math.sin(-theta)
-  const R2: [Vec3, Vec3, Vec3] = [
-    [1, 0, 0],
-    [0, cos_t, -sin_t],
-    [0, sin_t, cos_t],
+  // Rigid rotation into the standard frame; new_matrix[i] = Rc · M[i].
+  const Rc = compute_reorient_rotation(M)
+  const new_matrix: [Vec3, Vec3, Vec3] = [
+    mat_vec_multiply(Rc, M[0]),
+    mat_vec_multiply(Rc, M[1]),
+    mat_vec_multiply(Rc, M[2]),
   ]
-
-  // Apply R2: M_final = M1 * R2^T
-  const R2T = mat3_T(R2)
-  const new_matrix = mat3_mul(M1, R2T)
 
   // Wrap fractional coordinates to [0, 1)
   const new_sites = structure.sites.map((site) => {
@@ -651,9 +659,144 @@ function mat_vec_multiply(
 }
 
 /**
- * Apply a transformation matrix to create a supercell
- * This properly replicates atoms when the transformation expands the cell
- * For a transformation matrix T with determinant D > 1, creates D times more atoms
+ * A supercell frame built from an integer transformation matrix, in the
+ * standard crystallographic convention `new_lattice = matrix · old_lattice`
+ * (each new lattice vector is an integer combination of the old lattice
+ * vectors). Returned alongside the deterministic cell ordering and a
+ * `(base_site, cell) → physical_site` map so callers can record provenance and
+ * lift base-cell bonds without re-detecting distances.
+ */
+export type SupercellFrameBuild = {
+  /** New lattice matrix, rows = lattice vectors (matrix · old_lattice). */
+  matrix: Matrix3x3
+  /** Materialized physical sites, cell-major (cell outer, base site inner). */
+  sites: Site[]
+  /** Deterministic integer old-lattice offsets per cell; length === |det(matrix)|. */
+  cells: Vec3[]
+  /** Flat map: physical_site_map[cell_index * base_count + base_site] = physical site index. */
+  physical_site_map: Uint32Array
+}
+
+/**
+ * Enumerate the deterministic set of integer old-lattice offsets whose cell
+ * lies inside the supercell defined by the integer `matrix` (using the
+ * `new_lattice = matrix · old_lattice` convention). A point `p` (integer
+ * old-lattice coordinates) is inside iff its coordinates in the new lattice,
+ * `p · matrix⁻¹`, fall within `[0, 1)³`. The number of offsets equals
+ * `|det(matrix)|`. Returns `[]` for a singular matrix.
+ */
+export function enumerate_supercell_cells(
+  matrix: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ],
+): Vec3[] {
+  const inv = matrix_inverse_3x3(matrix)
+  if (!inv) return []
+
+  // Sufficient symmetric search bound, per column: every interior offset is
+  // p = f · matrix for some f ∈ [0, 1)³, so per column j
+  //   |p_j| = |Σ_i f_i · matrix[i][j]| ≤ Σ_i |matrix[i][j]| = colsum_j
+  // (strict, since every f_i < 1). Scanning p_j ∈ [-colsum_j, +colsum_j]
+  // therefore covers all |det| offsets for any sign pattern. An asymmetric
+  // box (the previous `-max_range … 2·max_range`) missed valid offsets for
+  // matrices with large negative entries, e.g. [[-3,1,0],[-3,0,1],[-3,1,1]]
+  // whose interior offset (-5,1,1) lay outside it.
+  const colsum = [0, 1, 2].map((col) =>
+    Math.ceil(
+      Math.abs(matrix[0][col]) + Math.abs(matrix[1][col]) + Math.abs(matrix[2][col]),
+    )
+  )
+  const cells: Vec3[] = []
+  const eps = 1e-8
+
+  for (let i = -colsum[0]; i <= colsum[0]; i++) {
+    for (let j = -colsum[1]; j <= colsum[1]; j++) {
+      for (let k = -colsum[2]; k <= colsum[2]; k++) {
+        // frac = [i, j, k] · inv (row vector times matrix inverse)
+        const f0 = i * inv[0][0] + j * inv[1][0] + k * inv[2][0]
+        const f1 = i * inv[0][1] + j * inv[1][1] + k * inv[2][1]
+        const f2 = i * inv[0][2] + j * inv[1][2] + k * inv[2][2]
+        if (
+          f0 >= -eps && f0 < 1 - eps &&
+          f1 >= -eps && f1 < 1 - eps &&
+          f2 >= -eps && f2 < 1 - eps
+        ) {
+          cells.push([i, j, k])
+        }
+      }
+    }
+  }
+
+  return cells
+}
+
+/**
+ * Build a supercell frame from an integer transformation matrix. Pure: does not
+ * mutate `structure`. Replicates every base site into every enumerated cell and
+ * folds fractional coordinates into `[0, 1)` of the new cell. The returned
+ * `physical_site_map` records the deterministic `(base_site, cell) →
+ * physical_site` correspondence used for provenance and GPU base-bond lifting.
+ */
+export function build_supercell_frame(
+  structure: PymatgenStructure,
+  transform: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ],
+): SupercellFrameBuild {
+  const old_matrix = structure.lattice.matrix as [Vec3, Vec3, Vec3]
+  // new_lattice = transform · old_lattice (rows combine old lattice vectors)
+  const new_matrix = mat3_mul(transform as [Vec3, Vec3, Vec3], old_matrix)
+
+  const cells = enumerate_supercell_cells(transform)
+  const n = structure.sites.length
+  const sites: Site[] = []
+  const physical_site_map = new Uint32Array(cells.length * n)
+
+  for (let c = 0; c < cells.length; c++) {
+    const lp = cells[c]
+    // Cartesian translation for this cell = lp expressed in the old lattice.
+    const translation = fractional_to_cartesian(lp, old_matrix)
+
+    for (let b = 0; b < n; b++) {
+      const site = structure.sites[b]
+      const base_xyz = site.xyz ?? fractional_to_cartesian(site.abc, old_matrix)
+      const cart: Vec3 = [
+        base_xyz[0] + translation[0],
+        base_xyz[1] + translation[1],
+        base_xyz[2] + translation[2],
+      ]
+
+      // Fold into the new cell.
+      const abc = cartesian_to_fractional(cart, new_matrix).map((coord) => {
+        let wrapped = coord % 1
+        if (wrapped < 0) wrapped += 1
+        if (wrapped >= 0.9999999999) wrapped = 0
+        return wrapped
+      }) as Vec3
+      const xyz = fractional_to_cartesian(abc, new_matrix)
+
+      physical_site_map[c * n + b] = sites.length
+      sites.push({ ...site, xyz, abc })
+    }
+  }
+
+  return { matrix: new_matrix, sites, cells, physical_site_map }
+}
+
+/**
+ * Apply an integer transformation matrix to create a supercell, uniformly in
+ * the `new_lattice = matrix · old_lattice` convention for EVERY non-zero
+ * determinant (via {@link build_supercell_frame}). `|det| > 1` replicates
+ * atoms `|det|` times; `det = ±1` is a legal reshaping supercell (e.g. a
+ * shear) that redescribes the same crystal without replication — it takes the
+ * same path deliberately, so the convention never forks on a det threshold.
+ * Negative determinants yield a left-handed lattice on purpose (no silent a/b
+ * swap); exporters that need right-handed cells (e.g. POSCAR) handle
+ * handedness downstream. A singular transform returns the structure unchanged.
  */
 export function apply_transform_matrix_supercell(
   structure: PymatgenStructure,
@@ -665,14 +808,6 @@ export function apply_transform_matrix_supercell(
 ): PymatgenStructure {
   if (!structure.lattice?.matrix) return structure
 
-  const old_matrix = structure.lattice.matrix as [Vec3, Vec3, Vec3]
-  const raw_matrix = transform_lattice(old_matrix, transform)
-
-  // Ensure right-handed lattice (positive determinant) for VASP compatibility
-  const { matrix: new_matrix, swapped } = ensure_right_handed(raw_matrix)
-  const new_params = matrix_to_params(new_matrix)
-
-  // Calculate determinant to know how many lattice points we need
   const det = Math.round(
     transform[0][0] *
         (transform[1][1] * transform[2][2] - transform[1][2] * transform[2][1]) -
@@ -682,108 +817,38 @@ export function apply_transform_matrix_supercell(
         (transform[1][0] * transform[2][1] - transform[1][1] * transform[2][0]),
   )
 
-  // If determinant is 1 or less, just do a regular transform
-  if (Math.abs(det) <= 1) {
-    return apply_transform_matrix(structure, transform)
+  // A singular transform has no valid supercell frame — leave the structure
+  // untouched rather than collapsing its lattice.
+  if (det === 0) {
+    console.warn(
+      `[lattice-ops] apply_transform_matrix_supercell: singular transform ignored`,
+    )
+    return structure
   }
 
-  // Find the inverse of the transformation matrix
-  const transform_inv = matrix_inverse_3x3(transform)
-  if (!transform_inv) {
-    console.warn('Singular transformation matrix')
-    return apply_transform_matrix(structure, transform)
-  }
-
-  // Find all lattice points that fall within the new supercell
-  // We need to search in a range based on the maximum elements of the transform matrix
-  const max_range = Math.ceil(Math.max(
-    ...transform.flat().map(Math.abs),
-  )) + 1
-
-  const lattice_points: Vec3[] = []
-
-  for (let i = -max_range; i <= max_range * 2; i++) {
-    for (let j = -max_range; j <= max_range * 2; j++) {
-      for (let k = -max_range; k <= max_range * 2; k++) {
-        // Transform the integer lattice point to fractional coordinates in the new cell
-        const frac_new = mat_vec_multiply(transform_inv, [i, j, k])
-
-        // Check if this point is within the unit cell [0, 1)^3
-        const eps = 1e-8
-        if (
-          frac_new[0] >= -eps && frac_new[0] < 1 - eps &&
-          frac_new[1] >= -eps && frac_new[1] < 1 - eps &&
-          frac_new[2] >= -eps && frac_new[2] < 1 - eps
-        ) {
-          lattice_points.push([i, j, k])
-        }
-      }
-    }
-  }
-
-  // Generate new sites by replicating atoms at each lattice point
-  const new_sites = []
-  const n_points = lattice_points.length
-
-  for (const lp of lattice_points) {
-    for (const site of structure.sites) {
-      // Get fractional coordinates in old cell
-      let abc = site.abc
-      if (!abc) {
-        abc = cartesian_to_fractional(site.xyz, old_matrix)
-      }
-
-      // New fractional coordinates in old cell = original + lattice point offset
-      const old_frac_shifted: Vec3 = [
-        abc[0] + lp[0],
-        abc[1] + lp[1],
-        abc[2] + lp[2],
-      ]
-
-      // Convert old fractional to Cartesian using old lattice
-      const xyz_old = fractional_to_cartesian(old_frac_shifted, old_matrix)
-
-      // Convert Cartesian to new fractional using new lattice
-      const new_abc = cartesian_to_fractional(xyz_old, new_matrix)
-
-      // If a/b were swapped for right-handedness, swap fractional a/b
-      const adj_abc = swapped ? [new_abc[1], new_abc[0], new_abc[2]] as Vec3 : new_abc
-
-      // Wrap to [0, 1) if needed
-      const wrapped_abc: Vec3 = [
-        ((adj_abc[0] % 1) + 1) % 1,
-        ((adj_abc[1] % 1) + 1) % 1,
-        ((adj_abc[2] % 1) + 1) % 1,
-      ]
-
-      // Convert back to Cartesian
-      const new_xyz = fractional_to_cartesian(wrapped_abc, new_matrix)
-
-      // Create label suffix for supercell
-      const label_suffix = n_points > 1 ? `_${lp[0]}${lp[1]}${lp[2]}` : ''
-
-      new_sites.push({
-        ...site,
-        xyz: new_xyz,
-        abc: wrapped_abc,
-        label: n_points > 1 ? `${site.label}${label_suffix}` : site.label,
-      })
-    }
-  }
+  const build = build_supercell_frame(structure, transform)
+  const new_params = matrix_to_params(build.matrix)
+  const [va, vb, vc] = build.matrix
+  const volume = Math.abs(
+    va[0] * (vb[1] * vc[2] - vb[2] * vc[1]) -
+    va[1] * (vb[0] * vc[2] - vb[2] * vc[0]) +
+    va[2] * (vb[0] * vc[1] - vb[1] * vc[0]),
+  )
 
   return {
     ...structure,
     lattice: {
       ...structure.lattice,
-      matrix: new_matrix,
+      matrix: build.matrix,
       a: new_params.a,
       b: new_params.b,
       c: new_params.c,
       alpha: new_params.alpha,
       beta: new_params.beta,
       gamma: new_params.gamma,
+      volume,
     },
-    sites: new_sites,
+    sites: build.sites,
   }
 }
 

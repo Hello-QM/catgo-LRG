@@ -1,17 +1,16 @@
 # Installation
 
-CatGo is a desktop application. Most users should grab a pre-built installer from GitHub Releases. Developers building from source can use the Quick Start below.
+CatGo is a desktop application. Most users should grab a pre-built installer from the [CatGo download hub](https://dl.catgo-ucsd.org/). Developers building from source can use the Quick Start below.
 
 ## Download a Pre-Built Installer
 
-Pre-built installers for every release are published on [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases/latest). All installers bundle the Python backend (via PyInstaller) and the agent-bridge sidecar — no separate Python or Node install required.
+Pre-built installers for the current release are delivered through the [CatGo download hub](https://dl.catgo-ucsd.org/). All installers bundle the Python backend (via PyInstaller) and the agent-bridge sidecar — no separate Python or Node install required.
 
 | Platform | File | Notes |
 |----------|------|-------|
 | **macOS (Apple Silicon)** | `CatGo_<version>_aarch64.dmg` | Drag to `/Applications`. May require right-click → Open on first launch (unsigned). |
-| **macOS (Intel)** | `CatGo_<version>_x64.dmg` | Universal builds also available — file name contains `universal`. |
 | **Windows** | `CatGo_<version>_x64-setup.exe` or `.msi` | WebView2 runtime is auto-installed if missing. |
-| **Linux (`.AppImage`)** | `CatGo_<version>_amd64.AppImage` | `chmod +x` then run. Works on most distros without root. |
+| **Linux (`.AppImage`)** | `CatGo_<version>_amd64.AppImage` | When available, `chmod +x` then run. Works on most distros without root. |
 | **Linux (`.deb`)** | `CatGo_<version>_amd64.deb` | `sudo apt install ./CatGo_*.deb` on Ubuntu / Debian. |
 
 After install, launch *CatGo* from your launcher. On Linux from the terminal:

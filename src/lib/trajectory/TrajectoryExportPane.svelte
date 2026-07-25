@@ -8,6 +8,7 @@
   } from '$lib/io/export'
   import { download } from '$lib/io/fetch'
   import { trajectory_to_xyz_str } from '$lib/structure/export'
+  import { select_active_render_canvas } from '$lib/structure/scene/render-surface'
   import type { TrajectoryType } from '$lib/trajectory'
   import type { ComponentProps } from 'svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
@@ -80,8 +81,9 @@
       canvas = null
       return
     }
-    const check = () =>
-      (canvas = wrapper.querySelector(`canvas`) as HTMLCanvasElement | null)
+    // Visual T6: video capture must record the ACTIVE render canvas (WebGPU
+    // overlay vs kept-warm WebGL), not blindly the first <canvas>.
+    const check = () => (canvas = select_active_render_canvas(wrapper))
     check()
     const observer = new MutationObserver(check)
     observer.observe(wrapper, { childList: true, subtree: true })

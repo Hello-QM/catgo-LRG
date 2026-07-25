@@ -24,6 +24,8 @@ on:
       - "svelte.config.js"
       - "wrangler.docs.toml"
       - "wrangler.app.toml"
+      - "wrangler.downloads.toml"
+      - "workers/downloads/**"
       - ".github/workflows/deploy-cloudflare.yml"
   workflow_dispatch:
 
@@ -37,6 +39,10 @@ env:
   WRANGLER_SEND_METRICS: "false"
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
 
 jobs:
   deploy-docs:
@@ -100,7 +106,20 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
+      # rebuilt with atomics via -Z build-std. Installed before stable so
+      # stable stays the default toolchain for everything else. Pinned via
+      # CATGO_WASM_NIGHTLY_TOOLCHAIN — see env at the top of this file.
+      - name: Setup Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -108,28 +127,23 @@ jobs:
             extensions/rust -> target
             extensions/chgdiff-wasm -> target
 
-      - uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: latest
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build ferrox WASM (extensions/rust → extensions/rust-wasm/pkg)
-        working-directory: extensions/rust
-        run: |
-          wasm-pack build --target web --features wasm --no-default-features
-          rm -rf ../rust-wasm/pkg
-          cp -r pkg ../rust-wasm/pkg
+      # Single canonical entry point for ALL wasm builds (design §8.3): it
+      # builds ferrox twice with explicit feature sets (wasm-scalar →
+      # pkg-scalar/+pkg/, wasm-threaded → pkg-threaded/) plus chgdiff +
+      # catrender into their src/lib out-dirs. Never invoke wasm-pack directly
+      # here — `--features wasm` without --no-default-features is a compile
+      # error by design (lib.rs guard against default-Rayon wasm with no
+      # thread pool).
+      - name: Build WASM extensions (ferrox + chgdiff + catrender)
+        run: pnpm build:wasm
 
-      - name: Build chgdiff WASM (extensions/chgdiff-wasm → src/lib/electronic/chgdiff-wasm-pkg)
-        working-directory: extensions/chgdiff-wasm
-        run: |
-          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
-
-      - name: Build catrender WASM (extensions/catrender-wasm → src/lib/structure/catrender/catrender-wasm-pkg)
-        working-directory: extensions/catrender-wasm
-        run: |
-          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+      - name: Verify WASM artifacts (scalar + threaded ferrox)
+        run: node scripts/verify-wasm-artifacts.mjs
 
       - name: Generate docs-chunks.json for CatBot RAG
         run: pnpm build:doc-chunks
@@ -176,3 +190,20 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config wrangler.app.toml
+
+  deploy-downloads:
+    name: Deploy dl.catgo-ucsd.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.downloads.toml

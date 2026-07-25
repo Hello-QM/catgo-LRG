@@ -4,6 +4,14 @@
 # on cfg(target_feature = "simd128") (see neighbors.rs::scan_bin_hits) plus a
 # scalar fallback that keeps no-SIMD builds correct.
 #
+# Dual WASM artifacts (design §8.3): this table only serves the SCALAR build
+# (pkg-scalar/, features `wasm-scalar`). The THREADED build (pkg-threaded/,
+# features `wasm-threaded`) needs `+atomics,+bulk-memory,+mutable-globals`
+# plus nightly `-Z build-std=panic_abort,std`; those flags are env-scoped in
+# scripts/build-wasm.mjs (a set RUSTFLAGS env var overrides this table
+# entirely, so the threaded env must re-add +simd128). DO NOT add atomics
+# here: it would poison the scalar artifact and native `cargo test`.
+#
 # Escape hatch (ancient WebKitGTK etc.): a set RUSTFLAGS env var overrides
 # this table entirely, so `RUSTFLAGS="" wasm-pack build ...` — or
 # `node scripts/build-wasm.mjs --no-simd` — produces a scalar-only module.

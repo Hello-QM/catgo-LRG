@@ -210,5 +210,6 @@ const app: Record<string, string> = {
   update_ready: `Installed — restarting…`,
   update_error: `Update failed: {error}`,
   update_later_btn: `Later`,
+  update_release_notes: `Release notes`,
 }
 export default app

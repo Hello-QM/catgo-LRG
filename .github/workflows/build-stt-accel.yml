@@ -109,7 +109,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" --notes "CatGo STT GPU accelerator binaries"
+            || gh release create "$TAG" --latest=false --title "$TAG" \
+              --notes "CatGo STT GPU accelerator binaries"
           gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
 
   manifest:

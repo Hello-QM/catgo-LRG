@@ -116,24 +116,37 @@ export default defineConfig({
       enforce: `pre`,
       transform(code, id) {
         if (id.includes(`ferrox-wasm.ts`)) {
-          const wasm_path = resolve(__dirname, `extensions/rust-wasm/pkg/ferrox_bg.wasm`)
-            .replace(/\\/g, `/`)
+          // Two artifacts (design §8.3): pkg/ = scalar (legacy specifier),
+          // pkg-threaded/ = threads+SIMD+Rayon, loaded only by the threaded
+          // bond worker. Each specifier is rewritten to its own binary. The
+          // threaded regex must run FIRST — the scalar pattern would not match
+          // the longer specifier, but keeping them ordered specific→generic
+          // makes that impossible to regress.
+          const rewrites: [RegExp, string][] = [
+            [
+              /await import\(\s*\/\*\s*@vite-ignore\s*\*\/\s*`@catgo\/ferrox-wasm\/pkg-threaded\/ferrox_bg\.wasm\?url`\s*\)/g,
+              resolve(__dirname, `extensions/rust-wasm/pkg-threaded/ferrox_bg.wasm`)
+                .replace(/\\/g, `/`),
+            ],
+            [
+              /await import\(\s*\/\*\s*@vite-ignore\s*\*\/\s*`@catgo\/ferrox-wasm\/ferrox_bg\.wasm\?url`\s*\)/g,
+              resolve(__dirname, `extensions/rust-wasm/pkg/ferrox_bg.wasm`)
+                .replace(/\\/g, `/`),
+            ],
+          ]
           const is_build = process.argv.includes(`build`)
-          if (is_build) {
-            // Build mode: replace @vite-ignore dynamic import with a static import
-            // that Vite can resolve and emit as a hashed asset URL.
-            return code.replace(
-              /await import\(\s*\/\*\s*@vite-ignore\s*\*\/\s*`@catgo\/ferrox-wasm\/ferrox_bg\.wasm\?url`\s*\)/g,
-              `(await import("${wasm_path}?url"))`,
-            )
-          } else {
-            // Dev mode: replace with /@fs/-prefixed path for Vite dev server.
-            const fs_url = `/@fs${wasm_path.startsWith(`/`) ? `` : `/`}${wasm_path}`
-            return code.replace(
-              /await import\(\s*\/\*\s*@vite-ignore\s*\*\/\s*`@catgo\/ferrox-wasm\/ferrox_bg\.wasm\?url`\s*\)/g,
-              `({ default: "${fs_url}" })`,
-            )
+          for (const [pattern, wasm_path] of rewrites) {
+            if (is_build) {
+              // Build mode: replace @vite-ignore dynamic import with a static import
+              // that Vite can resolve and emit as a hashed asset URL.
+              code = code.replace(pattern, `(await import("${wasm_path}?url"))`)
+            } else {
+              // Dev mode: replace with /@fs/-prefixed path for Vite dev server.
+              const fs_url = `/@fs${wasm_path.startsWith(`/`) ? `` : `/`}${wasm_path}`
+              code = code.replace(pattern, `({ default: "${fs_url}" })`)
+            }
           }
+          return code
         }
         return null
       },
@@ -804,6 +817,12 @@ export default defineConfig({
     target: `esnext`,
   },
 
+  // wasm-bindgen-rayon's threaded glue imports child worker chunks. Vite's
+  // default iife worker output cannot code-split, so emit module workers.
+  worker: {
+    format: `es`,
+  },
+
   resolve: {
     alias: {
       '$lib': resolve(__dirname, `src/lib`),
@@ -818,7 +837,6 @@ export default defineConfig({
         __dirname,
         `extensions/rust-wasm/pkg/ferrox_bg.wasm`,
       ),
-      '@catgo/ferrox-wasm': resolve(__dirname, `extensions/rust-wasm`),
     },
   },
 

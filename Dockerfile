@@ -18,6 +18,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/pnpm:/root/.cargo/bin:$PATH \
     CARGO_NET_GIT_FETCH_WITH_CLI=true
 
+# Pinned nightly for the THREADED ferrox WASM artifact (std is rebuilt with
+# atomics, which needs nightly + rust-src). One knob: consumed by BOTH the
+# rustup install below and scripts/build-wasm.mjs, so the installed toolchain
+# and the one the build selects can never diverge. Keep in sync with
+# CATGO_WASM_NIGHTLY_TOOLCHAIN in .github/workflows/*.yml (bump procedure
+# documented there).
+ENV CATGO_WASM_NIGHTLY_TOOLCHAIN=nightly-2026-07-16
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential pkg-config libssl-dev python3 \
     && rm -rf /var/lib/apt/lists/*
@@ -25,9 +33,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # pnpm pinned to packageManager field
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
-# Rust + wasm-pack (for extensions/rust-wasm)
+# Rust + wasm-pack (all WASM extensions — scripts/build-wasm.mjs).
+# Stable stays the default toolchain (scalar ferrox / chgdiff / catrender);
+# the pinned nightly (with rust-src) is ONLY used by build-wasm.mjs for the
+# THREADED ferrox artifact, which the deployed web version needs for
+# large-system bonding (COI headers permitting).
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain stable --profile minimal \
+    && rustup target add wasm32-unknown-unknown \
+    && rustup toolchain install "$CATGO_WASM_NIGHTLY_TOOLCHAIN" --profile minimal \
+        --component rust-src --target wasm32-unknown-unknown \
     && cargo install wasm-pack --locked
 
 WORKDIR /app
@@ -43,21 +58,14 @@ RUN --mount=type=cache,target=/pnpm/store \
 # Full source (after manifests for cache reuse)
 COPY . .
 
-# Build all WASM extensions and place where frontend expects them.
-# 1) ferrox (extensions/rust-wasm) → frontend expects "chgdiff_wasm"
-RUN cd extensions/rust-wasm && pnpm build \
-    && cp -r pkg /app/src/lib/electronic/chgdiff-wasm-pkg \
-    && cd /app/src/lib/electronic/chgdiff-wasm-pkg \
-    && mv ferrox.js chgdiff_wasm.js \
-    && mv ferrox_bg.wasm chgdiff_wasm_bg.wasm \
-    && mv ferrox.d.ts chgdiff_wasm.d.ts 2>/dev/null || true \
-    && sed -i 's/ferrox_bg\.wasm/chgdiff_wasm_bg.wasm/g' chgdiff_wasm.js
-
-# 2) catrender-wasm → frontend expects "catrender_wasm"
-RUN cd extensions/catrender-wasm \
-    && wasm-pack build --target web --out-dir /app/src/lib/structure/catrender/catrender-wasm-pkg \
-    && cd /app/src/lib/structure/catrender/catrender-wasm-pkg \
-    && mv catrender_wasm.js catrender_wasm.js 2>/dev/null || true
+# Build ALL WASM extensions via the unified script (design §8.3 — every
+# production wasm build uses the same explicit feature set). Outputs land
+# where the frontend imports them: ferrox scalar + threaded (+ pkg/ bridge)
+# in extensions/rust-wasm/, chgdiff in src/lib/electronic/chgdiff-wasm-pkg/,
+# catrender in src/lib/structure/catrender/catrender-wasm-pkg/. (The old
+# ferrox→chgdiff rename hack here predates the dedicated
+# extensions/chgdiff-wasm crate, which build-wasm.mjs builds directly.)
+RUN pnpm build:wasm && pnpm verify:wasm
 
 # Generate docs-chunks.json for RAG
 RUN pnpm build:doc-chunks

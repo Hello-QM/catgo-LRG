@@ -1,9 +1,8 @@
 // Multi-frame XYZ / extended XYZ trajectory parser
 import type { ElementSymbol } from '$lib'
-import type { Matrix3x3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { TrajectoryFrame, TrajectoryType } from '../index'
-import { create_trajectory_frame } from './common'
+import { create_trajectory_frame, parse_xyz_lattice } from './common'
 
 export const parse_xyz_trajectory = (content: string): TrajectoryType => {
   const lines = content.trim().split(/\r?\n/)
@@ -56,19 +55,10 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
       metadata.source_file = source_file_match[1]
     }
 
-    // Extract lattice matrix
-    const lattice_match = comment.match(/Lattice\s*=\s*"([^"]+)"/i)
-    let lattice_matrix: Matrix3x3 | undefined
-    if (lattice_match) {
-      const values = lattice_match[1].split(/\s+/).map(Number)
-      if (values.length === 9) {
-        lattice_matrix = [[values[0], values[1], values[2]], [
-          values[3],
-          values[4],
-          values[5],
-        ], [values[6], values[7], values[8]]]
-        metadata.volume = math.calc_lattice_params(lattice_matrix).volume
-      }
+    // Extract lattice matrix (shared with the indexed frame loader, #536).
+    const lattice_matrix = parse_xyz_lattice(comment)
+    if (lattice_matrix) {
+      metadata.volume = math.calc_lattice_params(lattice_matrix).volume
     }
 
     // Parse the Properties spec to find column offsets for any extension
@@ -130,7 +120,9 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
       // Exclude fully-fixed atoms (move_mask=false) from the reported max/RMS so the
       // force curve tracks the free atoms actually being relaxed, not a large
       // constraint reaction on a frozen atom.
-      const free = magnitudes.filter((_, i) => move_mask.length === 0 || move_mask[i] !== false)
+      const free = magnitudes.filter((_, i) =>
+        move_mask.length === 0 || move_mask[i] !== false
+      )
       const mags = free.length > 0 ? free : magnitudes
       metadata.force_max = Math.max(...mags)
       // Calculate RMS (root mean square) of force magnitudes
