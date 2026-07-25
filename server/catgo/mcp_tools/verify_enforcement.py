@@ -59,11 +59,29 @@ _NUMERIC_PREFIXES = (
 )
 _NUMERIC_EXEMPT_PREFIXES = ("hub_",)  # plugin-hub admin actions produce no physics
 
-_sessions = {}  # session_key -> {"unverified": int, "last_numeric": str|None}
+MIN_JUSTIFICATION = 20  # chars; an override has to say something, not just "ok"
+# Sentinel "gate" for the case where NO gate could run (the result carries no
+# checkable field). Measured on the independent corpus: 3/79 good results and
+# 6/40 bad ones. Without an escape hatch those sessions are blocked forever —
+# nothing failed, so there is nothing to fix and nothing to waive. The escape is
+# deliberately the same narrow, justified, one-shot, audited path as a FAIL waiver.
+NO_COVERAGE = "no-coverage"
+
+_sessions = {}
 
 
 def _st(session_key="default"):
-    return _sessions.setdefault(session_key, {"unverified": 0, "last_numeric": None})
+    """Session state.
+
+    unverified  — count of numeric results produced since the last clean verify
+    failed      — gate/claim names a verify actually FAILED on (empty = nothing known bad)
+    override    — one-shot human-authored waiver: {"gates": [...], "why": str}
+    audit       — append-only record of overrides that were spent (for the paper + forensics)
+    """
+    return _sessions.setdefault(session_key, {
+        "unverified": 0, "last_numeric": None,
+        "failed": [], "failed_taxa": [], "override": None, "audit": [],
+    })
 
 
 def _is_submit(tool, args):
@@ -83,14 +101,54 @@ def _is_numeric(tool, args):
 
 def precheck(tool, args, session_key="default"):
     """Call BEFORE dispatching a tool. Returns (decision, reason).
-    FORBIDDEN only when an irreversible call would launder unverified numbers."""
+
+    Two distinct FORBIDDEN reasons, in strictest-first order:
+      1. verify FAILED (or refused to certify a claim) and nothing was fixed
+         → the result is *known* bad; submitting is worse than not having checked.
+      2. numeric results exist that were never verified at all.
+    A one-shot override downgrades (1) to PROMPT — the submit proceeds but is
+    stamped, so a false alarm costs one logged waiver instead of a dead end.
+    """
     st = _st(session_key)
-    if _is_submit(tool, args) and st["unverified"] > 0:
+    if not _is_submit(tool, args):
+        return (ALLOW, "")
+
+    if st["failed"]:
+        ov = st["override"]
+        if ov and set(st["failed"]) <= set(ov["gates"]):
+            st["override"] = None  # one-shot: spent by this submit
+            st["audit"].append({"waived": sorted(st["failed"]), "why": ov["why"],
+                                "tool": tool, "action": (args or {}).get("action")})
+            return (PROMPT,
+                    f"⚠ OVERRIDE SPENT: submitting despite FAILED gate(s) "
+                    f"{', '.join(sorted(st['failed']))} "
+                    f"[taxa {', '.join(st['failed_taxa'])}] — justification: {ov['why']}")
+        return (FORBIDDEN,
+                f"BLOCKED: catgo_verify FAILED on {', '.join(sorted(st['failed']))} "
+                f"[silent-error taxa {', '.join(st['failed_taxa']) or 'n/a'}]. "
+                f"A result known to be wrong must not spend HPC budget. Fix the "
+                f"result and re-run catgo_verify (a clean audit clears this), or — "
+                f"if this is a false alarm — call catgo_verify with "
+                f"override=[<gate names>] and justification='<why, ≥"
+                f"{MIN_JUSTIFICATION} chars>' to record a waiver.")
+
+    if st["unverified"] > 0:
+        ov = st["override"]
+        if ov and NO_COVERAGE in ov["gates"]:
+            st["override"] = None
+            st["audit"].append({"waived": [NO_COVERAGE], "why": ov["why"],
+                                "tool": tool, "action": (args or {}).get("action")})
+            return (PROMPT,
+                    f"⚠ OVERRIDE SPENT: submitting a result no gate could check "
+                    f"— justification: {ov['why']}")
         return (FORBIDDEN,
                 f"BLOCKED: {st['unverified']} numeric result(s) from "
                 f"{st['last_numeric']} have not passed catgo_verify. Run "
                 f"catgo_verify on the parsed result (with claims=[...]) before "
-                f"submitting — an unverified number must not spend HPC budget.")
+                f"submitting — an unverified number must not spend HPC budget. "
+                f"If no gate can check this result at all, call catgo_verify with "
+                f"override=['{NO_COVERAGE}'] and justification='<why it is sound "
+                f"anyway>' to record a waiver.")
     return (ALLOW, "")
 
 
@@ -110,12 +168,68 @@ def postmark(tool, args, ok=True, session_key="default"):
         st["last_numeric"] = tool
 
 
-def mark_verified(covered, session_key="default"):
-    """Called by the catgo_verify handler after an audit. Clears the pending
-    unverified state ONLY if at least one gate actually ran (covered is truthy /
-    coverage.ran > 0). An empty or no-coverage verify does not clear it."""
-    if covered:
-        _st(session_key)["unverified"] = 0
+def mark_verified(covered, failed_gates=(), failed_taxa=(), uncertified_claims=(),
+                  session_key="default"):
+    """Called by the catgo_verify handler after an audit.
+
+    Clearing requires BOTH conditions — this is the fix for a real bypass found by
+    driving the live MCP server: previously any verify that merely *ran* a gate
+    cleared the pending state, so an agent could call catgo_verify, be told
+    "FAIL — do NOT report this result as correct", and submit the job anyway.
+
+      covered (coverage.ran > 0)  — an empty/all-SKIP verify is not a clean bill
+      no FAIL and no uncertified claim — a known-bad result stays blocked
+
+    A later clean verify on the fixed result clears both flags.
+    """
+    st = _st(session_key)
+    if not covered:
+        return
+    bad = sorted(set(failed_gates) | {f"claim:{c}" for c in uncertified_claims})
+    if bad:
+        st["failed"] = bad
+        st["failed_taxa"] = sorted(failed_taxa)
+        st["override"] = None  # a new failing audit invalidates a stale waiver
+        return
+    st["unverified"] = 0
+    st["failed"] = []
+    st["failed_taxa"] = []
+    st["override"] = None
+
+
+def register_override(gates, justification, session_key="default"):
+    """Record a one-shot human-authored waiver for gates that actually FAILED.
+
+    Deliberately narrow: you may only waive what is currently failing, you must
+    name each gate, and you must say why. Raises ValueError otherwise — a waiver
+    that can be issued reflexively is not a waiver, it is an off switch.
+    """
+    st = _st(session_key)
+    gates = [g for g in (gates or []) if str(g).strip()]
+    if not gates:
+        raise ValueError("override requires the gate name(s) being waived")
+    waivable = set(st["failed"])
+    if not st["failed"] and st["unverified"] > 0:
+        waivable = {NO_COVERAGE}  # nothing failed, nothing checkable → the escape hatch
+    if not waivable:
+        raise ValueError("nothing to override — no gate is currently failing and "
+                         "no result is pending verification")
+    unknown = sorted(set(gates) - waivable)
+    if unknown:
+        raise ValueError(f"cannot override gate(s) that did not fail: {unknown} "
+                         f"(waivable now: {sorted(waivable)})")
+    why = (justification or "").strip()
+    if len(why) < MIN_JUSTIFICATION:
+        raise ValueError(f"justification must be ≥{MIN_JUSTIFICATION} chars saying why "
+                         f"this FAIL is a false alarm (got {len(why)})")
+    st["override"] = {"gates": sorted(set(gates)), "why": why}
+    return st["override"]
+
+
+def state(session_key="default"):
+    """Read-only snapshot (for tests, telemetry, and the paper's audit counts)."""
+    st = _st(session_key)
+    return {k: (list(v) if isinstance(v, list) else v) for k, v in st.items()}
 
 
 if __name__ == "__main__":
@@ -134,12 +248,56 @@ if __name__ == "__main__":
     # hub admin actions are not "numeric"
     postmark("catgo_analyze", {"action": "hub_search"}, ok=True, session_key="t2")
     assert precheck("catgo_workflow_engine", {}, "t2")[0] == ALLOW
-    # verify clears the pending state
+    # a clean verify (a gate ran, nothing failed) clears the pending state.
+    # NB: postmark("catgo_verify") does NOT clear — only the handler's
+    # mark_verified() does, so an agent cannot clear by *calling* the tool.
     postmark("catgo_verify", {}, ok=True, session_key=sk)
+    assert precheck("catgo_workflow", {"action": "submit"}, sk)[0] == FORBIDDEN
+    mark_verified(True, session_key=sk)
     assert precheck("catgo_workflow", {"action": "submit"}, sk)[0] == ALLOW
     # failed tool runs do not count as produced results
     postmark("catgo_analyze", {"action": "dos"}, ok=False, session_key="t3")
     assert precheck("catgo_workflow_engine", {}, "t3")[0] == ALLOW
-    print("verify_enforcement self-test OK — tri-state strictest-wins; "
-          "unverified numerics FORBID irreversible submits; verify clears; "
-          "hub/admin and failed runs exempt")
+
+    # --- a FAILING verify must NOT clear the gate (the live-probe bypass) ---
+    sk2 = "t4"
+    postmark("catgo_analyze", {"action": "thermo_free_energy"}, ok=True, session_key=sk2)
+    mark_verified(True, failed_gates=["ul_range"], failed_taxa=["G2"], session_key=sk2)
+    dec, why = precheck("catgo_workflow", {"action": "submit"}, sk2)
+    assert dec == FORBIDDEN and "ul_range" in why
+    # an uncertified claim blocks too, even with every value gate passing
+    sk3 = "t5"
+    postmark("catgo_analyze", {"action": "thermo_free_energy"}, ok=True, session_key=sk3)
+    mark_verified(True, uncertified_claims=["binding_dG"], session_key=sk3)
+    assert precheck("catgo_workflow", {"action": "submit"}, sk3)[0] == FORBIDDEN
+    # fixing the result and re-verifying clean clears it
+    mark_verified(True, session_key=sk3)
+    assert precheck("catgo_workflow", {"action": "submit"}, sk3)[0] == ALLOW
+
+    # --- override: narrow, justified, one-shot ---
+    for bad in ([], ["physical_range"]):          # empty / not-actually-failing
+        try:
+            register_override(bad, "x" * 40, session_key=sk2); raise SystemExit("no raise")
+        except ValueError:
+            pass
+    try:                                          # justification too short
+        register_override(["ul_range"], "ok", session_key=sk2); raise SystemExit("no raise")
+    except ValueError:
+        pass
+    register_override(["ul_range"], "cer U_L window is reaction-dependent; "
+                                    "geometry checked in D-06", session_key=sk2)
+    dec, why = precheck("catgo_workflow", {"action": "submit"}, sk2)
+    assert dec == PROMPT and "OVERRIDE SPENT" in why
+    assert len(state(sk2)["audit"]) == 1
+    # one-shot: the next submit is blocked again
+    assert precheck("catgo_workflow", {"action": "submit"}, sk2)[0] == FORBIDDEN
+    # a fresh failing audit invalidates a stale waiver
+    register_override(["ul_range"], "same waiver as above, still a false alarm",
+                      session_key=sk2)
+    mark_verified(True, failed_gates=["ul_range"], failed_taxa=["G2"], session_key=sk2)
+    assert precheck("catgo_workflow", {"action": "submit"}, sk2)[0] == FORBIDDEN
+
+    print("verify_enforcement self-test OK — tri-state strictest-wins; unverified "
+          "numerics FORBID irreversible submits; a FAILED or uncertified verify keeps "
+          "them forbidden; only a clean audit clears; override is narrow, justified, "
+          "one-shot and audited; hub/admin and failed runs exempt")

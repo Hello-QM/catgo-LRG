@@ -404,6 +404,14 @@ async def handle_list_tools() -> list[Tool]:
                            "description": "Claim types asserted (binding_dG, her_dGH, band_gap, "
                                           "field_energy, stratified, converged_E) for the "
                                           "verifiability check."},
+                "override": {"type": "array", "items": {"type": "string"},
+                             "description": "Gate name(s) whose FAIL you assert is a false alarm. "
+                                            "Waives the submit block ONCE for exactly those gates "
+                                            "(only if actually failing); requires justification and "
+                                            "is recorded. Prefer fixing the result."},
+                "justification": {"type": "string",
+                                  "description": "Why the overridden FAIL is a false alarm "
+                                                 "(≥20 chars, physics or provenance). Recorded."},
             },
             "required": ["result"],
         },
@@ -548,6 +556,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     ok = not (result and isinstance(result[0].text, str) and
               (result[0].text.startswith("Unknown tool:") or result[0].text.startswith("Error:")))
     _verify_enf.postmark(name, arguments, ok=ok)
+    if decision == _verify_enf.PROMPT and result:
+        # a waived FAIL still went out — stamp the response so the override is
+        # visible in the transcript rather than only in the audit list.
+        result[0] = TextContent(type="text", text=f"{reason}\n\n{result[0].text}")
     return result
 
 

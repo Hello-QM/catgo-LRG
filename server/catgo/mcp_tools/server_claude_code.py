@@ -875,6 +875,24 @@ TOOLS = [
                         "cannot check, rather than passing it silently."
                     ),
                 },
+                "override": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Gate name(s) whose FAIL you assert is a false alarm. A FAILED "
+                        "gate blocks irreversible calls (HPC submit); this waives that "
+                        "block ONCE, for exactly the named gates, and only if they are "
+                        "actually failing. Requires 'justification'. The waiver is "
+                        "recorded — prefer fixing the result and re-verifying."
+                    ),
+                },
+                "justification": {
+                    "type": "string",
+                    "description": (
+                        "Why the FAIL being overridden is a false alarm (≥20 chars, "
+                        "physics or provenance, not 'looks fine'). Recorded verbatim."
+                    ),
+                },
             },
             "required": ["result"],
         },
@@ -2363,13 +2381,10 @@ def _handle_verify(args: dict) -> list[TextContent]:
         return [T(type="text", text=f"catgo_verify: {e}")]
 
     cov = report["coverage"]
-    # clear the pending-verification state ONLY if a gate actually ran — an empty
-    # verify (all SKIP) must not bypass the enforcement gate.
     try:
         from . import verify_enforcement as _enf
     except ImportError:
         import verify_enforcement as _enf
-    _enf.mark_verified(cov["ran"] > 0)
     lines = []
     for v in report["verdicts"]:
         mark = {"PASS": "✓", "FAIL": "✗", "SKIP": "·"}[v["status"]]
@@ -2387,7 +2402,7 @@ def _handle_verify(args: dict) -> list[TextContent]:
         head += "\n  no gate had its inputs — this is NOT a clean bill of health."
 
     claims = args.get("claims") or []
-    vlines = []
+    vlines, unver = [], []
     if claims:
         vres = verify_gates.verifiability(result, claims)  # compute once
         for vf in vres:
@@ -2399,9 +2414,32 @@ def _handle_verify(args: dict) -> list[TextContent]:
             head += (f"\n  {len(unver)} claim(s) not certified (UNVERIFIABLE / UNKNOWN-CLAIM) "
                      "— asserted but lacking provenance to check.")
 
+    # Enforcement bookkeeping. Clearing the pending state needs a gate to have RUN
+    # *and* nothing to have failed — a FAIL or an uncertified claim keeps irreversible
+    # tools blocked, so the agent cannot spend HPC budget on a result it was just told
+    # is wrong. (An all-SKIP verify is not a clean bill of health either.)
+    _enf.mark_verified(
+        cov["ran"] > 0,
+        failed_gates=[v["gate"] for v in report["verdicts"] if v["status"] == "FAIL"],
+        failed_taxa=cov["failed_taxa"],
+        uncertified_claims=[vf["claim"] for vf in unver],
+    )
+
+    ov_lines = []
+    if args.get("override"):
+        try:
+            ov = _enf.register_override(args["override"], args.get("justification", ""))
+            ov_lines = ["", f"⚠ override registered for {', '.join(ov['gates'])} — "
+                            f"one-shot, spent by the next irreversible call, and recorded. "
+                            f"justification: {ov['why']}"]
+        except ValueError as e:
+            ov_lines = ["", f"override REFUSED: {e}"]
+
     body = head + "\n" + "\n".join(lines)
     if vlines:
         body += "\n\nverifiability:\n" + "\n".join(vlines)
+    if ov_lines:
+        body += "\n".join(ov_lines)
     return [T(type="text", text=body)]
 
 
@@ -3527,6 +3565,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     ok = not (result and isinstance(result[0].text, str) and
               result[0].text.startswith(("Unknown tool:", f"{name} failed:", "Cannot connect")))
     _enf.postmark(name, arguments, ok=ok)
+    if decision == _enf.PROMPT and result:
+        # a waived FAIL still went out — stamp the response so the override is
+        # visible in the transcript rather than only in the audit list.
+        result[0] = T(type="text", text=f"{reason}\n\n{result[0].text}")
     return result
 
 

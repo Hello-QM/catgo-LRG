@@ -126,6 +126,92 @@ def test_strictest_wins():
     assert enf.strictest(enf.PROMPT, enf.FORBIDDEN) == enf.FORBIDDEN
 
 
+# ---- R5: a FAILING verify must not clear the gate -------------------------
+# Found by driving the live MCP server as an agent: catgo_verify returned
+# "FAIL — do NOT report this result as correct" and the very next submit went
+# through, because clearing keyed on "a gate ran" alone.
+def test_R5_failed_verify_keeps_submit_forbidden():
+    sk = "r5"; _fresh(sk)
+    enf.postmark("catgo_catalysis", {"action": "oer"}, ok=True, session_key=sk)
+    enf.mark_verified(True, failed_gates=["ul_range"], failed_taxa=["G2"], session_key=sk)
+    dec, why = enf.precheck("catgo_workflow", {"action": "submit"}, sk)
+    assert dec == enf.FORBIDDEN and "ul_range" in why and "G2" in why
+
+
+def test_R5_uncertified_claim_keeps_submit_forbidden():
+    sk = "r5c"; _fresh(sk)
+    enf.postmark("catgo_analyze", {}, ok=True, session_key=sk)
+    enf.mark_verified(True, uncertified_claims=["binding_dG"], session_key=sk)
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
+    # fixing the result and re-verifying clean clears both flags
+    enf.mark_verified(True, session_key=sk)
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.ALLOW
+
+
+def test_R5_override_is_narrow_justified_and_one_shot():
+    sk = "r5o"; _fresh(sk)
+    enf.postmark("catgo_catalysis", {"action": "oer"}, ok=True, session_key=sk)
+    enf.mark_verified(True, failed_gates=["ul_range"], failed_taxa=["G2"], session_key=sk)
+    for bad_gates, why in (([], "x" * 30),                       # no gate named
+                           (["physical_range"], "x" * 30),       # not the failing gate
+                           (["ul_range"], "ok")):                # justification too thin
+        try:
+            enf.register_override(bad_gates, why, session_key=sk)
+        except ValueError:
+            pass
+        else:
+            assert False, f"override should be refused: {bad_gates!r} {why!r}"
+    enf.register_override(["ul_range"], "U_L window is reaction-dependent for CER; "
+                                        "geometry verified in D-06", session_key=sk)
+    dec, why = enf.precheck("catgo_workflow", {"action": "submit"}, sk)
+    assert dec == enf.PROMPT and "OVERRIDE SPENT" in why
+    # spent — the next submit is blocked again, and the waiver is on record
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
+    audit = enf.state(sk)["audit"]
+    assert len(audit) == 1 and audit[0]["waived"] == ["ul_range"]
+
+
+def test_R5_no_override_without_a_failure():
+    sk = "r5n"; _fresh(sk)
+    try:
+        enf.register_override(["ul_range"], "x" * 40, session_key=sk)
+    except ValueError:
+        pass
+    else:
+        assert False, "override must be refused when nothing is failing"
+
+
+def test_R5_no_coverage_has_an_escape_hatch():
+    # a result no gate can check: nothing failed, so there is nothing to fix —
+    # without the sentinel waiver the session would be blocked forever.
+    sk = "r5nc"; _fresh(sk)
+    enf.postmark("catgo_analyze", {}, ok=True, session_key=sk)
+    enf.mark_verified(False, session_key=sk)          # all gates SKIP
+    dec, why = enf.precheck("catgo_workflow", {"action": "submit"}, sk)
+    assert dec == enf.FORBIDDEN and enf.NO_COVERAGE in why
+    try:
+        enf.register_override([enf.NO_COVERAGE], "short", session_key=sk)
+    except ValueError:
+        pass
+    else:
+        assert False, "no-coverage waiver still needs a real justification"
+    enf.register_override([enf.NO_COVERAGE],
+                          "MD restart energies carry no field any gate reads; "
+                          "trajectory checked by hand", session_key=sk)
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.PROMPT
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
+    # and the hatch must not open when a gate actually failed — that must be fixed
+    sk2 = "r5nc2"; _fresh(sk2)
+    enf.postmark("catgo_analyze", {}, ok=True, session_key=sk2)
+    enf.mark_verified(True, failed_gates=["ul_range"], failed_taxa=["G2"], session_key=sk2)
+    try:
+        enf.register_override([enf.NO_COVERAGE], "x" * 40, session_key=sk2)
+    except ValueError:
+        pass
+    else:
+        assert False, "no-coverage sentinel must not waive a real FAIL"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
