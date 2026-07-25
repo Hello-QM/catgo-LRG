@@ -20,6 +20,13 @@ def _point(point_number, path_number):
     return f" Point Number: {point_number} Path Number: {path_number}\n"
 
 
+def _completed_point(point_number, path_number, attempts):
+    return "".join(
+        _orientation_block("Input orientation", x) + _scf_energy(energy)
+        for x, energy in attempts
+    ) + _point(point_number, path_number)
+
+
 def test_prefers_standard_orientation_without_duplicate_geometry(tmp_path):
     output = tmp_path / "both-orientations.out"
     output.write_text(
@@ -52,19 +59,10 @@ def test_orders_bidirectional_irc_and_restores_checkpoint_ts(tmp_path):
         " Recover connectivity data from disk.\n"
         " Energy From Chk = -10.00000000\n"
         + _point(0, 1)
-        + _orientation_block("Input orientation", 1)
-        + _scf_energy(-10.1)
-        + _point(1, 1)
-        + _orientation_block("Input orientation", 2)
-        + _scf_energy(-10.2)
-        + _point(2, 1)
-        + _orientation_block("Input orientation", 3)
-        + _scf_energy(-10.3)
-        + _point(1, 2)
-        + _orientation_block("Input orientation", 4)
-        + _scf_energy(-10.4)
-        + _point(2, 2)
-        + _orientation_block("Input orientation", 4)
+        + _completed_point(1, 1, [(1, -10.1)])
+        + _completed_point(2, 1, [(2, -10.2)])
+        + _completed_point(1, 2, [(3, -10.3)])
+        + _completed_point(2, 2, [(4, -10.4)])
     )
 
     energies, *_, geometries = parse_gaussian(output)
@@ -77,25 +75,38 @@ def test_keeps_irc_ts_already_present_without_checkpoint(tmp_path):
     output = tmp_path / "irc-with-input-ts.out"
     output.write_text(
         " IRC-IRC-IRC-IRC-IRC-\n"
-        + _point(0, 1)
-        + _orientation_block("Input orientation", 0)
-        + _scf_energy(-10.0)
-        + _point(1, 1)
-        + _orientation_block("Input orientation", 1)
-        + _scf_energy(-10.1)
-        + _point(2, 1)
-        + _orientation_block("Input orientation", 2)
-        + _scf_energy(-10.2)
-        + _point(1, 2)
-        + _orientation_block("Input orientation", 3)
-        + _scf_energy(-10.3)
-        + _point(2, 2)
-        + _orientation_block("Input orientation", 4)
-        + _scf_energy(-10.4)
-        + _orientation_block("Input orientation", 4)
+        + _completed_point(0, 1, [(0, -10.0)])
+        + _completed_point(1, 1, [(1, -10.1)])
+        + _completed_point(2, 1, [(2, -10.2)])
+        + _completed_point(1, 2, [(3, -10.3)])
+        + _completed_point(2, 2, [(4, -10.4)])
     )
 
     energies, *_, geometries = parse_gaussian(output)
 
     assert [frame[0][1] for frame in geometries] == [4, 3, 0, 1, 2]
+    assert energies == [-10.4, -10.3, -10.0, -10.1, -10.2]
+
+
+def test_keeps_final_correction_for_each_irc_point(tmp_path):
+    output = tmp_path / "irc-corrections.out"
+    output.write_text(
+        " IRC-IRC-IRC-IRC-IRC-\n"
+        " Redundant internal coordinates found in file.  (old form).\n"
+        " C,0,0.000000,0.000000,0.000000\n"
+        " Recover connectivity data from disk.\n"
+        " Energy From Chk = -10.00000000\n"
+        + _point(0, 1)
+        + _completed_point(1, 1, [(1.1, -10.01), (1.0, -10.1)])
+        + _completed_point(2, 1, [(2.0, -10.2)])
+        + _completed_point(1, 2, [(-1.0, -10.3)])
+        + _completed_point(2, 2, [(-2.0, -10.4)])
+        + " Summary of reaction path following\n"
+        + _orientation_block("Input orientation", 999)
+        + _scf_energy(-99)
+    )
+
+    energies, *_, geometries = parse_gaussian(output)
+
+    assert [frame[0][1] for frame in geometries] == [-2, -1, 0, 1, 2]
     assert energies == [-10.4, -10.3, -10.0, -10.1, -10.2]

@@ -74,36 +74,8 @@ def _parse_checkpoint_geometry(content):
     return atoms or None
 
 
-def _parse_irc(content, lines):
-    path_points = [
-        (int(point), int(path))
-        for point, path in re.findall(
-            r"Point Number:\s*(\d+)\s+Path Number:\s*(\d+)",
-            content,
-        )
-    ]
-    if not path_points:
-        return None
-
-    path_one_count = sum(path == 1 for _, path in path_points)
-    path_two_count = sum(path == 2 for _, path in path_points)
-    if path_one_count + path_two_count != len(path_points):
-        return None
-
-    orientation = (
-        "Input orientation:"
-        if any("Input orientation:" in line for line in lines)
-        else "Standard orientation:"
-    )
-    orientation_geometries = _parse_orientation_blocks(lines, orientation)
-    checkpoint_geometry = _parse_checkpoint_geometry(content)
-    raw_geometries = (
-        [checkpoint_geometry] + orientation_geometries
-        if checkpoint_geometry
-        else orientation_geometries
-    )
-
-    scf_energies = [
+def _parse_scf_energies(content):
+    return [
         float(energy.replace("D", "E").replace("d", "E"))
         for energy in re.findall(
             r"SCF Done:\s*E\(.+?\)\s*=\s*"
@@ -111,30 +83,87 @@ def _parse_irc(content, lines):
             content,
         )
     ]
+
+
+def _parse_irc_records(content, orientation):
+    marker_matches = list(
+        re.finditer(
+            r"Point Number:\s*(\d+)\s+Path Number:\s*(\d+)",
+            content,
+        )
+    )
+    if not marker_matches:
+        return None
+
+    checkpoint_geometry = _parse_checkpoint_geometry(content)
     checkpoint_energy_match = re.search(
         r"Energy From Chk\s*=\s*"
         r"([-+]?\d+(?:\.\d+)?(?:[DEde][-+]?\d+)?)",
         content,
     )
-    raw_energies = scf_energies
-    if checkpoint_energy_match:
-        checkpoint_energy = float(
+    checkpoint_energy = (
+        float(
             checkpoint_energy_match.group(1).replace("D", "E").replace("d", "E")
         )
-        raw_energies = [checkpoint_energy] + raw_energies
+        if checkpoint_energy_match
+        else None
+    )
+    irc_start = content.rfind(
+        "IRC-IRC-IRC-",
+        0,
+        marker_matches[0].start(),
+    )
 
-    point_count = len(path_points)
-    if len(raw_geometries) < point_count or len(raw_energies) < point_count:
+    records = []
+    for idx, marker in enumerate(marker_matches):
+        interval_start = (
+            max(0, irc_start)
+            if idx == 0
+            else marker_matches[idx - 1].end()
+        )
+        interval = content[interval_start:marker.start()]
+        point = int(marker.group(1))
+        path = int(marker.group(2))
+        geometries = _parse_orientation_blocks(interval.splitlines(), orientation)
+        energies = _parse_scf_energies(interval)
+        geometry = geometries[-1] if geometries else None
+        energy = energies[-1] if energies else None
+        if point == 0:
+            geometry = geometry or checkpoint_geometry
+            energy = checkpoint_energy if energy is None else energy
+        if geometry is None or energy is None or path not in (1, 2):
+            return None
+
+        records.append(
+            {
+                "point": point,
+                "path": path,
+                "geometry": geometry,
+                "energy": energy,
+            }
+        )
+
+    return records
+
+
+def _parse_irc(content, lines):
+    orientation = (
+        "Input orientation:"
+        if any("Input orientation:" in line for line in lines)
+        else "Standard orientation:"
+    )
+    records = _parse_irc_records(content, orientation)
+    if not records:
         return None
 
     # Gaussian writes Path 1 from TS outward, then Path 2 from TS outward.
     # Reverse Path 2 so the exported trajectory runs endpoint -> TS -> endpoint.
-    ordered_indices = (
-        list(range(point_count - 1, path_one_count - 1, -1))
-        + list(range(path_one_count))
+    ordered = (
+        list(reversed([record for record in records if record["path"] == 2]))
+        + [record for record in records if record["path"] == 1]
     )
-    energies = [raw_energies[idx] for idx in ordered_indices]
-    geometries = [raw_geometries[idx] for idx in ordered_indices]
+    energies = [record["energy"] for record in ordered]
+    geometries = [record["geometry"] for record in ordered]
     return energies, geometries
 
 
