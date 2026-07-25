@@ -11,7 +11,11 @@ const RIGHTS_COMMAND = 'node scripts/verify-release-rights.mjs'
 const RELEASE_JOBS = {
   'android-build.yml': ['android'],
   'build-vscode-sidecars.yml': ['build'],
-  'deploy-cloudflare.yml': ['deploy-app'],
+  'deploy-cloudflare.yml': [
+    'deploy-app',
+    'deploy-docs',
+    'deploy-downloads',
+  ],
   'docker-publish.yml': ['build-and-push'],
   'hpc-bundle.yml': ['build-bundle'],
   'ios-build.yml': ['ios'],

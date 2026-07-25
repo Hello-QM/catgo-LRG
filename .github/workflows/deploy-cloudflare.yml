@@ -60,6 +60,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
@@ -216,6 +219,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - uses: pnpm/action-setup@v4
         with:
