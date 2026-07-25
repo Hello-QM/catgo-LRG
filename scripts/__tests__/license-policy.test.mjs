@@ -100,3 +100,28 @@ test('separately licensed crates retain their own terms', () => {
   assert.match(read('extensions/vsepr-rs/Cargo.toml'), /MIT OR Apache-2\.0/)
   assert.match(read('extensions/rust/pyproject.toml'), /MIT/)
 })
+
+const userDocs = ['readme.md', 'readme.zh.md', 'server/README-pypi.md']
+
+test('user docs require acknowledgement, citation, and commercial permission', () => {
+  for (const file of userDocs) {
+    const text = read(file)
+    assert.match(text, /CatGo Noncommercial Research License 1\.0/, file)
+    assert.match(text, /CITATION\.cff/, file)
+    assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')), file)
+    assert.match(text, /COMMERCIAL_LICENSE\.md/, file)
+    assert.doesNotMatch(text, /AGPL-3\.0-or-later|AGPL v3/, file)
+  }
+  assert.match(
+    read('readme.md'),
+    new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  )
+  assert.match(read('readme.zh.md'), /必须.*致谢.*引用/)
+})
+
+test('contribution guides disclose the relicensing authority requirement', () => {
+  assert.match(read('contributing.md'), /right to license and enforce/i)
+  assert.match(read('contributing.md'), /not.*relicense third-party/i)
+  assert.match(read('contributing.zh.md'), /许可和维权/)
+  assert.match(read('contributing.zh.md'), /第三方/)
+})

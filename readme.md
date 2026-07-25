@@ -17,7 +17,7 @@
 <p align="center">
 
 [![Tests](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml/badge.svg)](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml)
-[![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
+[![License: CatGo Noncommercial Research License 1.0](https://img.shields.io/badge/license-CatGo%20Noncommercial%20Research%20License%201.0-orange.svg)](license)
 
 </p>
 
@@ -378,7 +378,13 @@ CatGo's structure viewer, periodic table, and parts of its core UI originate fro
 
 **CatRender** is CatGo's Rust/WASM molecular SVG renderer. It is implemented as a fidelity-oriented port of [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender), whose lineage includes [xyz2svg](https://github.com/briling/xyz2svg), with CatGo-specific interactive controls and export integration.
 
-If CatGo contributes to a publication, cite the ChemRxiv preprint:
+Every public output resulting from CatGo use must visibly include the following acknowledgement and the preferred ChemRxiv citation:
+
+```
+This work used CatGo (https://catgo-ucsd.org).
+```
+
+Use this preferred ChemRxiv citation:
 
 ```bibtex
 @misc{liu2026catgo,
@@ -392,7 +398,7 @@ If CatGo contributes to a publication, cite the ChemRxiv preprint:
 }
 ```
 
-For the software release, see [`citation.cff`](citation.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). CatGo is licensed under [GNU AGPL-3.0-or-later](license).
+For the software release, see the canonical [`CITATION.cff`](CITATION.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). CatGo is licensed under [CatGo Noncommercial Research License 1.0](license). Commercial use requires prior written permission; see [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). Third-party materials retain their own terms; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ---
 
