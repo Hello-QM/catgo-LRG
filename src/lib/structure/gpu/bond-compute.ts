@@ -6,9 +6,11 @@ import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
 import { plan_grid, type GridPlan } from '$lib/structure/gpu/bond-grid'
 
 export type BondComputeRun = {
-  tolerance: number
+  /** Multiplicative cutoff on covalent-radii sum, matching Rust AtomRadiiOptions.scale. */
+  scale: number
   max_bond_dist: number
-  min_dist: number
+  /** Minimum bond distance in Å, matching Rust AtomRadiiOptions.min_bond_dist. */
+  min_bond_dist: number
   positions: Float32Array // 3N, xyz interleaved
   radii: Float32Array // N
   lattice: Float32Array // 9, row-major (rows a,b,c)
@@ -62,9 +64,9 @@ export function pack_params(
   u32[1] = capacity
   u32[2] = r.periodic ? 1 : 0
   u32[3] = 0
-  f32[4] = r.tolerance
+  f32[4] = r.scale
   f32[5] = r.max_bond_dist
-  f32[6] = r.min_dist
+  f32[6] = r.min_bond_dist
   // u32[7] = rule_count (number of element-pair distance rules). 0 ⇒ no filter.
   u32[7] = r.rules ? r.rules.length / 4 : 0
   const L = r.lattice
@@ -89,10 +91,31 @@ export function pack_params(
   return buf
 }
 
-/** Unpack a packed jimage u32 -> [na,nb,nc] in {-1,0,1}.
- *  pack = (na+1) | ((nb+1)<<2) | ((nc+1)<<4). */
+function clamp_i8(v: number): number {
+  if (!Number.isFinite(v)) return 0
+  if (v < -128) return -128
+  if (v > 127) return 127
+  return v | 0
+}
+
+/** Pack a jimage as three signed int8 lanes inside one u32.
+ *  This matches BondManager's Int8 jimage storage and avoids the old
+ *  {-1,0,1}-only encoding losing larger periodic image offsets. */
+export function pack_jimage(na: number, nb: number, nc: number): number {
+  const a = clamp_i8(na) & 0xff
+  const b = clamp_i8(nb) & 0xff
+  const c = clamp_i8(nc) & 0xff
+  return (a | (b << 8) | (c << 16)) >>> 0
+}
+
+function unpack_i8(v: number): number {
+  const x = v & 0xff
+  return x >= 128 ? x - 256 : x
+}
+
+/** Unpack a packed jimage u32 -> [na,nb,nc] using signed int8 lanes. */
 export function unpack_jimage(p: number): [number, number, number] {
-  return [(p & 3) - 1, ((p >> 2) & 3) - 1, ((p >> 4) & 3) - 1]
+  return [unpack_i8(p), unpack_i8(p >> 8), unpack_i8(p >> 16)]
 }
 
 /** Create a reusable bond-detection compute pipeline for a fixed output capacity.

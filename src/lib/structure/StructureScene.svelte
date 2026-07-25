@@ -654,6 +654,9 @@
     // behaviour). Bound out as a function so the parent always reads the LIVE
     // $derived value, not a stale snapshot.
     get_displayed_frame_positions = $bindable<(() => Float32Array) | null>(null),
+    // WebGPU large-system overlay bridge: getter returning the authoritative
+    // per-displayed-site linear RGB buffer the WebGL atom/bond path uses.
+    get_displayed_atom_colors = $bindable<(() => Float32Array) | null>(null),
     deleted_bond_keys = new Set<string>(),
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
     bond_first_atom = null as number | null,
@@ -944,6 +947,9 @@
     /** WebGPU overlay bridge: getter returning the live per-displayed-atom
      *  current-frame position array (3 × n_displayed) the WebGL view renders. */
     get_displayed_frame_positions?: (() => Float32Array) | null
+    /** WebGPU overlay bridge: getter returning the live per-displayed-atom
+     *  linear RGB color array (3 × n_displayed) the WebGL view renders. */
+    get_displayed_atom_colors?: (() => Float32Array) | null
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -4592,6 +4598,14 @@
       out[i * 3 + 2] = b
     }
     return out
+  })
+
+  // WebGPU overlay bridge: expose the exact resolved color buffer that WebGL
+  // atoms/bonds use. This preserves site recolors, property colors, and the
+  // bond-color fallback instead of asking the overlay to re-resolve colors.
+  $effect(() => {
+    get_displayed_atom_colors = () => atom_colors_buffer
+    return () => { get_displayed_atom_colors = null }
   })
 
   // Build a set for fast selected_bonds lookup

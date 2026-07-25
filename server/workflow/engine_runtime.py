@@ -287,7 +287,7 @@ def load_yaml_engine(yaml_path: Path) -> DeclarativeEngineRuntime:
     except ImportError as exc:
         raise RuntimeError("PyYAML is required to load YAML engine definitions") from exc
 
-    with yaml_path.open() as fh:
+    with yaml_path.open(encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     return load_engine_def(raw)
 

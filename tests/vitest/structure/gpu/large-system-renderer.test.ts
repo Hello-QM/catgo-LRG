@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
-import { create_large_system_renderer } from '$lib/structure/gpu/large-system-renderer'
+import {
+  BOND_RENDER_WGSL,
+  create_large_system_renderer,
+} from '$lib/structure/gpu/large-system-renderer'
+
+describe(`large-system bond render shader`, () => {
+  it(`does not use show_image_atoms as a blanket full-bond promotion switch`, () => {
+    expect(BOND_RENDER_WGSL).not.toContain(`image_full =`)
+    expect(BOND_RENDER_WGSL).not.toContain(`supercell.lat0.w > 0.5`)
+    expect(BOND_RENDER_WGSL).toContain(`let is_full = inside;`)
+  })
+
+  it(`reads the standard viewer's periodic-edge bond style`, () => {
+    expect(BOND_RENDER_WGSL).toContain(`bond.radius_color.y > 0.5`)
+    expect(BOND_RENDER_WGSL).toContain(`bond.radius_color.w > 0.5`)
+    expect(BOND_RENDER_WGSL).toContain(`bond.style_extra.x`)
+  })
+})
 
 // Device-gated: SKIPS in node (no navigator.gpu). Runs only where a real
 // WebGPU device is available (e.g. a browser test runner with WebGPU enabled).

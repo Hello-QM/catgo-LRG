@@ -16,7 +16,8 @@
  *  detected bonds, never add. P.rule_count == 0 ⇒ no filtering (identical to no
  *  rules). The id stored in `rules` is an integer bit-cast to f32; the shader
  *  reads it back exactly via the small-int round-trip (u32(id_f32)).
- *  jimage_packed: (na+1) | ((nb+1)<<2) | ((nc+1)<<4), each in {0,1,2} for {-1,0,1}.
+ *  jimage_packed: three signed int8 lanes inside one u32, matching the
+ *  WebGL/BondManager Int8 jimage convention.
  *  jimage convention matches bond-detect-reference.ts: offset applied to atom b/j,
  *  displacement = (pos_j - pos_i) + jimage·L. Precondition: max_bond_dist < half the
  *  shortest cell dimension (27-image search only).
@@ -46,9 +47,9 @@ struct Params {
   capacity: u32,
   periodic: u32,
   _pad0: u32,
-  tolerance: f32,
+  scale: f32,
   max_bond_dist: f32,
-  min_dist: f32,
+  min_bond_dist: f32,
   rule_count: u32,   // number of element-pair distance rules in the rules buffer
   lattice: mat3x3<f32>, // columns a,b,c (caller uploads transposed)
   // ── Uniform-grid (cell-list) params (computed CPU-side in bond-grid.ts) ──
@@ -101,7 +102,13 @@ fn rules_keep(ea: u32, eb: u32, d: f32) -> bool {
 }
 
 fn pack_jimage(na: i32, nb: i32, nc: i32) -> u32 {
-  return u32(na+1) | (u32(nb+1) << 2u) | (u32(nc+1) << 4u);
+  let a = clamp(na, -128, 127);
+  let b = clamp(nb, -128, 127);
+  let c = clamp(nc, -128, 127);
+  let ua = select(u32(a), u32(a + 256), a < 0);
+  let ub = select(u32(b), u32(b + 256), b < 0);
+  let uc = select(u32(c), u32(c + 256), c < 0);
+  return (ua & 255u) | ((ub & 255u) << 8u) | ((uc & 255u) << 16u);
 }
 
 // Total grid cell count = product of the three dims (>=1 each, CPU-validated).
@@ -206,8 +213,8 @@ fn try_emit(i: u32, j: u32, pi: vec3<f32>, ri: f32) {
     best_d2 = dot(dvec, dvec);
   }
   let d = sqrt(best_d2);
-  if (d < P.min_dist || d > P.max_bond_dist) { return; }
-  if (d <= ri + radii[j] + P.tolerance) {
+  if (d < P.min_bond_dist || d > P.max_bond_dist) { return; }
+  if (d <= (ri + radii[j]) * P.scale) {
     // Per-element-pair rule post-filter (matches visibility.ts). Applied only
     // AFTER the atom_radii test passes; can only remove a detected bond.
     if (!rules_keep(elem_ids[i], elem_ids[j], d)) { return; }

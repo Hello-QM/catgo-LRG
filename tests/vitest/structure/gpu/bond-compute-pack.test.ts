@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { pack_params, unpack_jimage, PARAMS_BYTES, type BondComputeRun } from '$lib/structure/gpu/bond-compute'
 
 const make_run = (over: Partial<BondComputeRun> = {}): BondComputeRun => ({
-  tolerance: 0.45,
-  max_bond_dist: 3,
-  min_dist: 0.1,
+  scale: 1.2,
+  max_bond_dist: 5,
+  min_bond_dist: 0.4,
   positions: new Float32Array([0, 0, 0]),
   radii: new Float32Array([0.76]),
   lattice: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
@@ -35,11 +35,11 @@ describe(`pack_params`, () => {
   })
 
   it(`f32 scalars land at word offsets 4..7`, () => {
-    const buf = pack_params(1, 8, make_run({ tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 }))
+    const buf = pack_params(1, 8, make_run({ scale: 1.15, max_bond_dist: 3, min_bond_dist: 0.35 }))
     const f32 = new Float32Array(buf)
-    expect(f32[4]).toBeCloseTo(0.45, 6) // tolerance
+    expect(f32[4]).toBeCloseTo(1.15, 6) // scale
     expect(f32[5]).toBeCloseTo(3, 6) // max_bond_dist
-    expect(f32[6]).toBeCloseTo(0.1, 6) // min_dist
+    expect(f32[6]).toBeCloseTo(0.35, 6) // min_bond_dist
     expect(f32[7]).toBe(0) // _pad1
   })
 

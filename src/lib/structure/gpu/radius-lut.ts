@@ -26,10 +26,17 @@ export function build_atom_radii(sites: readonly Site[]): Float32Array {
 }
 
 /** Per-atom DISPLAY radius (Å) for the impostor spheres, matching the WebGL
- *  ball-and-stick view's sizing as closely as practical. Mirrors the radius
+ *  ball-and-stick view's final GPU radius. Mirrors the logical radius
  *  resolution in StructureScene.svelte:
  *    site_override > same_size_atoms > occu-weighted (element_override | atomic_radii)
- *  all multiplied by the global atom_radius scale. `atomic_radii` here is the
+ *  all multiplied by the global atom_radius scale, then applies the same
+ *  visual-radius scale used by both WebGL atom renderers:
+ *
+ *    AtomImpostors.svelte: visual_radius = atom.radius * 0.5
+ *    atoms/atom-instanced-renderer.ts: VISUAL_RADIUS_SCALE = 0.5
+ *
+ *  Without this final scale, WebGPU large-system mode renders every atom at
+ *  exactly 2× the standard viewer size. `atomic_radii` here is the
  *  half-covalent-radius LUT exported from $lib/structure (covalent/2), the same
  *  base the WebGL path uses — distinct from build_atom_radii's full covalent
  *  radius used for bond cutoffs. */
@@ -43,6 +50,7 @@ export function build_display_radii(
   } = {},
 ): Float32Array {
   const scale = opts.atom_radius ?? 1
+  const visual_scale = 0.5
   const same_size = opts.same_size_atoms ?? false
   const ero = opts.element_radius_overrides
   const sro = opts.site_radius_overrides
@@ -50,9 +58,9 @@ export function build_display_radii(
   for (let i = 0; i < sites.length; i++) {
     const site_override = sro?.get(i)
     if (site_override !== undefined) {
-      out[i] = site_override * scale
+      out[i] = site_override * scale * visual_scale
     } else if (same_size) {
-      out[i] = scale
+      out[i] = scale * visual_scale
     } else {
       // occupancy-weighted sum of per-species radii, matching the WebGL reduce.
       let base = 0
@@ -60,7 +68,7 @@ export function build_display_radii(
         const elem = spec.element as ElementSymbol
         base += spec.occu * (ero?.[elem] ?? atomic_radii[elem] ?? 1)
       }
-      out[i] = base * scale
+      out[i] = base * scale * visual_scale
     }
   }
   return out

@@ -1,5 +1,7 @@
 """CatGo Computation Server - FastAPI backend for structure optimization."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os

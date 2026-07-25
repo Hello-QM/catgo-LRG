@@ -13,10 +13,10 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     if (!device) return
     // 5 Å cell with max_bond_dist 3 ⇒ floor(5/3)=1 grid dim < 3 ⇒ use_grid=false ⇒
     // the shader takes the exact O(N²) 27-image fallback. Exercises that path.
-    const positions = new Float32Array([0.2, 0, 0, 4.9, 0, 0, 0.2, 1.2, 0])
+    const positions = new Float32Array([0.2, 0, 0, 4.7, 0, 0, 0.2, 1.2, 0])
     const radii = new Float32Array([0.76, 0.76, 0.76])
     const lattice = new Float32Array([5, 0, 0, 0, 5, 0, 0, 0, 5])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { scale: 1.2, max_bond_dist: 3.0, min_bond_dist: 0.4 }
     const ref = detect_bonds_reference(positions, lattice, radii, opts)
     const compute = create_bond_compute(device, { capacity: 1024 })
     const gpu = await compute.run({ positions, radii, lattice, periodic: true, ...opts })
@@ -34,14 +34,14 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     // bond across grid cells + PBC faces.
     const lat = 11.2
     const lattice = new Float32Array([lat, 0, 0, 0, lat, 0, 0, 0, lat])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { scale: 1.2, max_bond_dist: 3.0, min_bond_dist: 0.4 }
     const coords: number[] = []
     const radii_arr: number[] = []
     for (let i = 0; i < 4; i++)
       for (let j = 0; j < 4; j++)
         for (let k = 0; k < 4; k++) {
           coords.push(i * 2.8 + 0.05, j * 2.8 + 0.05, k * 2.8 + 0.05)
-          radii_arr.push(0.76)
+          radii_arr.push(1.5)
         }
     const positions = new Float32Array(coords)
     const radii = new Float32Array(radii_arr)
@@ -57,14 +57,14 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     if (!device) return
     // Non-periodic always grids (over the atom AABB). A 3×3×3 cubic blob of atoms
     // at 2.4 Å spacing, jittered, so neighbors bond across AABB cells.
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { scale: 1.2, max_bond_dist: 3.0, min_bond_dist: 0.4 }
     const coords: number[] = []
     const radii_arr: number[] = []
     for (let i = 0; i < 3; i++)
       for (let j = 0; j < 3; j++)
         for (let k = 0; k < 3; k++) {
           coords.push(i * 2.4 + 0.1, j * 2.4 - 0.05, k * 2.4 + 0.07)
-          radii_arr.push(0.76)
+          radii_arr.push(1.5)
         }
     const positions = new Float32Array(coords)
     const radii = new Float32Array(radii_arr)

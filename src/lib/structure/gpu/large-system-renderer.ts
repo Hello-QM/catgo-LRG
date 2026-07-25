@@ -14,8 +14,9 @@
  *  instanced procedural cylinders, sharing the atom depth buffer so they occlude
  *  correctly. No trajectory / picking yet — those arrive in later milestones. */
 import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
-import { pack_params, PARAMS_BYTES } from '$lib/structure/gpu/bond-compute'
+import { pack_params, PARAMS_BYTES, type BondComputeRun } from '$lib/structure/gpu/bond-compute'
 import { plan_grid, type GridPlan } from '$lib/structure/gpu/bond-grid'
+import type { LargeSystemLighting } from '$lib/structure/gpu/visual-style'
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -27,6 +28,19 @@ const CAMERA_FULL_BYTES = 144
 /** GPU supercell uniform (Phase 1): dims vec4<u32> (nx,ny,nz,base_count) + base
  *  lattice rows a,b,c as 3×vec4<f32> = 4 vec4 = 64 bytes. */
 const SUPERCELL_BYTES = 64
+
+/** Cell-box uniform: lattice rows a,b,c + transformed origin + color = 5 vec4. */
+const CELL_BYTES = 80
+
+/** Appearance uniform shared by atom + bond shaders:
+ *  light_dir(vec4)
+ *  lighting(vec4: ambient, directional, highlight, render_style)
+ *  material(vec4: roughness, metalness, atom_outline, bond_outline)
+ *  depth(vec4: cueing, near, far, pad)
+ *  depth_bg(vec4: display-rgb background, pad)
+ *  matcap0(vec4: ambient, diffuse, spec, specExp)
+ *  matcap1(vec4: rim, vGrad, pad, pad). */
+const LIGHTING_BYTES = 112
 
 
 /** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
@@ -49,13 +63,23 @@ const SUPERCELL_BYTES = 64
  *  (triangle-strip ⇒ this many verts). */
 const BOND_VERTS_PER_CYLINDER = 6
 
-/** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
- *  bond render shader as part of its uniform so it can be retuned without a
- *  shader edit. */
-const BOND_RADIUS = 0.16
+/** Fallback bond cylinder radius (Å). The overlay normally overwrites this from
+ *  StructureScene's `bond_thickness` so WebGPU matches the standard viewer. */
+const DEFAULT_BOND_RADIUS = 0.07
 
-/** Neutral bond color (linear rgb). Half-A/half-B coloring is a later milestone. */
-const BOND_COLOR: [number, number, number] = [0.7, 0.7, 0.7]
+/** Bond render uniform:
+ *  lattice rows a,b,c (3 padded vec4) + style vec4 + extra vec4. */
+const BOND_RENDER_BYTES = 80
+
+export type LargeSystemBondStyle = {
+  radius: number
+  incomplete_edge_mode?: boolean
+  incomplete_edge_length_scale?: number
+  hide_incomplete_bonds?: boolean
+  periodic_bond_opacity?: number
+}
+
+type BondComputeOptions = Pick<BondComputeRun, 'scale' | 'max_bond_dist' | 'min_bond_dist'>
 
 /** Default clear color when no background is threaded in: a distinct dark
  *  background (near-black, faint blue tint) so flipping the toggle visibly
@@ -74,29 +98,46 @@ const SAMPLE_COUNT = 4
 
 /** WGSL cell-box line shader. Draws the 12 edges of the parallelepiped spanned
  *  by lattice vectors a,b,c as a `line-list` (24 vertices = 12 edges × 2 ends).
- *  Corners are generated in the vertex shader from a lattice uniform: the cell
- *  spans from origin 0 to a+b+c, in the SAME coordinate space as the atom
- *  positions (atoms render at raw site.xyz; the WebGL Lattice box likewise spans
- *  origin→a+b+c within the shared scene group — see Lattice.svelte's
- *  lattice_center = 0.5·(a+b+c) applied to an origin-centered box), so no extra
- *  centering offset is needed.
+ *  Corners are generated in the vertex shader from a lattice uniform plus an
+ *  explicit origin. The origin is normally [0,0,0], but the overlay may pre-apply
+ *  StructureScene's full view transform T(pivot)·R·T(-pivot), in which case the
+ *  cell origin becomes pivot - R·pivot while the rows become R·a/R·b/R·c. Keeping
+ *  origin in the uniform makes the WebGPU cell follow atoms exactly after manual
+ *  rotations / lattice alignment.
  *  Lattice convention: lat0/lat1/lat2 are rows a/b/c of the row-major 9-float
- *  matrix (same as the bond render uniform), so corner(i) = bit0·a + bit1·b +
- *  bit2·c. Depth uses the SAME GL→WebGPU clip-z remap as the atom impostor so the
- *  box shares the depth buffer and is occluded by atoms in front. */
+ *  matrix (same as the bond render uniform), so corner(i) = origin + bit0·a +
+ *  bit1·b + bit2·c. Depth uses the SAME GL→WebGPU clip-z remap as the atom
+ *  impostor so the box shares the depth buffer and is occluded by atoms in front. */
 const CELL_LINE_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Cell uniform: lattice rows a,b,c (vec3+pad each) + color (rgb + pad).
+// Cell uniform: lattice rows a,b,c (vec3+pad each) + origin + color.
 struct CellU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
+  origin : vec4<f32>,
   color : vec4<f32>,
 };
+
+fn linear_to_srgb_channel(v : f32) -> f32 {
+  let x = clamp(v, 0.0, 1.0);
+  if (x <= 0.0031308) {
+    return 12.92 * x;
+  }
+  return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(
+    linear_to_srgb_channel(c.x),
+    linear_to_srgb_channel(c.y),
+    linear_to_srgb_channel(c.z),
+  );
+}
 
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<uniform> cell : CellU;
@@ -118,7 +159,7 @@ fn corner(i : u32) -> vec3<f32> {
   let fa = f32(i & 1u);
   let fb = f32((i >> 1u) & 1u);
   let fc = f32((i >> 2u) & 1u);
-  return fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
+  return cell.origin.xyz + fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
 }
 
 @vertex
@@ -138,7 +179,7 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(in.color, 1.0);
+  return vec4<f32>(linear_to_srgb(in.color), 1.0);
 }
 `
 
@@ -308,6 +349,37 @@ struct Supercell {
   lat2 : vec4<f32>,
 };
 
+struct Lighting {
+  light_dir : vec4<f32>,
+  params : vec4<f32>,   // x=ambient, y=directional, z=highlight, w=render_style
+  material : vec4<f32>, // x=roughness, y=metalness, z=atom_outline, w=bond_outline
+  depth : vec4<f32>,    // x=cueing, y=near, z=far, w=pad
+  depth_bg : vec4<f32>, // display-rgb background for post-encode depth cueing
+  matcap0 : vec4<f32>,  // x=ambient, y=diffuse, z=spec, w=specExp
+  matcap1 : vec4<f32>,  // x=rim, y=vGrad, zw=pad
+};
+
+fn linear_to_srgb_channel(v : f32) -> f32 {
+  let x = clamp(v, 0.0, 1.0);
+  if (x <= 0.0031308) {
+    return 12.92 * x;
+  }
+  return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(
+    linear_to_srgb_channel(c.x),
+    linear_to_srgb_channel(c.y),
+    linear_to_srgb_channel(c.z),
+  );
+}
+
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp((x * (2.51 * x + vec3<f32>(0.03))) /
+    (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> radii : array<f32>;
@@ -319,6 +391,7 @@ struct Supercell {
 // GPU supercell instancing params. Read ONLY in the vertex stage (decode of
 // instance_index into atom + cell offset), so the BGL grants it VERTEX only.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
+@group(0) @binding(6) var<uniform> lighting_u : Lighting;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -429,15 +502,73 @@ fn fs_main(in : VsOut) -> FsOut {
   let p = ro + t * rd;            // view-space hit point
   let n = normalize(p - in.vc);   // surface normal
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(n, light_dir), 0.0);
+  // Lighting/material branch mirrors AtomManagerInstances.svelte:
+  // 0 glossy/metallic PBR, 1 matte/soft/flat diffuse, 2 toon, 3 procedural matcap.
+  let light_dir = normalize(lighting_u.light_dir.xyz);
+  let view_dir = normalize(-p);
+  let style = i32(round(lighting_u.params.w));
+  var shaded : vec3<f32>;
+  if (style == 2) {
+    let diffuse_raw = dot(n, light_dir);
+    if (diffuse_raw > 0.97) {
+      shaded = vec3<f32>(1.0);
+    } else if (diffuse_raw > 0.3) {
+      shaded = in.color;
+    } else {
+      shaded = in.color * 0.5;
+    }
+  } else if (style == 1) {
+    let diffuse = max(dot(n, light_dir), 0.0);
+    shaded = in.color * (lighting_u.params.x + lighting_u.params.y * diffuse);
+  } else if (style == 3) {
+    // MatCap: evaluate the same procedural grayscale material-capture sphere
+    // used to bake WebGL's CanvasTexture, then tint by the element/site color.
+    let mat_l = normalize(vec3<f32>(-0.35, 0.5, 0.78));
+    let mat_h = normalize(vec3<f32>(mat_l.x, mat_l.y, mat_l.z + 1.0));
+    let mat_diffuse = max(dot(n, mat_l), 0.0);
+    let mat_specular = pow(max(dot(n, mat_h), 0.0), lighting_u.matcap0.w);
+    let mat_rim = pow(1.0 - clamp(n.z, 0.0, 1.0), 3.0);
+    let mat_top_grad = n.y * 0.5 + 0.5;
+    let mat_value = clamp(
+      lighting_u.matcap0.x
+        + lighting_u.matcap0.y * mat_diffuse
+        + lighting_u.matcap0.z * mat_specular
+        - lighting_u.matcap1.x * mat_rim
+        + lighting_u.matcap1.y * mat_top_grad,
+      0.0,
+      1.0
+    );
+    shaded = in.color * mat_value;
+  } else {
+    let rough = max(lighting_u.material.x, 0.001);
+    let metalness = clamp(lighting_u.material.y, 0.0, 1.0);
+    let a = rough * rough;
+    let a2 = a * a;
+    let NdotL = max(dot(n, light_dir), 0.0);
+    let NdotV = max(dot(n, view_dir), 1e-4);
+    let half_dir = normalize(light_dir + view_dir);
+    let NdotH = max(dot(n, half_dir), 0.0);
+    let VdotH = max(dot(view_dir, half_dir), 0.0);
+    let dn = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    let D = a2 / (3.14159265 * dn * dn);
+    let k = a * 0.5;
+    let G = (NdotV / (NdotV * (1.0 - k) + k)) *
+      (NdotL / (NdotL * (1.0 - k) + k));
+    let F0 = mix(vec3<f32>(0.04), in.color, vec3<f32>(metalness));
+    let F = F0 + (vec3<f32>(1.0) - F0) * pow(1.0 - VdotH, 5.0);
+    let specular = (D * G) * F / (4.0 * NdotV * NdotL + 1e-4);
+    let diffuse_color = in.color * (1.0 - metalness);
+    var color2 = diffuse_color * (lighting_u.params.x + lighting_u.params.y * NdotL * 0.31831)
+      + specular * lighting_u.params.y * NdotL * lighting_u.params.z;
+    color2 = color2 * mix(0.6, 1.0, smoothstep(0.0, 0.5, NdotV));
+    shaded = aces_tonemap(color2);
+  }
 
   // Correct depth: project the hit point, apply the same GL->WebGPU z remap as
   // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
   let clip_h = camera.proj * vec4<f32>(p, 1.0);
   let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
-  var shaded = in.color * lighting;
   // ── Selection highlight ──────────────────────────────────────────────────
   // Selected atoms (sel == 1) get a clearly-distinct look: brighten the body and
   // add a bright cyan-tinted RIM where the eye ray grazes the silhouette (rim is
@@ -453,11 +584,24 @@ fn fs_main(in : VsOut) -> FsOut {
     shaded = mix(shaded * 1.35 + highlight_tint * 0.25, highlight_tint, rim * 0.85);
   }
 
+  var out_rgb = linear_to_srgb(shaded);
+  if (lighting_u.depth.x > 0.0) {
+    let depth_z = -p.z;
+    let fade = clamp((depth_z - lighting_u.depth.y) /
+      max(lighting_u.depth.z - lighting_u.depth.y, 0.01), 0.0, 1.0) * lighting_u.depth.x;
+    out_rgb = mix(out_rgb, lighting_u.depth_bg.xyz, fade);
+  }
+  if (lighting_u.material.z > 0.0) {
+    let ndotv = max(dot(n, view_dir), 0.0);
+    let silhouette = smoothstep(0.55, 1.0, 1.0 - ndotv);
+    out_rgb = mix(out_rgb, vec3<f32>(0.0), silhouette * lighting_u.material.z);
+  }
+
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
   // the color target stays opaque.
-  out.color = vec4<f32>(shaded, coverage);
+  out.color = vec4<f32>(out_rgb, coverage);
   return out;
 }
 `
@@ -645,8 +789,7 @@ fn build_args() {
  *  flat midpoint cap planes coincide -> coincident depth -> alpha-to-coverage
  *  z-fight that shows as a faint dotted seam across the cylinder. To avoid it,
  *  intra-cell bonds instead draw ONE full cylinder (half 0: A -> B) and collapse
- *  half 1 to a degenerate offscreen billboard (zero fragments). Detection:
- *  jimage (0,0,0) packs to (0+1)|((0+1)<<2)|((0+1)<<4) = 21u.
+ *  half 1 to a degenerate offscreen billboard (zero fragments).
  *
  *  GEOMETRY (impostor, NGL/3Dmol-style — no facets, constant 4 verts/half):
  *  Each half's segment endpoints P0=start, P1=end are transformed to VIEW space
@@ -662,12 +805,13 @@ fn build_args() {
  *  solve the infinite-cylinder quadratic, clamp the body hit's axial projection to
  *  [0,len]; if out of range, intersect the two END-CAP disks (planes at v0,v1 with
  *  normal ∓â, |radial|<=r) so the cylinder is SOLID (no hollow ends — caps are free
- *  from the disk test). No hit anywhere => discard. Lambert shading like the atoms
- *  (0.35 + 0.65·max(dot(N,L),0), same light dir) × grey color. Depth: project the
+ *  from the disk test). No hit anywhere => discard. Shading uses the same active
+ *  viewer lighting uniform as atoms, and color comes from the two endpoint atoms.
+ *  Depth: project the
  *  view-space hit Pv and apply the SAME GL→WebGPU clip-z remap + perspective divide
  *  as the sphere impostor, so bonds share the depth buffer and occlude / are
  *  occluded consistently with atoms. Degenerate (zero-length) halves discard cleanly. */
-const BOND_RENDER_WGSL = `
+export const BOND_RENDER_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
@@ -678,7 +822,11 @@ struct BondU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
-  radius_color : vec4<f32>, // x=radius, yzw=color
+  // x=radius, y=incomplete_edge_mode, z=incomplete_edge_length_scale,
+  // w=hide_incomplete_bonds.
+  radius_color : vec4<f32>,
+  // x=periodic_bond_opacity, yzw=pad.
+  style_extra : vec4<f32>,
 };
 
 // GPU supercell uniform (Phase 2). Same layout as the atom impostor's Supercell:
@@ -692,6 +840,46 @@ struct Supercell {
   lat2 : vec4<f32>,
 };
 
+struct Lighting {
+  light_dir : vec4<f32>,
+  params : vec4<f32>,   // x=ambient, y=directional, z=highlight, w=render_style
+  material : vec4<f32>, // x=roughness, y=metalness, z=atom_outline, w=bond_outline
+  depth : vec4<f32>,    // x=cueing, y=near, z=far, w=pad
+  depth_bg : vec4<f32>, // display-rgb background for post-encode depth cueing
+  matcap0 : vec4<f32>,  // x=ambient, y=diffuse, z=spec, w=specExp
+  matcap1 : vec4<f32>,  // x=rim, y=vGrad, zw=pad
+};
+
+fn linear_to_srgb_channel(v : f32) -> f32 {
+  let x = clamp(v, 0.0, 1.0);
+  if (x <= 0.0031308) {
+    return 12.92 * x;
+  }
+  return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(
+    linear_to_srgb_channel(c.x),
+    linear_to_srgb_channel(c.y),
+    linear_to_srgb_channel(c.z),
+  );
+}
+
+fn studio_env(n : vec3<f32>, key_dir : vec3<f32>) -> vec3<f32> {
+  var col = vec3<f32>(0.72);
+  let k = max(dot(n, key_dir), 0.0);
+  col = col + vec3<f32>(1.00, 0.97, 0.92) * (k * k) * 0.35;
+  let sky = n.y * 0.5 + 0.5;
+  col = col + vec3<f32>(0.06, 0.06, 0.07) * sky;
+  return col;
+}
+
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp((x * (2.51 * x + vec3<f32>(0.03))) /
+    (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> pairs : array<u32>;
@@ -701,19 +889,24 @@ struct Supercell {
 @group(0) @binding(4) var<storage, read> bond_meta : array<u32>;
 // GPU supercell instancing params (dims + base lattice). Read ONLY in vs_main.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
+@group(0) @binding(6) var<storage, read> colors : array<f32>;
+@group(0) @binding(7) var<uniform> lighting_u : Lighting;
+@group(0) @binding(8) var<storage, read> decorators : array<u32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) v0 : vec3<f32>,      // view-space cylinder start (flat)
   @location(1) v1 : vec3<f32>,      // view-space cylinder end   (flat)
   @location(2) radius : f32,        // cylinder radius (flat)
-  @location(3) color : vec3<f32>,
-  @location(4) vpos : vec3<f32>,    // view-space position of this quad corner
+  @location(3) color_start : vec3<f32>,
+  @location(4) color_end : vec3<f32>,
+  @location(5) vpos : vec3<f32>,    // view-space position of this quad corner
   // 1.0 for CROSS-cell stubs, 0.0 for INTRA-cell full cylinders. Flat-interp.
   // The fragment shader pushes cross-cell stubs slightly BACKWARD in depth so a
   // stub coincident with an intra-cell bond at a shared atom loses the depth tie
   // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
-  @location(5) is_stub : f32,
+  @location(6) is_stub : f32,
+  @location(7) opacity : f32,
 };
 
 struct FsOut {
@@ -723,6 +916,18 @@ struct FsOut {
 
 fn atom_pos(i : u32) -> vec3<f32> {
   return vec3<f32>(positions[i*3u], positions[i*3u+1u], positions[i*3u+2u]);
+}
+
+fn atom_color(i : u32) -> vec3<f32> {
+  return vec3<f32>(colors[i*3u], colors[i*3u+1u], colors[i*3u+2u]);
+}
+
+fn unpack_i8(v : u32) -> i32 {
+  let x = i32(v & 255u);
+  if (x >= 128) {
+    return x - 256;
+  }
+  return x;
 }
 
 @vertex
@@ -740,31 +945,62 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // When ncells = 1 (dims 1,1,1) cell = 0 and this collapses to the Phase-1
   // mapping bond_index = inst>>1, half = inst&1 — byte-identical.
   let bond_count = max(bond_meta[0], 1u);
-  let per_cell = bond_count * 2u;
-  let cell = inst / per_cell;
-  let local = inst % per_cell;
-  let bond_index = local >> 1u;
-  let half = local & 1u;
-
-  // Decode the cell index → (ix,iy,iz) and its lattice offset ix·a+iy·b+iz·c.
   let nx = max(supercell.dims.x, 1u);
   let ny = max(supercell.dims.y, 1u);
   let nz = max(supercell.dims.z, 1u);
-  let ix = cell % nx;
-  let iy = (cell / nx) % ny;
-  let iz = cell / (nx * ny);
-  let cell_offset = f32(ix) * supercell.lat0.xyz
-                  + f32(iy) * supercell.lat1.xyz
-                  + f32(iz) * supercell.lat2.xyz;
+  let ncells = max(nx * ny * nz, 1u);
+  let base_instances = bond_count * 2u * ncells;
+  let is_decorator = inst >= base_instances;
+
+  var bond_index : u32;
+  var half : u32;
+  var ix : u32 = 0u;
+  var iy : u32 = 0u;
+  var iz : u32 = 0u;
+  var cell_offset : vec3<f32> = vec3<f32>(0.0);
+  var decorator_orig_idx : u32 = 0u;
+  var decorator_img : vec3<f32> = vec3<f32>(0.0);
+  var decorator_partner_drawn = false;
+
+  if (is_decorator) {
+    let dec_local = inst - base_instances;
+    let dec_index = dec_local >> 1u;
+    half = dec_local & 1u;
+    let rb = dec_index * 4u;
+    bond_index = decorators[rb];
+    decorator_orig_idx = decorators[rb + 1u];
+    let ip = decorators[rb + 2u];
+    decorator_img = vec3<f32>(
+      f32(unpack_i8(ip)),
+      f32(unpack_i8(ip >> 8u)),
+      f32(unpack_i8(ip >> 16u)),
+    );
+    decorator_partner_drawn = (decorators[rb + 3u] & 1u) != 0u;
+  } else {
+    let per_cell = bond_count * 2u;
+    let cell = inst / per_cell;
+    let local = inst % per_cell;
+    bond_index = local >> 1u;
+    half = local & 1u;
+    ix = cell % nx;
+    iy = (cell / nx) % ny;
+    iz = cell / (nx * ny);
+    cell_offset = f32(ix) * supercell.lat0.xyz
+                + f32(iy) * supercell.lat1.xyz
+                + f32(iz) * supercell.lat2.xyz;
+  }
+
+  // Decode the cell index → (ix,iy,iz) and its lattice offset ix·a+iy·b+iz·c.
 
   let a = pairs[bond_index*3u + 0u];
   let b = pairs[bond_index*3u + 1u];
   let jp = pairs[bond_index*3u + 2u];
+  let col_a = atom_color(a);
+  let col_b = atom_color(b);
 
-  // Unpack jimage {-1,0,1} from (na+1)|((nb+1)<<2)|((nc+1)<<4).
-  let ji = i32(jp & 3u) - 1;
-  let jj = i32((jp >> 2u) & 3u) - 1;
-  let jk = i32((jp >> 4u) & 3u) - 1;
+  let ji = unpack_i8(jp);
+  let jj = unpack_i8(jp >> 8u);
+  let jk = unpack_i8(jp >> 16u);
   let na = f32(ji);
   let nb = f32(jj);
   let nc = f32(jk);
@@ -772,10 +1008,14 @@ fn vs_main(@builtin(vertex_index) vi : u32,
 
   // A is atom a in THIS cell; partnerB is atom b imaged by jimage (still relative
   // to this cell). Both carry the per-cell offset so every replica is positioned.
+  var start : vec3<f32> = vec3<f32>(0.0);
+  var end : vec3<f32> = vec3<f32>(0.0);
+  var is_full = false;
+  var hidden_boundary = false;
   let A = atom_pos(a) + cell_offset;
   let B = atom_pos(b) + cell_offset;
-  let partnerB = B + shift;       // A's imaged partner
-  let partnerA = A - shift;       // (unused when inside; kept for the stub path)
+  let partnerB = B + shift;
+  let partnerA = A - shift;
 
   // Partner cell = this cell + jimage. If it lies INSIDE [0,nx)×[0,ny)×[0,nz) the
   // partner is a REAL replica atom one cell over → draw a FULL cylinder A→B_real
@@ -792,31 +1032,64 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // jimage shift IS one cell step — so reuse partnerB as the real adjacent atom.
   let B_real = partnerB;
 
-  // show_images flag (viewer's show_image_atoms) packed into lat0.w by the TS
-  // upload (1=on). When ON and we are in the NON-supercell path (ncells==1), a
-  // cross-cell bond's imaged partner B+jimage·lattice coincides with a DISPLAYED
-  // PBC image atom → upgrade the boundary STUB to a FULL cylinder reaching it, so
-  // image atoms gain bonds (matching the WebGL view). Supercell mode (ncells>1)
-  // is left to the Phase-2 partner-cell-in-range logic untouched.
-  let ncells = nx * ny * nz;
-  let show_images = supercell.lat0.w > 0.5;
-  let image_full = (!inside) && ncells == 1u && show_images;
+  // Do not promote every ncells==1 cross-cell bond to a full image bond from
+  // show_image_atoms alone. WebGL only draws full image-decorator bonds when
+  // that exact partner image is present in the drawn set; without that lookup,
+  // blanket promotion creates corner-anchored bond starbursts.
 
   // Render as ONE full cylinder when the partner is a real in-range atom (half 0:
   // A→B_real, half 1 degenerate) — same single-full-cylinder path the Phase-1
   // single-cell code used for intra-cell (jimage=0) bonds. When ncells=1, only
   // jimage=0 is ever inside [0,1)³, so this is exactly the old is_intra branch.
-  // image_full upgrades a ncells==1 cross-cell boundary stub to that same full
-  // path (endpoint partnerB = the displayed image atom) when show_images is on.
-  let is_full = inside || image_full;
+  is_full = inside;
 
   // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
   // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
   // two short stubs of the single-cell cross-cell path, shifted by cell_offset.
+  let stub_scale = select(
+    1.0,
+    clamp(bond.radius_color.z, 0.05, 1.0),
+    bond.radius_color.y > 0.5,
+  );
   let cross_start = select(B, A, half == 0u);
-  let cross_mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
-  let start = select(cross_start, A, is_full);
-  let end = select(cross_mid, B_real, is_full);
+  let cross_end_a = A + (partnerB - A) * (0.5 * stub_scale);
+  let cross_end_b = B + (partnerA - B) * (0.5 * stub_scale);
+  let cross_mid = select(cross_end_b, cross_end_a, half == 0u);
+  start = select(cross_start, A, is_full);
+  end = select(cross_mid, B_real, is_full);
+  hidden_boundary = (!is_full) && bond.radius_color.w > 0.5;
+
+  if (is_decorator) {
+    let img_shift = decorator_img.x * bond.lat0.xyz
+                  + decorator_img.y * bond.lat1.xyz
+                  + decorator_img.z * bond.lat2.xyz;
+    let anchor_is_a = a == decorator_orig_idx;
+    let imgA = atom_pos(a) + select(img_shift - shift, img_shift, anchor_is_a);
+    let imgB = atom_pos(b) + select(img_shift, img_shift + shift, anchor_is_a);
+    let dir = imgB - imgA;
+    if (decorator_partner_drawn) {
+      is_full = true;
+      start = imgA;
+      end = imgB;
+      hidden_boundary = false;
+    } else {
+      is_full = false;
+      hidden_boundary = bond.radius_color.w > 0.5;
+      if (anchor_is_a) {
+        start = imgA;
+        end = imgA + dir * (0.5 * stub_scale);
+        if (half == 1u) {
+          hidden_boundary = true;
+        }
+      } else {
+        start = imgB;
+        end = imgB - dir * (0.5 * stub_scale);
+        if (half == 0u) {
+          hidden_boundary = true;
+        }
+      }
+    }
+  }
 
   // Keep the downstream variable name the rest of vs_main uses (is_intra) so the
   // degenerate-half collapse + is_stub flag below are untouched: a full cylinder
@@ -894,10 +1167,26 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     out_deg.v0 = v0;
     out_deg.v1 = v1;
     out_deg.radius = r;
-    out_deg.color = bond.radius_color.yzw;
+    out_deg.color_start = col_a;
+    out_deg.color_end = col_b;
     out_deg.vpos = vpos;
     out_deg.is_stub = 0.0; // degenerate (discarded) — value irrelevant
+    out_deg.opacity = 0.0;
     return out_deg;
+  }
+
+  if (hidden_boundary) {
+    var out_hidden : VsOut;
+    out_hidden.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out_hidden.v0 = v0;
+    out_hidden.v1 = v1;
+    out_hidden.radius = r;
+    out_hidden.color_start = col_a;
+    out_hidden.color_end = col_b;
+    out_hidden.vpos = vpos;
+    out_hidden.is_stub = 1.0;
+    out_hidden.opacity = 0.0;
+    return out_hidden;
   }
 
   var clip = camera.proj * vec4<f32>(vpos, 1.0);
@@ -909,10 +1198,22 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.v0 = v0;
   out.v1 = v1;
   out.radius = r;
-  out.color = bond.radius_color.yzw;
+  var half_color = col_b;
+  if (half == 0u) {
+    half_color = col_a;
+  }
+  var color_start = half_color;
+  var color_end = half_color;
+  if (is_full) {
+    color_start = col_a;
+    color_end = col_b;
+  }
+  out.color_start = color_start;
+  out.color_end = color_end;
   out.vpos = vpos;
   // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
   out.is_stub = select(1.0, 0.0, is_intra);
+  out.opacity = select(clamp(bond.style_extra.x, 0.0, 1.0), 1.0, is_intra);
   return out;
 }
 
@@ -1044,7 +1345,8 @@ fn fs_main(in : VsOut) -> FsOut {
   // fractional coverage. If neither the exact solid test nor the analytic band
   // covers this fragment, discard.
   let cov = select(coverage, 1.0, found);
-  if (cov <= 0.0) { discard; }
+  let alpha = cov * clamp(in.opacity, 0.0, 1.0);
+  if (alpha <= 0.0) { discard; }
 
   // For the thin AA band where the exact ray-test missed, fall back to the
   // capsule-surface point for normal + depth so the edge band shades/depths
@@ -1054,8 +1356,31 @@ fn fs_main(in : VsOut) -> FsOut {
     hit_n = normalize(p_ray - p_seg);
   }
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(hit_n, light_dir), 0.0);
+  let axis_t = clamp(dot(hit_p - pa, axis) / max(clen, 1e-6), 0.0, 1.0);
+  var base_color = mix(in.color_start, in.color_end, axis_t);
+  // WebGL bond shader keeps bond cylinders visually distinct from atoms using
+  // a procedural studio environment with fixed 0.8/0.3 exposure. Keep that
+  // behavior here; Appearance light sliders still drive key direction and
+  // highlight strength, just like BondManagerInstances.svelte.
+  let gray = dot(base_color, vec3<f32>(0.299, 0.587, 0.114));
+  base_color = mix(vec3<f32>(gray), base_color, vec3<f32>(1.0));
+  let view_dir = normalize(-hit_p);
+  let key_dir = normalize(lighting_u.light_dir.xyz);
+  let env = studio_env(hit_n, key_dir);
+  let half_dir = normalize(key_dir + view_dir);
+  let specular = pow(max(dot(hit_n, half_dir), 0.0), 64.0);
+  let ndotv = max(dot(hit_n, view_dir), 0.0);
+  let fresnel = pow(1.0 - ndotv, 5.0);
+  let rim_mask = smoothstep(0.0, 0.25, ndotv);
+  let floor_lift = mix(0.18, 1.0, rim_mask);
+  let spec_color = mix(vec3<f32>(1.0), base_color, vec3<f32>(0.55));
+  let bond_ambient = 0.8;
+  let bond_directional = 0.3;
+  let exposure = bond_ambient + bond_directional * 0.5;
+  var final_color = base_color * env * exposure * floor_lift
+    + spec_color * specular * bond_directional * 0.5 * rim_mask * lighting_u.params.z
+    + vec3<f32>(fresnel * 0.08) * rim_mask;
+  final_color = aces_tonemap(final_color);
 
   // Correct depth: project the view-space hit point, apply the SAME GL->WebGPU z
   // remap as the vertex stage, then perspective-divide into NDC z (range 0..1).
@@ -1076,7 +1401,17 @@ fn fs_main(in : VsOut) -> FsOut {
   var out : FsOut;
   out.depth = depth;
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
-  out.color = vec4<f32>(in.color * lighting, cov);
+  var out_rgb = linear_to_srgb(final_color);
+  if (lighting_u.depth.x > 0.0) {
+    let fade = clamp(((-hit_p.z) - lighting_u.depth.y) /
+      max(lighting_u.depth.z - lighting_u.depth.y, 0.01), 0.0, 1.0) * lighting_u.depth.x;
+    out_rgb = mix(out_rgb, lighting_u.depth_bg.xyz, fade);
+  }
+  if (lighting_u.material.w > 0.0) {
+    let silhouette = smoothstep(0.0, 0.6, 1.0 - ndotv);
+    out_rgb = mix(out_rgb, vec3<f32>(0.0), silhouette * lighting_u.material.w * 0.85);
+  }
+  out.color = vec4<f32>(out_rgb, alpha);
   return out;
 }
 `
@@ -1131,9 +1466,21 @@ export type LargeSystemRenderer = {
   set_bond_data(
     covalent_radii: Float32Array,
     lattice: Float32Array,
-    options: { tolerance: number; max_bond_dist: number; min_dist: number },
+    options: BondComputeOptions,
     periodic: boolean,
   ): void
+  /** Use the standard WebGL viewer's already-filtered bond topology as the
+   *  source of truth. `pairs` is [a,b,packed_jimage] per visible bond. This
+   *  bypasses the WebGPU bond detector for the current frame, but keeps the
+   *  WebGPU procedural cylinder renderer for performance. */
+  set_external_bond_topology(
+    pairs: Uint32Array,
+    count: number,
+    lattice: Float32Array,
+  ): void
+  /** Image-atom decorator records built from the same sites_to_draw semantics as
+   *  WebGL. Each record is [slot, orig_site_idx, packed_image_jimage, flags]. */
+  set_bond_decorators(records: Uint32Array, count: number): void
   /** Provide the per-element-pair bond_distance_rules POST-FILTER inputs (matches
    *  src/lib/structure/scene/visibility.ts). `elem_ids` is the per-atom element id
    *  (N entries) and `rules` is the packed rule buffer (4 floats per rule:
@@ -1143,10 +1490,13 @@ export type LargeSystemRenderer = {
    *  dirty so the next render re-runs the compute with the new rules — LIVE update
    *  when the viewer edits a bond distance rule. */
   set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void
-  /** Set the clear (background) color the render pass uses. `rgb` is LINEAR
-   *  float [r,g,b] in the SAME space as the atom colors uploaded via set_atoms
-   *  (so the background and atoms share one color space — dark atoms keep their
-   *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
+  /** Mirror the standard viewer's visual bond style. */
+  set_bond_style(style: LargeSystemBondStyle): void
+  /** Mirror the standard viewer's active lighting profile. */
+  set_lighting(lighting: LargeSystemLighting): void
+  /** Set the clear (background) color the render pass uses. `rgb` is display
+   *  RGB because clear values do not pass through the WGSL linear->sRGB fragment
+   *  conversion used by atoms, bonds, and cell lines. Alpha stays 1 (opaque). */
   set_background(rgb: [number, number, number]): void
   /** Gate bond detection + bond rendering. When `false`, render() skips BOTH the
    *  GPU bond compute pass AND the bond draw (atoms + cell box still render), so
@@ -1166,6 +1516,8 @@ export type LargeSystemRenderer = {
     lattice: Float32Array | null,
     show: boolean,
     color: [number, number, number],
+    /** Transformed cell origin in the same coordinate space as uploaded atoms. */
+    origin?: [number, number, number],
   ): void
   /** Set which atoms are highlighted as "selected". `indices` is the list of atom
    *  indices (same indexing as the uploaded positions / structure.sites order) to
@@ -1209,6 +1561,24 @@ export function create_large_system_renderer(
     size: CAMERA_FULL_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+
+  const lighting_buffer = device.createBuffer({
+    label: `large-system-lighting`,
+    size: LIGHTING_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  let lighting_state: LargeSystemLighting = {
+    light_dir: [0.4, 0.7, 0.6],
+    ambient_light: 0.7,
+    directional_light: 0.3,
+    highlight_strength: 1.0,
+  }
+  let bond_radius = DEFAULT_BOND_RADIUS
+  let incomplete_edge_mode = false
+  let incomplete_edge_length_scale = 1
+  let hide_incomplete_bonds = false
+  let periodic_bond_opacity = 1
+  upload_lighting_uniform()
 
   // GPU supercell uniform (Phase 1), bound to the impostor vertex (binding 5).
   // Defaults to dims (1,1,1) + base_count 0 + zero lattice ⇒ ncells 1, zero
@@ -1286,6 +1656,11 @@ export function create_large_system_renderer(
   // atomic count + indirect-args are tiny fixed buffers.
   let pairs_buffer: GPUBuffer | null = null
   let bond_capacity = 0 // pairs the current pairs buffer can hold
+  let external_bonds = false
+  let external_bond_count = 0
+  let decorator_buffer: GPUBuffer | null = null
+  let decorator_capacity = 0
+  let decorator_count = 0
   // ── Uniform-grid (cell-list) buffers (bindings 7/8/9). cell_count tallies atoms
   // per cell (n_cells u32), cell_atoms holds up to max_per_cell atom ids per cell
   // (n_cells*max u32), overflow is a single u32 flag. Sized from the grid plan;
@@ -1326,13 +1701,13 @@ export function create_large_system_renderer(
   // Bond render uniform: lattice columns (transposed, 3×vec4) + (radius,color).
   const bond_render_uniform = device.createBuffer({
     label: `large-system-bond-render-uniform`,
-    size: 64, // 4 × vec4
+    size: BOND_RENDER_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // Cell-box render uniform: lattice rows a,b,c (3×vec4) + color (vec4).
+  // Cell-box render uniform: lattice rows a,b,c (3×vec4) + origin + color.
   const cell_uniform = device.createBuffer({
     label: `large-system-cell-uniform`,
-    size: 64, // 4 × vec4
+    size: CELL_BYTES, // 5 × vec4
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Gizmo placement uniform: center_ndc (vec4) + scale_ndc (vec4). Filled from
@@ -1346,6 +1721,7 @@ export function create_large_system_renderer(
   let cell_lattice = new Float32Array(9)
   let cell_show = false
   let cell_color: [number, number, number] = [0.5, 0.5, 0.5]
+  let cell_origin: [number, number, number] = [0, 0, 0]
   // True once the lattice is non-zero (a periodic structure has been provided).
   let cell_has_lattice = false
 
@@ -1370,7 +1746,7 @@ export function create_large_system_renderer(
   })
   // Cached bond inputs, re-uploaded only when set_bond_data changes them.
   let bond_lattice = new Float32Array(9)
-  let bond_options = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  let bond_options: BondComputeOptions = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
   let bond_periodic = false
   let bond_n = 0 // atom count the detection should range over
   // True when the bond inputs (or atoms) changed and the compute must re-run.
@@ -1414,6 +1790,7 @@ export function create_large_system_renderer(
       // VERTEX only. (A spurious FRAGMENT here would not break, but VERTEX is the
       // precise + minimal visibility the binding requires.)
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
 
@@ -1583,6 +1960,12 @@ export function create_large_system_renderer(
       // grant EXACTLY the reading stage — VERTEX only.
       { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 6 = atom color buffer for endpoint-colored bonds (vs_main).
+      // binding 7 = active viewer lighting profile (fs_main).
+      // binding 8 = image-atom decorator records (vs_main).
+      { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      { binding: 8, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
   })
   const bond_render_pipeline = device.createRenderPipeline({
@@ -1713,16 +2096,17 @@ export function create_large_system_renderer(
     device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
   }
 
-  /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad)
-   *  then color (rgb + pad). Same row convention as the bond render uniform. */
+  /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad),
+   *  transformed origin, then color. Same row convention as the bond render uniform. */
   function upload_cell_uniform(): void {
-    const u = new Float32Array(16)
+    const u = new Float32Array(20)
     const L = cell_lattice
     u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
     u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
     u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = cell_color[0]; u[13] = cell_color[1]; u[14] = cell_color[2]; u[15] = 1
-    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, 64)
+    u[12] = cell_origin[0]; u[13] = cell_origin[1]; u[14] = cell_origin[2]; u[15] = 0
+    u[16] = cell_color[0]; u[17] = cell_color[1]; u[18] = cell_color[2]; u[19] = 1
+    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, CELL_BYTES)
   }
 
   // Indirect-args cfg: (verts_per_cylinder, capacity, ncells). capacity is
@@ -1735,6 +2119,26 @@ export function create_large_system_renderer(
         BOND_VERTS_PER_CYLINDER,
         bond_capacity,
         Math.max(1, supercell_ncells),
+      ]),
+    )
+  }
+
+  function write_external_bond_draw_args(): void {
+    const clamped = Math.min(Math.max(external_bond_count, 0), bond_capacity)
+    const base_instances = clamped * 2 * Math.max(1, supercell_ncells)
+    const dec = supercell_ncells === 1
+      ? Math.min(Math.max(decorator_count, 0), decorator_capacity)
+      : 0
+    const decorator_instances = dec * 2
+    device.queue.writeBuffer(count_buffer, 0, new Uint32Array([clamped]))
+    device.queue.writeBuffer(bond_meta_buffer, 0, new Uint32Array([clamped]))
+    device.queue.writeBuffer(
+      indirect_buffer, 0,
+      new Uint32Array([
+        BOND_VERTS_PER_CYLINDER,
+        base_instances + decorator_instances,
+        0,
+        0,
       ]),
     )
   }
@@ -1820,6 +2224,7 @@ export function create_large_system_renderer(
         { binding: 3, resource: { buffer: colors_buffer } },
         { binding: 4, resource: { buffer: selected_buffer as GPUBuffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        { binding: 6, resource: { buffer: lighting_buffer } },
       ],
     })
     // Pick pass reuses camera + positions + radii (no colors/selected) PLUS the
@@ -1846,9 +2251,22 @@ export function create_large_system_renderer(
     pairs_buffer = device.createBuffer({
       label: `large-system-bond-pairs`,
       size: bond_capacity * 3 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     })
     write_indirect_cfg()
+    rebuild_bond_bind_groups()
+  }
+
+  function ensure_decorator_capacity(count: number): void {
+    const want = Math.max(count, 1)
+    if (want <= decorator_capacity && decorator_buffer) return
+    decorator_buffer?.destroy()
+    decorator_capacity = Math.max(want, Math.ceil(decorator_capacity * 2), 1)
+    decorator_buffer = device.createBuffer({
+      label: `large-system-bond-decorators`,
+      size: Math.max(decorator_capacity * 4 * 4, 16),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
     rebuild_bond_bind_groups()
   }
 
@@ -1929,7 +2347,7 @@ export function create_large_system_renderer(
     bond_compute_bg = null
     indirect_bg = null
     bond_render_bg = null
-    if (!positions_buffer || !covalent_buffer || !pairs_buffer) return
+    if (!positions_buffer || !colors_buffer || !covalent_buffer || !pairs_buffer) return
     // Bindings 5/6 must exist for the auto-layout bind group; lazily create the
     // placeholders the first time (and avoid recursing back into this fn).
     if (!elem_ids_buffer) {
@@ -1964,6 +2382,14 @@ export function create_large_system_renderer(
         label: `large-system-bond-cell-atoms`,
         size: 4,
         usage: GPUBufferUsage.STORAGE,
+      })
+    }
+    if (!decorator_buffer) {
+      decorator_capacity = 1
+      decorator_buffer = device.createBuffer({
+        label: `large-system-bond-decorators`,
+        size: 16,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       })
     }
 
@@ -2006,6 +2432,9 @@ export function create_large_system_renderer(
         // supercell uniform (dims + base lattice) for the per-cell offset.
         { binding: 4, resource: { buffer: bond_meta_buffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        { binding: 6, resource: { buffer: colors_buffer } },
+        { binding: 7, resource: { buffer: lighting_buffer } },
+        { binding: 8, resource: { buffer: decorator_buffer } },
       ],
     })
   }
@@ -2039,16 +2468,44 @@ export function create_large_system_renderer(
     device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
   }
 
+  function upload_lighting_uniform(): void {
+    const u = new Float32Array(28)
+    const dir = lighting_state.light_dir
+    u[0] = dir[0]; u[1] = dir[1]; u[2] = dir[2]; u[3] = 0
+    u[4] = lighting_state.ambient_light
+    u[5] = lighting_state.directional_light
+    u[6] = lighting_state.highlight_strength
+    u[7] = lighting_state.render_style ?? 0
+    u[8] = lighting_state.roughness ?? 0.2
+    u[9] = lighting_state.metalness ?? 0
+    u[10] = lighting_state.atom_outline_strength ?? 0
+    u[11] = lighting_state.bond_outline_strength ?? 0
+    u[12] = lighting_state.depth_cueing ?? 0
+    u[13] = lighting_state.depth_near ?? 0
+    u[14] = lighting_state.depth_far ?? 10
+    u[15] = 0
+    const bg = lighting_state.depth_cue_bg_display ?? [1, 1, 1]
+    u[16] = bg[0]; u[17] = bg[1]; u[18] = bg[2]; u[19] = 0
+    const matcap = lighting_state.matcap_params ?? [0.34, 0.66, 0.35, 48, 0.14, 0]
+    u[20] = matcap[0]; u[21] = matcap[1]; u[22] = matcap[2]; u[23] = matcap[3]
+    u[24] = matcap[4]; u[25] = matcap[5]; u[26] = 0; u[27] = 0
+    device.queue.writeBuffer(lighting_buffer, 0, u.buffer, u.byteOffset, u.byteLength)
+  }
+
   function upload_bond_render_uniform(): void {
-    const u = new Float32Array(16)
+    const u = new Float32Array(20)
     const L = bond_lattice
     // Same transpose pack_params uses: column k = lattice row k.
     u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
     u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
     u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = BOND_RADIUS
-    u[13] = BOND_COLOR[0]; u[14] = BOND_COLOR[1]; u[15] = BOND_COLOR[2]
-    device.queue.writeBuffer(bond_render_uniform, 0, u.buffer, u.byteOffset, 64)
+    u[12] = bond_radius
+    u[13] = incomplete_edge_mode ? 1 : 0
+    u[14] = incomplete_edge_length_scale
+    u[15] = hide_incomplete_bonds ? 1 : 0
+    u[16] = periodic_bond_opacity
+    u[17] = 0; u[18] = 0; u[19] = 0
+    device.queue.writeBuffer(bond_render_uniform, 0, u.buffer, u.byteOffset, BOND_RENDER_BYTES)
   }
 
   let destroyed = false
@@ -2059,6 +2516,76 @@ export function create_large_system_renderer(
   const clear_color: GPUColorDict = { ...(CLEAR_COLOR as GPUColorDict) }
 
   return {
+    set_bond_style(style: LargeSystemBondStyle): void {
+      if (destroyed) return
+      const next_radius = Number.isFinite(style.radius) && style.radius > 0
+        ? style.radius
+        : DEFAULT_BOND_RADIUS
+      const next_incomplete_mode = !!style.incomplete_edge_mode
+      const raw_scale = style.incomplete_edge_length_scale ?? 1
+      const next_scale = Number.isFinite(raw_scale)
+        ? Math.min(1, Math.max(0.05, raw_scale))
+        : 1
+      const next_hide = !!style.hide_incomplete_bonds
+      const raw_opacity = style.periodic_bond_opacity ?? 1
+      const next_opacity = Number.isFinite(raw_opacity)
+        ? Math.min(1, Math.max(0, raw_opacity))
+        : 1
+      if (
+        Math.abs(next_radius - bond_radius) < 1e-6 &&
+        next_incomplete_mode === incomplete_edge_mode &&
+        Math.abs(next_scale - incomplete_edge_length_scale) < 1e-6 &&
+        next_hide === hide_incomplete_bonds &&
+        Math.abs(next_opacity - periodic_bond_opacity) < 1e-6
+      ) {
+        return
+      }
+      bond_radius = next_radius
+      incomplete_edge_mode = next_incomplete_mode
+      incomplete_edge_length_scale = next_scale
+      hide_incomplete_bonds = next_hide
+      periodic_bond_opacity = next_opacity
+      upload_bond_render_uniform()
+    },
+    set_lighting(lighting: LargeSystemLighting): void {
+      if (destroyed) return
+      lighting_state = {
+        light_dir: [
+          lighting.light_dir[0],
+          lighting.light_dir[1],
+          lighting.light_dir[2],
+        ],
+        ambient_light: lighting.ambient_light,
+        directional_light: lighting.directional_light,
+        highlight_strength: lighting.highlight_strength,
+        render_style: lighting.render_style,
+        roughness: lighting.roughness,
+        metalness: lighting.metalness,
+        depth_cueing: lighting.depth_cueing,
+        depth_near: lighting.depth_near,
+        depth_far: lighting.depth_far,
+        atom_outline_strength: lighting.atom_outline_strength,
+        bond_outline_strength: lighting.bond_outline_strength,
+        depth_cue_bg_display: lighting.depth_cue_bg_display
+          ? [
+              lighting.depth_cue_bg_display[0],
+              lighting.depth_cue_bg_display[1],
+              lighting.depth_cue_bg_display[2],
+            ]
+          : undefined,
+        matcap_params: lighting.matcap_params
+          ? [
+              lighting.matcap_params[0],
+              lighting.matcap_params[1],
+              lighting.matcap_params[2],
+              lighting.matcap_params[3],
+              lighting.matcap_params[4],
+              lighting.matcap_params[5],
+            ]
+          : undefined,
+      }
+      upload_lighting_uniform()
+    },
     set_background(rgb: [number, number, number]): void {
       if (destroyed) return
       clear_color.r = rgb[0]
@@ -2070,10 +2597,16 @@ export function create_large_system_renderer(
       lattice: Float32Array | null,
       show: boolean,
       color: [number, number, number],
+      origin: [number, number, number] = [0, 0, 0],
     ): void {
       if (destroyed) return
       cell_show = show
       cell_color = [color[0], color[1], color[2]]
+      cell_origin = [
+        Number.isFinite(origin[0]) ? origin[0] : 0,
+        Number.isFinite(origin[1]) ? origin[1] : 0,
+        Number.isFinite(origin[2]) ? origin[2] : 0,
+      ]
       // A null lattice (non-periodic structure) ⇒ no box. Otherwise detect a
       // degenerate all-zero lattice (also no box) so molecules never draw one.
       let nonzero = false
@@ -2189,7 +2722,7 @@ export function create_large_system_renderer(
     set_bond_data(
       covalent_radii: Float32Array,
       lattice: Float32Array,
-      options: { tolerance: number; max_bond_dist: number; min_dist: number },
+      options: BondComputeOptions,
       periodic: boolean,
     ): void {
       if (destroyed) return
@@ -2198,6 +2731,9 @@ export function create_large_system_renderer(
       bond_lattice = lattice.slice(0, 9)
       bond_options = { ...options }
       bond_periodic = periodic
+      external_bonds = false
+      external_bond_count = 0
+      decorator_count = 0
 
       // Capacity heuristic: max(1024, n_atoms * 16). Pairs buffer + indirect cfg
       // grow with the atom count; never shrink (avoids churn on tweaks).
@@ -2226,6 +2762,45 @@ export function create_large_system_renderer(
       // Upload the bond render uniform (lattice + radius/color) now; the compute
       // Params is repacked at dispatch time (it also needs capacity).
       upload_bond_render_uniform()
+      bonds_dirty = true
+    },
+    set_external_bond_topology(
+      pairs: Uint32Array,
+      count: number,
+      lattice: Float32Array,
+    ): void {
+      if (destroyed) return
+      const n = Math.max(0, Math.min(count | 0, Math.floor(pairs.length / 3)))
+      external_bonds = true
+      external_bond_count = n
+      bonds_configured = true
+      bond_lattice = lattice.slice(0, 9)
+      if (bond_lattice.length < 9) {
+        const padded = new Float32Array(9)
+        padded.set(bond_lattice)
+        bond_lattice = padded
+      }
+      ensure_pairs_capacity(Math.max(1024, n))
+      if (n > 0 && pairs_buffer) {
+        device.queue.writeBuffer(
+          pairs_buffer, 0,
+          pairs.buffer, pairs.byteOffset, n * 3 * 4,
+        )
+      }
+      upload_bond_render_uniform()
+      bonds_dirty = true
+    },
+    set_bond_decorators(records: Uint32Array, count: number): void {
+      if (destroyed) return
+      const n = Math.max(0, Math.min(count | 0, Math.floor(records.length / 4)))
+      decorator_count = n
+      ensure_decorator_capacity(n)
+      if (n > 0 && decorator_buffer) {
+        device.queue.writeBuffer(
+          decorator_buffer, 0,
+          records.buffer, records.byteOffset, n * 4 * 4,
+        )
+      }
       bonds_dirty = true
     },
     set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
@@ -2408,15 +2983,21 @@ export function create_large_system_renderer(
       // atoms). bonds_enabled gates BOTH the compute pass below AND the bond
       // draw, so a hidden show_bonds setting skips all bond work entirely.
       const bonds_ready =
-        bonds_enabled && bonds_configured && atom_count > 0 && bond_n > 0 &&
-        !!bond_compute_bg && !!indirect_bg && !!bond_render_bg && !!pairs_buffer
+        bonds_enabled && bonds_configured && atom_count > 0 &&
+        !!bond_render_bg && !!pairs_buffer &&
+        (external_bonds
+          ? external_bond_count > 0
+          : bond_n > 0 && !!bond_compute_bg && !!indirect_bg)
 
       // ── Bond compute (only when dirty) ───────────────────────────────────
       // Runs as a compute pass in THIS encoder, before the render pass, so the
       // pairs/indirect writes are visible to the bond draw in the same submit.
       // Cached by `bonds_dirty`: structure/option/atom changes flip it; a static
       // scene re-uses last frame's GPU-resident pairs with no recompute.
-      if (bonds_ready && bonds_dirty) {
+      if (bonds_ready && bonds_dirty && external_bonds) {
+        write_external_bond_draw_args()
+        bonds_dirty = false
+      } else if (bonds_ready && bonds_dirty) {
         // Plan the uniform grid from the current bond inputs + this frame's atom
         // positions (non-periodic AABB needs them). For periodic small cells the
         // plan's use_grid is false ⇒ the shader takes the O(N²) fallback.
@@ -2438,9 +3019,9 @@ export function create_large_system_renderer(
         device.queue.writeBuffer(
           bond_params_buffer, 0,
           pack_params(bond_n, bond_capacity, {
-            tolerance: bond_options.tolerance,
+            scale: bond_options.scale,
             max_bond_dist: bond_options.max_bond_dist,
-            min_dist: bond_options.min_dist,
+            min_bond_dist: bond_options.min_bond_dist,
             positions: new Float32Array(0), // unused by pack_params
             radii: new Float32Array(0), // unused by pack_params
             lattice: bond_lattice,
@@ -2546,6 +3127,7 @@ export function create_large_system_renderer(
         // some implementations / already-lost contexts may throw — ignore
       }
       camera_buffer.destroy()
+      lighting_buffer.destroy()
       positions_buffer?.destroy()
       radii_buffer?.destroy()
       colors_buffer?.destroy()
@@ -2560,6 +3142,7 @@ export function create_large_system_renderer(
       elem_ids_buffer?.destroy()
       rules_buffer?.destroy()
       pairs_buffer?.destroy()
+      decorator_buffer?.destroy()
       cell_count_buffer?.destroy()
       cell_atoms_buffer?.destroy()
       overflow_buffer.destroy()
@@ -2584,6 +3167,7 @@ export function create_large_system_renderer(
       elem_ids_buffer = null
       rules_buffer = null
       pairs_buffer = null
+      decorator_buffer = null
       cell_count_buffer = null
       cell_atoms_buffer = null
       last_positions = null

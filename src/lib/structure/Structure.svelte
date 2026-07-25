@@ -258,6 +258,36 @@
   // The overlay calls this so its positions match the WebGL view atom-for-atom
   // instead of re-deriving from base-only trajectory data. Null until mount.
   let scene_get_displayed_frame_positions = $state<(() => Float32Array) | null>(null)
+  // Same bridge for the exact resolved linear-RGB color buffer that WebGL uses
+  // for atoms and bond endpoint colors.
+  let scene_get_displayed_atom_colors = $state<(() => Float32Array) | null>(null)
+
+  // WebGPU overlay bridge: derive the same active lighting profile that
+  // StructureScene feeds to the WebGL atom/bond shaders. This is intentionally
+  // independent of structure contents; switching large-system mode should not
+  // switch to a second, hard-coded material style.
+  const overlay_lighting = $derived.by(() => {
+    const style = scene_props?.render_style ?? DEFAULTS.structure.render_style
+    const active = scene_props?.lighting_profiles?.[style] ?? {
+      light_azimuth: scene_props?.light_azimuth ?? DEFAULTS.structure.light_azimuth,
+      light_elevation: scene_props?.light_elevation ?? DEFAULTS.structure.light_elevation,
+      directional_light: scene_props?.directional_light ?? DEFAULTS.structure.directional_light,
+      ambient_light: scene_props?.ambient_light ?? DEFAULTS.structure.ambient_light,
+      highlight_strength: scene_props?.highlight_strength ?? DEFAULTS.structure.highlight_strength,
+    }
+    const az = (active.light_azimuth * Math.PI) / 180
+    const el = (active.light_elevation * Math.PI) / 180
+    return {
+      light_dir: [
+        Math.cos(el) * Math.sin(az),
+        Math.sin(el),
+        Math.cos(el) * Math.cos(az),
+      ] as [number, number, number],
+      ambient_light: active.ambient_light,
+      directional_light: active.directional_light,
+      highlight_strength: active.highlight_strength,
+    }
+  })
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -4611,6 +4641,7 @@
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
             bind:get_displayed_frame_positions={scene_get_displayed_frame_positions}
+            bind:get_displayed_atom_colors={scene_get_displayed_atom_colors}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4680,20 +4711,42 @@
             enabled={large_system_mode}
             {camera}
             structure={displayed_structure}
+            rotation={scene_props.rotation}
+            rotation_target={rotation_target_ref}
             supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
+            {image_atom_opacity}
             element_colors={colors.element}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}
             {element_radius_overrides}
             {site_radius_overrides}
-            bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            get_displayed_atom_colors={scene_get_displayed_atom_colors}
+            bonding_options={{
+              ...((scene_props.bonding_options ?? {}) as Record<string, number>),
+              scale: scene_props.bond_scale,
+            }}
             {bond_distance_rules}
+            bond_thickness={scene_props.bond_thickness}
             show_bonds={scene_props.show_bonds}
+            incomplete_periodic_edge_mode={scene_props.incomplete_periodic_edge_mode}
+            incomplete_edge_length_scale={scene_props.incomplete_edge_length_scale}
+            hide_incomplete_bonds={scene_props.hide_incomplete_bonds}
             {background_color}
             {background_opacity}
             show_cell={scene_props.show_cell}
             cell_edge_color={scene_props.cell_edge_color}
+            light_dir={overlay_lighting.light_dir}
+            ambient_light={overlay_lighting.ambient_light}
+            directional_light={overlay_lighting.directional_light}
+            highlight_strength={overlay_lighting.highlight_strength}
+            render_style={scene_props.render_style}
+            matcap_preset={scene_props.matcap_preset}
+            depth_cueing={scene_props.depth_cueing}
+            depth_cue_start={scene_props.depth_cue_start}
+            depth_cue_end={scene_props.depth_cue_end}
+            atom_outline_strength={scene_props.atom_outline_strength}
+            bond_outline_strength={scene_props.bond_outline_strength}
             {trajectory_positions_version}
             {trajectory_step_idx}
             get_displayed_frame_positions={scene_get_displayed_frame_positions}

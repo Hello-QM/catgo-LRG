@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Color, type Camera } from 'three'
+  import { Euler, Vector3, type Camera } from 'three'
   import type { AnyStructure, ElementSymbol } from '$lib/structure'
   import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
@@ -7,9 +7,18 @@
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
   import { encode_bond_rules, type BondDistanceRuleLike } from '$lib/structure/gpu/bond-rules'
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
-  import { should_show_bonds } from '$lib/structure/scene'
-  import type { ShowBonds } from '$lib/settings'
+  import { compute_atom_span_radius, compute_structure_size, should_show_bonds } from '$lib/structure/scene'
+  import { DEFAULTS, type RenderStyle, type ShowBonds } from '$lib/settings'
   import type { PymatgenLattice } from '$lib/structure'
+  import {
+    hex_to_linear_rgb,
+    matcap_preset_params,
+    normalize_lighting,
+    render_style_pbr,
+    render_style_to_int,
+    resolve_background_display_rgb,
+    type Vec3Like,
+  } from '$lib/structure/gpu/visual-style'
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
@@ -19,18 +28,33 @@
     enabled = false,
     camera = undefined,
     structure = undefined,
+    rotation = [0, 0, 0],
+    rotation_target = undefined,
     element_colors = undefined,
     atom_radius = 1.5,
     same_size_atoms = false,
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
+    get_displayed_atom_colors = undefined,
     bonding_options = undefined,
     bond_distance_rules = undefined,
+    bond_thickness = 0.07,
     show_bonds = `crystals`,
     background_color = undefined,
     background_opacity = 0.1,
     show_cell = false,
     cell_edge_color = `#808080`,
+    light_dir = [0.4, 0.7, 0.6],
+    ambient_light = 0.7,
+    directional_light = 0.3,
+    highlight_strength = 1.0,
+    render_style = `toon`,
+    matcap_preset = `ceramic`,
+    depth_cueing = 0,
+    depth_cue_start = 0.35,
+    depth_cue_end = 1,
+    atom_outline_strength = 0,
+    bond_outline_strength = 0,
     trajectory_positions_version = undefined,
     get_displayed_frame_positions = undefined,
     trajectory_step_idx = -1,
@@ -39,6 +63,10 @@
     on_pick = undefined,
     supercell = [1, 1, 1],
     show_image_atoms = false,
+    image_atom_opacity = 1,
+    incomplete_periodic_edge_mode = DEFAULTS.structure.incomplete_periodic_edge_mode,
+    incomplete_edge_length_scale = DEFAULTS.structure.incomplete_edge_length_scale,
+    hide_incomplete_bonds = DEFAULTS.structure.hide_incomplete_bonds,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -50,6 +78,12 @@
      *  fast path). The element/count/layout here MUST match the resolver's
      *  array index-for-index (both are the displayed-structure site order). */
     structure?: AnyStructure | undefined
+    /** The same manual/lattice-alignment rotation applied around
+     *  `rotation_target` by StructureScene's WebGL group:
+     *  T(target) · R(rotation) · T(-target). */
+    rotation?: Vec3Like
+    /** Pivot for `rotation`, mirrored from StructureScene.rotation_target_ref. */
+    rotation_target?: Vec3 | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
     /** Global display-radius scale, mirrors the WebGL atom_radius prop. */
@@ -60,9 +94,13 @@
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> | undefined
     /** Per-site radius overrides, mirrors the WebGL path. */
     site_radius_overrides?: Map<number, number> | undefined
-    /** App bond options (tolerance / max_bond_dist / …) driving GPU bond
-     *  detection. Same Record the CPU path reads (scene_props.bonding_options);
-     *  mapped via to_compute_options. */
+    /** Authoritative per-displayed-site linear RGB color buffer from
+     *  StructureScene.atom_colors_buffer. Preferred over element_colors so site
+     *  overrides and property colors stay identical to the WebGL path. */
+    get_displayed_atom_colors?: (() => Float32Array) | null | undefined
+    /** App atom_radii bond options (scale / min_bond_dist / max_bond_dist)
+     *  driving GPU bond detection. Same effective Record the CPU/WASM path
+     *  reads; mapped via to_compute_options. */
     bonding_options?: Record<string, number> | undefined
     /** Per-element-pair distance rules (the SAME `bond_distance_rules` the WebGL
      *  path reads). The overlay applies them as a POST-FILTER on the GPU-detected
@@ -74,6 +112,8 @@
     bond_distance_rules?:
       | { element_1: string; element_2: string; min_dist: number; max_dist: number }[]
       | undefined
+    /** Viewer bond thickness, mirrors WebGL `scene_props.bond_thickness`. */
+    bond_thickness?: number
     /** Viewer's bond-visibility setting (`never`/`always`/`crystals`/`molecules`),
      *  mirroring the WebGL path's `scene_props.show_bonds`. The overlay feeds this
      *  through the SAME `should_show_bonds(show_bonds, lattice)` predicate the
@@ -83,11 +123,9 @@
      *  default) so an absent prop matches the typical periodic-structure view. */
     show_bonds?: ShowBonds
     /** Viewer canvas background color (hex, e.g. `#000000`), mirroring the WebGL
-     *  path's StructureScene `background_color`. The overlay resolves this the
-     *  SAME way StructureScene's compute_canvas_bg does (lerp toward the theme
-     *  bg by `background_opacity`) and converts it to linear RGB with the SAME
-     *  conversion used for atom colors, so the overlay background matches the
-     *  WebGL viewer's background and dark atoms keep their contrast. */
+     *  path's StructureScene `background_color`. The overlay resolves this in
+     *  display RGB because WebGPU clear colors do not pass through the fragment
+     *  shader's linear->sRGB output conversion. */
     background_color?: string | undefined
     /** Override strength of `background_color` over the theme bg: 0 → theme bg,
      *  1 → picked color, mid → lerp. Mirrors StructureScene's background_opacity. */
@@ -100,6 +138,21 @@
      *  (DEFAULTS.structure.cell_edge_color = `#808080` grey). Converted to linear
      *  RGB the SAME way atom colors are. */
     cell_edge_color?: string
+    /** Active WebGL lighting profile, normalized before upload. */
+    light_dir?: Vec3Like
+    ambient_light?: number
+    directional_light?: number
+    highlight_strength?: number
+    /** Active material/shading style from Appearance → Material. */
+    render_style?: RenderStyle
+    /** Active MatCap preset from Appearance → MatCap preset. */
+    matcap_preset?: string
+    /** Appearance → Depth Cueing/outline parameters, mirrored from WebGL. */
+    depth_cueing?: number
+    depth_cue_start?: number
+    depth_cue_end?: number
+    atom_outline_strength?: number
+    bond_outline_strength?: number
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
@@ -141,12 +194,18 @@
      *  zero offset ⇒ byte-identical to the non-supercell draw. */
     supercell?: [number, number, number]
     /** Whether DISPLAYED PBC image atoms exist (the viewer's `show_image_atoms`).
-     *  When true (non-supercell only), the renderer draws cross-cell bonds as FULL
-     *  cylinders reaching the imaged partner where the displayed image atom sits,
-     *  so image atoms gain bonds (matching the WebGL view). Default false ⇒ stubs
-     *  ⇒ zero change; supercell mode is unaffected (Phase-2 logic is authoritative). */
+     *  This is a topology/display hint only. The WebGPU renderer must not blindly
+     *  promote every cross-cell bond into a full image bond from this flag; WebGL
+     *  only draws full image-decorator bonds when that partner image is actually
+     *  in the drawn set. */
     show_image_atoms?: boolean
+    image_atom_opacity?: number
+    incomplete_periodic_edge_mode?: boolean
+    incomplete_edge_length_scale?: number
+    hide_incomplete_bonds?: boolean
   } = $props()
+
+  type Vec3 = [number, number, number]
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)
 
@@ -167,6 +226,7 @@
   let atom_count = 0
   // Track the colors-object identity too, so a color-scheme swap rebuilds.
   let atom_colors_source: Partial<Record<ElementSymbol, string>> | undefined = undefined
+  let resolved_atom_colors_source: Float32Array | null = null
   // Signature of the radius-affecting inputs we last built from; when it
   // changes the display radii must be recomputed.
   let atom_radius_sig = ``
@@ -191,7 +251,7 @@
   let bond_lattice: Float32Array = new Float32Array(9)
   let bond_periodic = false
   let bond_options_sig = ``
-  let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  let bond_compute_opts = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
 
@@ -300,6 +360,80 @@
   // renderer draws exactly as before.
   let supercell_sig = ``
 
+  const transform_euler = new Euler()
+  const transform_vec = new Vector3()
+
+  function vec3_like(value: Vec3Like | undefined, fallback: Vec3): Vec3 {
+    if (Array.isArray(value)) return [value[0] ?? fallback[0], value[1] ?? fallback[1], value[2] ?? fallback[2]]
+    if (value) return [value.x ?? fallback[0], value.y ?? fallback[1], value.z ?? fallback[2]]
+    return fallback
+  }
+
+  function view_transform_signature(): string {
+    const r = vec3_like(rotation, [0, 0, 0])
+    const t = rotation_target ?? [0, 0, 0]
+    return `${r[0]},${r[1]},${r[2]}@${t[0]},${t[1]},${t[2]}`
+  }
+
+  function view_rotation_is_identity(): boolean {
+    const r = vec3_like(rotation, [0, 0, 0])
+    return Math.abs(r[0]) < 1e-12 && Math.abs(r[1]) < 1e-12 && Math.abs(r[2]) < 1e-12
+  }
+
+  function apply_view_transform_to_positions(input: Float32Array): Float32Array {
+    if (view_rotation_is_identity()) return input
+    const r = vec3_like(rotation, [0, 0, 0])
+    const t = rotation_target ?? [0, 0, 0]
+    transform_euler.set(r[0], r[1], r[2], `XYZ`)
+    const out = new Float32Array(input.length)
+    for (let i = 0; i < input.length; i += 3) {
+      transform_vec
+        .set(input[i] - t[0], input[i + 1] - t[1], input[i + 2] - t[2])
+        .applyEuler(transform_euler)
+      out[i] = transform_vec.x + t[0]
+      out[i + 1] = transform_vec.y + t[1]
+      out[i + 2] = transform_vec.z + t[2]
+    }
+    return out
+  }
+
+  function apply_view_rotation_to_lattice(input: Float32Array): Float32Array {
+    if (view_rotation_is_identity()) return input
+    const r = vec3_like(rotation, [0, 0, 0])
+    transform_euler.set(r[0], r[1], r[2], `XYZ`)
+    const out = new Float32Array(input.length)
+    for (let i = 0; i < 9; i += 3) {
+      transform_vec
+        .set(input[i], input[i + 1], input[i + 2])
+        .applyEuler(transform_euler)
+      out[i] = transform_vec.x
+      out[i + 1] = transform_vec.y
+      out[i + 2] = transform_vec.z
+    }
+    return out
+  }
+
+  /** Transform the lattice origin with the same group transform StructureScene
+   *  applies to atoms and the WebGL Lattice: T(target) · R · T(-target).
+   *
+   *  The rotated lattice rows alone are not sufficient once the viewer rotates
+   *  around a non-zero target: each cell corner also needs the translated origin
+   *  `target - R·target`, otherwise the WebGPU box shifts relative to atoms. */
+  function apply_view_transform_to_origin(): [number, number, number] {
+    if (view_rotation_is_identity()) return [0, 0, 0]
+    const r = vec3_like(rotation, [0, 0, 0])
+    const t = rotation_target ?? [0, 0, 0]
+    transform_euler.set(r[0], r[1], r[2], `XYZ`)
+    transform_vec
+      .set(-t[0], -t[1], -t[2])
+      .applyEuler(transform_euler)
+    return [
+      transform_vec.x + t[0],
+      transform_vec.y + t[1],
+      transform_vec.z + t[2],
+    ]
+  }
+
   /** Push the GPU supercell dims + base lattice to the renderer when they
    *  changed. The base lattice is packed from `structure.lattice` (the parent
    *  keeps `structure` at the BASE cell while GPU-supercell is active). Returns
@@ -312,7 +446,7 @@
       Math.max(1, Math.floor(supercell?.[2] ?? 1)),
     ]
     const lat = (structure as { lattice?: PymatgenLattice } | undefined)?.lattice
-    const base_lat = pack_lattice(lat)
+    const base_lat = apply_view_rotation_to_lattice(pack_lattice(lat))
     let sig = `${dims[0]}x${dims[1]}x${dims[2]}|`
     for (let i = 0; i < 9; i++) sig += `${base_lat[i]};`
     if (sig === supercell_sig) return false
@@ -326,8 +460,8 @@
   let show_images_sig = -1
 
   /** Push the viewer's show_image_atoms flag to the renderer when it changed.
-   *  The renderer uses it (non-supercell path only) to draw cross-cell bonds full
-   *  to the displayed image atom instead of as stubs. Returns true if re-pushed. */
+   *  This remains a topology-change signal; the renderer must not blindly turn
+   *  all cross-cell bonds into full image bonds from this flag alone. */
   function sync_show_images(): boolean {
     if (!renderer) return false
     const next = show_image_atoms ? 1 : 0
@@ -354,20 +488,21 @@
     return true
   }
 
-  /** Push the unit-cell box to the renderer when its inputs (lattice / show /
-   *  color) changed. Uses bond_lattice as the lattice source (already packed +
-   *  kept current). Returns true if it re-pushed (caller marks a redraw). */
+  /** Push the unit-cell box to the renderer when its inputs (lattice / origin /
+   *  show / color) changed. Uses bond_lattice as the lattice source (already
+   *  packed + kept current). Returns true if it re-pushed (caller marks a redraw). */
   function sync_cell(): boolean {
     if (!renderer) return false
     const [cr, cg, cb] = hex_to_linear_rgb(cell_edge_color)
+    const origin = apply_view_transform_to_origin()
     let lat_sig = ``
     for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
-    const sig = `${show_cell}|${cr},${cg},${cb}|${lat_sig}`
+    const sig = `${show_cell}|${cr},${cg},${cb}|${origin[0]},${origin[1]},${origin[2]}|${lat_sig}`
     if (sig === cell_sig) return false
     cell_sig = sig
     // bond_periodic is true exactly when the structure carries a lattice; pass
     // null otherwise so molecules never draw a (degenerate) box.
-    renderer.set_cell(bond_periodic ? bond_lattice : null, show_cell, [cr, cg, cb])
+    renderer.set_cell(bond_periodic ? bond_lattice : null, show_cell, [cr, cg, cb], origin)
     return true
   }
 
@@ -392,6 +527,12 @@
   // lattice changes per frame and the bond compute + bond render need the new
   // one. Compared per frame so a static cell never re-uploads.
   let frame_lattice_sig = ``
+  // The view transform (StructureScene's rotation around rotation_target) last
+  // applied to the uploaded live-position buffer. When it changes we must
+  // re-pull the current frame positions even if the trajectory frame index did
+  // not change; otherwise active trajectories would briefly fall back to
+  // structure.sites' static frame.
+  let active_view_transform_sig = ``
 
   /** Re-extract the current frame's per-DISPLAYED-atom xyz from the shared
    *  WebGL resolver and mark positions (+ bonds) dirty. Falls back to the
@@ -426,13 +567,14 @@
     } else {
       frame_positions = pack_positions(sites)
     }
+    frame_positions = apply_view_transform_to_positions(frame_positions)
     positions_dirty = true
 
     // Variable-cell: if the displayed lattice changed, the bond compute + bond
     // render must use the new lattice. Re-pack and flag bonds for re-push. (A
     // static cell leaves frame_lattice_sig unchanged ⇒ no bond-input churn.)
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    const packed = pack_lattice(lat)
+    const packed = apply_view_rotation_to_lattice(pack_lattice(lat))
     let sig = ``
     for (let i = 0; i < 9; i++) sig += `${packed[i]};`
     if (sig !== frame_lattice_sig) {
@@ -468,9 +610,11 @@
    *  does so the GPU compute re-dispatches with the new value. */
   function bond_options_signature(): string {
     const o = bonding_options
-    if (!o) return ``
+    const xform = view_transform_signature()
+    if (!o) return `xform=${xform};`
     let s = ``
     for (const k of Object.keys(o).sort()) s += `${k}=${o[k]};`
+    s += `xform=${xform};`
     return s
   }
 
@@ -498,7 +642,7 @@
     bond_covalent = build_atom_radii(bond_sites)
     // Periodic only when the structure carries a lattice (molecules don't).
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    bond_lattice = pack_lattice(lat)
+    bond_lattice = apply_view_rotation_to_lattice(pack_lattice(lat))
     bond_periodic = !!lat
     bond_compute_opts = to_compute_options(bonding_options ?? {})
     // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
@@ -508,49 +652,33 @@
     frame_lattice_sig = lat_sig
   }
 
-  // Hex -> linear RGB, matching the WebGL path (Color.convertSRGBToLinear).
-  const _col = new Color()
-  function hex_to_linear_rgb(hex: string): [number, number, number] {
-    _col.set(hex).convertSRGBToLinear()
-    return [_col.r, _col.g, _col.b]
-  }
-
   // ── Background color (Fix 1) ────────────────────────────────────────────
-  // The last linear-RGB background pushed to the renderer, so we only re-push +
+  // The last display-RGB background pushed to the renderer, so we only re-push +
   // re-render when the resolved color actually changes.
   let last_bg: [number, number, number] | null = null
-  const _bg = new Color()
 
   /** Walk up from the overlay canvas to find the first opaque CSS background
    *  color (the theme bg). Mirrors StructureScene.find_theme_bg so the overlay
    *  resolves the same theme background the WebGL clear color lerps toward. */
-  function find_theme_bg(target: Color): Color {
+  function find_theme_bg(): [number, number, number] {
     let el: HTMLElement | null = canvas ?? null
     while (el) {
       const bg = getComputedStyle(el).backgroundColor
       const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
       if (m) {
         const a = m[4] !== undefined ? parseFloat(m[4]) : 1
-        if (a >= 0.5) return target.setRGB(+m[1] / 255, +m[2] / 255, +m[3] / 255)
+        if (a >= 0.5) return [+m[1] / 255, +m[2] / 255, +m[3] / 255]
       }
       el = el.parentElement
     }
-    return target.setRGB(0, 0, 0)
+    return [0, 0, 0]
   }
 
-  /** Resolve the viewer background the SAME way StructureScene.compute_canvas_bg
-   *  does (picked hex, theme bg, or a lerp by background_opacity), then convert
-   *  to linear RGB with the SAME conversion used for atom colors. Returns the
-   *  linear-RGB triple to upload as the overlay clear color. */
+  /** Resolve the viewer background as a display-RGB triple for the WebGPU clear
+   *  color. Atoms/bonds/cell lines are converted in WGSL fragments; clear colors
+   *  bypass that shader path. */
   function resolve_background_rgb(): [number, number, number] {
-    const picked = new Color(background_color ?? `#000000`)
-    const t = Math.max(0, Math.min(1, background_opacity))
-    if (t >= 0.999) _bg.copy(picked)
-    else if (t <= 0.001) find_theme_bg(_bg)
-    else find_theme_bg(_bg).lerp(picked, t)
-    // convertSRGBToLinear matches hex_to_linear_rgb (atom color space).
-    _bg.convertSRGBToLinear()
-    return [_bg.r, _bg.g, _bg.b]
+    return resolve_background_display_rgb(background_color, background_opacity, find_theme_bg())
   }
 
   /** Push the resolved background to the renderer when it changed. Marks a
@@ -585,7 +713,38 @@
         ero += `${k}=${(element_radius_overrides as Record<string, number>)[k]};`
       }
     }
-    return `${atom_radius}|${same_size_atoms}|${ero}|${sro}`
+    return `${atom_radius}|${same_size_atoms}|${ero}|${sro}|xform=${view_transform_signature()}`
+  }
+
+  function resolved_atom_colors(): Float32Array | null {
+    const sites = structure?.sites
+    const resolved = get_displayed_atom_colors?.()
+    if (!sites || !resolved || resolved.length !== sites.length * 3) return null
+    return resolved
+  }
+
+  function depth_cue_range(): { near: number; far: number } {
+    const lat = (structure as { lattice?: PymatgenLattice } | undefined)?.lattice ?? null
+    const structure_size = compute_structure_size(lat)
+    const atom_span = compute_atom_span_radius(structure)
+    const half_range = Math.max(atom_span ?? structure_size * 0.5, 0.1)
+    const center = rotation_target ?? [0, 0, 0]
+    const cam_dist = camera
+      ? Math.hypot(
+          camera.position.x - center[0],
+          camera.position.y - center[1],
+          camera.position.z - center[2],
+        )
+      : half_range
+    const front = cam_dist - half_range
+    const back = cam_dist + half_range
+    const full_depth = back - front
+    const start = Math.max(0, Math.min(1, depth_cue_start))
+    const end = Math.max(0, Math.min(1, depth_cue_end))
+    return {
+      near: front + start * full_depth,
+      far: front + end * full_depth,
+    }
   }
 
   /** Rebuild the flat atom buffers from the current structure + element colors
@@ -593,6 +752,7 @@
    *  affects them has changed. */
   function rebuild_atoms_if_needed(): void {
     const sig = radius_signature()
+    const resolved_colors = resolved_atom_colors()
     // Detect a structure-IDENTITY or atom-COUNT change (supercell repeats,
     // structure swap) BEFORE we overwrite atom_source — independent of the
     // color/radius-only path below. A new identity OR a changed count means the
@@ -607,12 +767,14 @@
     if (
       structure === atom_source &&
       element_colors === atom_colors_source &&
+      resolved_colors === resolved_atom_colors_source &&
       sig === atom_radius_sig
     ) {
       return
     }
     atom_source = structure
     atom_colors_source = element_colors
+    resolved_atom_colors_source = resolved_colors
     atom_radius_sig = sig
     atoms_dirty = true
     const sites = structure?.sites
@@ -623,7 +785,7 @@
       atom_count = 0
       return
     }
-    atom_positions = pack_positions(sites)
+    atom_positions = apply_view_transform_to_positions(pack_positions(sites))
     // VISUAL sphere radius — matches the WebGL ball-and-stick display sizing
     // (atomic_radii[element] * atom_radius, with same_size / overrides). NOT
     // the covalent bond-cutoff radius (build_atom_radii) used by 9.3.
@@ -634,16 +796,83 @@
       site_radius_overrides,
     })
     atom_count = sites.length
-    const cols = new Float32Array(sites.length * 3)
-    for (let i = 0; i < sites.length; i++) {
-      const elem = sites[i].species[0]?.element
-      const hex = (elem != null ? element_colors?.[elem] : undefined) ?? `#ffffff`
-      const [r, g, b] = hex_to_linear_rgb(hex)
-      cols[i * 3] = r
-      cols[i * 3 + 1] = g
-      cols[i * 3 + 2] = b
+    if (resolved_colors) {
+      atom_colors = new Float32Array(resolved_colors)
+    } else {
+      const cols = new Float32Array(sites.length * 3)
+      for (let i = 0; i < sites.length; i++) {
+        const elem = sites[i].species[0]?.element
+        const hex = (elem != null ? element_colors?.[elem] : undefined) ?? `#ffffff`
+        const [r, g, b] = hex_to_linear_rgb(hex)
+        cols[i * 3] = r
+        cols[i * 3 + 1] = g
+        cols[i * 3 + 2] = b
+      }
+      atom_colors = cols
     }
-    atom_colors = cols
+  }
+
+  let style_sig = ``
+
+  function sync_visual_style(): boolean {
+    if (!renderer) return false
+    const bg = resolve_background_rgb()
+    const depth = depth_cue_range()
+    const style_code = render_style_to_int(render_style)
+    const pbr = render_style_pbr(render_style)
+    const lighting = normalize_lighting({
+      light_dir,
+      ambient_light,
+      directional_light,
+      highlight_strength,
+      render_style: style_code,
+      roughness: pbr.roughness,
+      metalness: pbr.metalness,
+      matcap_params: matcap_preset_params(matcap_preset),
+      depth_cueing,
+      depth_near: depth.near,
+      depth_far: depth.far,
+      atom_outline_strength,
+      bond_outline_strength,
+      depth_cue_bg_display: bg,
+    })
+    const radius = Number.isFinite(bond_thickness) && bond_thickness > 0
+      ? bond_thickness
+      : 0.07
+    const sig = [
+      radius,
+      image_atom_opacity,
+      incomplete_periodic_edge_mode ? 1 : 0,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds ? 1 : 0,
+      render_style,
+      matcap_preset,
+      ...lighting.light_dir,
+      lighting.ambient_light,
+      lighting.directional_light,
+      lighting.highlight_strength,
+      lighting.render_style,
+      lighting.roughness,
+      lighting.metalness,
+      ...(lighting.matcap_params ?? []),
+      lighting.depth_cueing,
+      lighting.depth_near,
+      lighting.depth_far,
+      lighting.atom_outline_strength,
+      lighting.bond_outline_strength,
+      ...(lighting.depth_cue_bg_display ?? [1, 1, 1]),
+    ].join(`,`)
+    if (sig === style_sig) return false
+    style_sig = sig
+    renderer.set_bond_style({
+      radius,
+      incomplete_edge_mode: incomplete_periodic_edge_mode,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds,
+      periodic_bond_opacity: image_atom_opacity,
+    })
+    renderer.set_lighting(lighting)
+    return true
   }
 
   function stop_session(): void {
@@ -804,7 +1033,15 @@
     // this forced refresh isn't skipped by the "≠ last_*" guard, and so the
     // SUBSEQUENT genuine frame change (≠ these reset values) still triggers
     // refresh_frame_positions normally.
-    if (topology_dirty) {
+    const current_view_transform_sig = view_transform_signature()
+    const view_transform_dirty = current_view_transform_sig !== active_view_transform_sig
+    if (view_transform_dirty) {
+      active_view_transform_sig = current_view_transform_sig
+      frame_lattice_sig = ``
+      cell_sig = ``
+      supercell_sig = ``
+    }
+    if (topology_dirty || view_transform_dirty) {
       topology_dirty = false
       last_pos_version = -1
       last_step_idx = -1
@@ -852,8 +1089,8 @@
     // draw), so the overlay shows no bonds — atoms + cell box still render. We
     // still track the rebuild state so the next time bonds turn back on the
     // changed inputs are re-pushed (bonds_dirty was set on enable above).
+    rebuild_bonds_if_needed()
     if (bonds_visible) {
-      rebuild_bonds_if_needed()
       if (bonds_dirty) {
         renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
         bonds_dirty = false
@@ -898,6 +1135,10 @@
     // clear color shows. Cheap when static (string compare + no GPU work).
     if (sync_background()) dirty = true
 
+    // Visual style: mirror the standard WebGL viewer's bond radius and lighting
+    // profile. This is intentionally independent of structure contents.
+    if (sync_visual_style()) dirty = true
+
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
       camera.updateMatrixWorld()
@@ -930,6 +1171,7 @@
     // first frame even if the structure identity hasn't changed since last time.
     atom_source = undefined
     atom_colors_source = undefined
+    resolved_atom_colors_source = null
     atom_radius_sig = ``
     atoms_dirty = true
     // Fresh renderer ⇒ treat the topology as new so the first frame forces a
@@ -953,11 +1195,13 @@
     last_pos_version = -1
     last_step_idx = -1
     frame_lattice_sig = ``
+    active_view_transform_sig = ``
     positions_dirty = false
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
     last_bg = null
+    style_sig = ``
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
     // Fresh renderer ⇒ its supercell defaults to [1,1,1]; force a re-push of the
@@ -1050,7 +1294,19 @@
     // these here (not in the session effect) wakes without restarting the GPU
     // session. The `frame` does the actual rebuild + upload via
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
-    void [structure, element_colors, atom_radius, same_size_atoms, element_radius_overrides, site_radius_overrides, bonding_options, bond_distance_rules]
+    void [
+      structure,
+      element_colors,
+      get_displayed_atom_colors?.(),
+      atom_radius,
+      same_size_atoms,
+      element_radius_overrides,
+      site_radius_overrides,
+      bonding_options,
+      bond_distance_rules,
+      rotation,
+      rotation_target,
+    ]
     if (renderer) {
       needs_render = true
       wake()
@@ -1087,6 +1343,35 @@
   })
 
   $effect(() => {
+    // Visual-style wake trigger. Track the WebGL viewer's active bond radius and
+    // Appearance profile so large-system mode is a backend swap, not a style swap.
+    void [
+      bond_thickness,
+      light_dir,
+      ambient_light,
+      directional_light,
+      highlight_strength,
+      render_style,
+      matcap_preset,
+      depth_cueing,
+      depth_cue_start,
+      depth_cue_end,
+      atom_outline_strength,
+      bond_outline_strength,
+      image_atom_opacity,
+      incomplete_periodic_edge_mode,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds,
+      rotation_target,
+      structure,
+    ]
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
     // Bond-visibility wake trigger. Read bonds_visible (derived from show_bonds +
     // the structure's lattice) so flipping the viewer's "show bonds" setting
     // revives a suspended loop; the frame syncs set_bonds_enabled and repaints
@@ -1105,7 +1390,7 @@
     // cell on/off or recoloring it revives a suspended loop; the frame re-pushes
     // via sync_cell and repaints once. (Lattice changes are caught by the
     // structure/per-frame wakes, which update bond_lattice.)
-    void [show_cell, cell_edge_color]
+    void [show_cell, cell_edge_color, rotation, rotation_target]
     if (renderer) {
       needs_render = true
       wake()
@@ -1118,7 +1403,7 @@
     // re-pushes via sync_supercell and repaints once with the new instance count.
     // (Base-lattice changes are caught by the structure wake, which also drives
     // the atom/cell rebuilds.)
-    void [supercell[0], supercell[1], supercell[2]]
+    void [supercell[0], supercell[1], supercell[2], rotation, rotation_target]
     if (renderer) {
       needs_render = true
       wake()
