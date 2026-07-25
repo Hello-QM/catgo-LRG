@@ -313,19 +313,23 @@ tests that KMC is absent from Git source archives, CI submodule checkout, and
 the Python release configurations. The unresolved historical license therefore
 does not supply rights for any future reintroduction.
 
-### Open Babel-derived CatRender perception code
+### Historical Open Babel-derived CatRender perception code — removed
 
-- Path: `extensions/catrender-wasm/src/perceive.rs`
+- Removed paths: `extensions/catrender-wasm/src/perceive.rs` and
+  `docs/superpowers/plans/2026-05-21-catrender-ob-bond-perception.md`
 - Source: https://github.com/openbabel/openbabel
+- Audited upstream snapshot:
+  `7ba0614b1fa51116f49dbbc669940e7af7df716a`
 - Upstream repository license declaration: GPL-2.0
+- Provenance ledger:
+  `third_party/provenance/catrender-bond-order-removal.md`
 
-The current source describes tables as copied or verbatim from Open Babel and
-the implementation history labels several phases as Open Babel ports. CatGo
-does not record the exact Open Babel revision, the complete source-file/line
-map, or an analysis of which upstream license option applies to each portion.
-This audit does not make a compatibility or substantiality conclusion. The
-code requires maintainer/counsel mapping before CatRender is distributed under
-the proposed CatGo terms.
+The implementation and its embedded port plan were
+removed from the current release tree. The ledger records the immutable
+technical source map and the replacement provenance for CatRender's remaining
+covalent-radius data. This
+historical notice does not make a compatibility, substantiality, or other legal
+conclusion, and removal does not settle those questions.
 
 ### PORMAKE database and RCSR-derived topology collection
 

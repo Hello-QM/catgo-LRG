@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 
 const read = (path: string) => readFileSync(path, `utf8`)
+const readRustProduction = (path: string) => read(path).split(`\n#[cfg(test)]`)[0]
 
 describe(`CatRender bond-order release source`, () => {
   test(`contains no Open Babel-derived perception implementation`, () => {
@@ -14,11 +15,13 @@ describe(`CatRender bond-order release source`, () => {
       `extensions/catrender-wasm/src/lib.rs`,
       `extensions/catrender-wasm/src/svg.rs`,
       `extensions/catrender-wasm/src/types.rs`,
+    ]
+      .map(readRustProduction)
+      .concat([
       `src/lib/structure/catrender/catrender-state.svelte.ts`,
       `src/lib/structure/catrender/CatRenderParamsPane.svelte`,
       `src/lib/structure/catrender/CatRenderViewPane.svelte`,
-    ]
-      .map(read)
+      ].map(read))
       .join(`\n`)
 
     expect(production).not.toMatch(
