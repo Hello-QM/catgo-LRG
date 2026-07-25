@@ -1,18 +1,20 @@
 {
   "compilerOptions": {
     "target": "esnext",
-    "module": "CommonJS",
+    "module": "ESNext",
     "outDir": "./dist",
     "strict": true,
     "esModuleInterop": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "allowJs": true,
+    "types": ["node", "vscode", "vite/client"],
     "baseUrl": ".",
     "paths": {
       "$lib": ["../../src/lib"],
-      "$lib/*": ["../../src/lib/*"]
+      "$lib/*": ["../../src/lib/*"],
+      "$app/environment": ["../../src/lib/mocks/environment.ts"]
     }
   },
   "include": ["src/**/*"]

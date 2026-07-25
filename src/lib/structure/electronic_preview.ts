@@ -3,7 +3,11 @@
 // One source of truth so MP, OPTIMADE, and any future provider render the
 // same way (and degrade to "—" identically when fields are missing).
 
-import type { PreviewDetailRow } from './OptimadePreviewModal.svelte'
+export interface PreviewDetailRow {
+  label: string
+  value: string
+  mono?: boolean
+}
 
 export interface ElectronicProps {
   band_gap?: number | null

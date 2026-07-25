@@ -5,13 +5,11 @@
   import type { PymatgenStructure } from './index'
   import StructurePreview from './StructurePreview.svelte'
   import ElectronicInfoPanel from './ElectronicInfoPanel.svelte'
-  import type { ElectronicProps, ElectronicLabels } from './electronic_preview'
-
-  export interface PreviewDetailRow {
-    label: string
-    value: string
-    mono?: boolean
-  }
+  import type {
+    ElectronicProps,
+    ElectronicLabels,
+    PreviewDetailRow,
+  } from './electronic_preview'
 
   export interface PreviewLatticeParams {
     a: number

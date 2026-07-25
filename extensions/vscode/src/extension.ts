@@ -227,10 +227,17 @@ export const get_file = async (uri?: vscode.Uri): Promise<FileData> => {
   }
 
   const active_tab = vscode.window.tabGroups.activeTabGroup.activeTab
+  const active_tab_input = active_tab?.input
   if (
-    active_tab?.input && typeof active_tab.input === `object` &&
-    active_tab.input !== null && `uri` in active_tab.input
-  ) return await read_file(active_tab.input.uri.fsPath)
+    active_tab_input && typeof active_tab_input === `object` &&
+    `uri` in active_tab_input
+  ) {
+    const uri = active_tab_input.uri
+    if (
+      uri && typeof uri === `object` && `fsPath` in uri &&
+      typeof uri.fsPath === `string`
+    ) return await read_file(uri.fsPath)
+  }
 
   throw new Error(
     `No file selected. CatGo needs an active editor to know what to render.`,
@@ -290,7 +297,7 @@ export const get_defaults = (): DefaultSettings => {
       defaults_section: Record<string, unknown>,
     ) => {
       const settings: Record<string, unknown> = {}
-      const section_config = config.get(section_key, {})
+      const section_config = config.get<Record<string, unknown>>(section_key, {})
       for (const key of Object.keys(defaults_section)) {
         const value = section_config?.[key]
         if (value !== undefined) settings[key] = value
@@ -343,8 +350,11 @@ export const create_html = (
   data: WebviewData,
 ): string => {
   const nonce = Math.random().toString(36).slice(2, 34)
+  const extension_uri = `scheme` in context.extensionUri
+    ? context.extensionUri
+    : vscode.Uri.file(context.extensionUri.fsPath)
   const webview_uri = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, `dist`, `webview.js`),
+    vscode.Uri.joinPath(extension_uri, `dist`, `webview.js`),
   )
   const js_uri = typeof webview_uri === `string` ? webview_uri : webview_uri.toString()
 
@@ -418,12 +428,17 @@ export const create_html = (
     // Continue without WASM binaries - webview will fall back to web versions
   }
 
+  const serialized_data = JSON.stringify(data_with_wasm)
+    .replace(/</g, `\\u003c`)
+    .replace(/\u2028/g, `\\u2028`)
+    .replace(/\u2029/g, `\\u2029`)
+
   return `<!DOCTYPE html>
 <html>
   <head>
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' 'unsafe-eval' 'wasm-unsafe-eval' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource} data:; connect-src ${webview.cspSource} http://127.0.0.1:* ws://127.0.0.1:* blob:; worker-src blob:;">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script nonce="${nonce}">window.catgoData=${JSON.stringify(data_with_wasm)}</script>
+    <script nonce="${nonce}">window.catgoData=${serialized_data}</script>
   </head>
   <body>
     <div id="catgo-app"></div>
