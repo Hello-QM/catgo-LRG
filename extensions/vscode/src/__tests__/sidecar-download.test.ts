@@ -5,6 +5,7 @@ import {
   type IncomingMessage,
   type RequestListener,
 } from 'node:http'
+import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,9 +16,9 @@ import * as sidecar from '../sidecar'
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url))
 const EXTENSION_ROOT = path.resolve(TEST_DIR, `../..`)
-const VITEST_ENTRY = fileURLToPath(
-  new URL(`../vitest.mjs`, import.meta.resolve(`vitest`)),
-)
+const VITEST_ENTRY = createRequire(
+  path.join(EXTENSION_ROOT, `package.json`),
+).resolve(`vitest/vitest.mjs`)
 
 type SidecarAssetUrls = (
   version: string,

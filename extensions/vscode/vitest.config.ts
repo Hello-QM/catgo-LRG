@@ -1,6 +1,6 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'path'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // Webview tests import code that uses `globalThis.addEventListener` (the
 // VSCode webview message bridge), so we need a DOM env. Extension-host
@@ -37,6 +37,12 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    exclude: process.env.CATGO_SIDECAR_CHILD_MODE
+      ? configDefaults.exclude
+      : [
+          ...configDefaults.exclude,
+          'src/__tests__/fixtures/**',
+        ],
     server: {
       deps: {
         // Inline workspace + Svelte deps so Vite handles their .svelte
