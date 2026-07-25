@@ -6,7 +6,7 @@
   "author": {
     "name": "CatGo Team"
   },
-  "license": "AGPL-3.0-or-later",
+  "license": "LicenseRef-CatGo-Noncommercial-1.0",
   "catgo": {
     "apiVersion": "1.0",
     "backend": {
