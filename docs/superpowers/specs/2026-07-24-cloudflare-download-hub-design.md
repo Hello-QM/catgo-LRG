@@ -1,7 +1,7 @@
 # Cloudflare Download Hub Design
 
 **Date:** 2026-07-24  
-**Status:** Proposed  
+**Status:** Accepted
 **Audience:** CatGo maintainers and release engineers
 
 ## 1. Goal
@@ -104,7 +104,11 @@ successful completion of each workflow that can add release assets:
 - Build HPC Bundle
 - Publish VSCode Extension
 - Build VSCode Sidecar Binaries
-- Build STT accelerator
+
+`Build STT accelerator` is intentionally excluded because it publishes an
+independent `stt-accel-v*` release series rather than assets for the latest
+CatGo app release. Triggering the app mirror from that workflow could select
+the wrong release.
 
 iOS is represented by TestFlight and does not require an R2 binary. A later iOS
 workflow completion may still trigger a harmless idempotent refresh if its
