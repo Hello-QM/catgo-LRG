@@ -89,14 +89,13 @@ jobs:
       - name: Run unit tests
         run: pnpm exec vitest run
 
-      # The VSCode extension tests transitively pull in the main app's
-      # $lib/structure/Structure.svelte (and therefore the whole Threlte +
-      # Three.js graph), which vitest cannot resolve without a full Vite
-      # plugin setup. Tracked in a follow-up; main app unit coverage runs
-      # in the step above and stays green.
       - name: Run VSCode extension tests
-        if: false
-        run: cd extensions/vscode && pnpm install && pnpm test
+        working-directory: extensions/vscode
+        run: pnpm exec vitest run
+
+      - name: Typecheck VSCode extension
+        working-directory: extensions/vscode
+        run: pnpm exec tsc --noEmit
 
   e2e:
     runs-on: ubuntu-latest

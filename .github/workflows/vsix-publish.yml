@@ -91,6 +91,14 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
+      - name: Run extension tests
+        working-directory: extensions/vscode
+        run: pnpm exec vitest run
+
+      - name: Typecheck extension
+        working-directory: extensions/vscode
+        run: pnpm exec tsc --noEmit
+
       - name: Build extension
         working-directory: extensions/vscode
         run: pnpm build
