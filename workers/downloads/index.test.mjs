@@ -106,6 +106,7 @@ test('uses R2 head for HEAD requests and never fetches the object body', async (
 test('forwards byte ranges to R2 and emits resumable response metadata', async () => {
   const body = new ReadableStream()
   const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
     getResult: createObject({
       body,
       size: 100,
@@ -120,7 +121,10 @@ test('forwards byte ranges to R2 and emits resumable response metadata', async (
   )
 
   assert.equal(response.status, 206)
-  assert.equal(bucket.getCalls[0].options.range.get('range'), 'bytes=10-14')
+  assert.deepEqual(bucket.getCalls[0].options.range, {
+    offset: 10,
+    length: 5,
+  })
   assert.equal(response.headers.get('content-range'), 'bytes 10-14/100')
   assert.equal(response.headers.get('content-length'), '5')
   assert.equal(response.headers.get('accept-ranges'), 'bytes')
@@ -158,7 +162,7 @@ test('returns an empty 412 for a failed positive precondition', async () => {
   assert.equal(response.body, null)
 })
 
-test('evaluates HEAD conditionals and ranges from object metadata', async () => {
+test('evaluates HEAD conditionals and ignores Range as required by HTTP', async () => {
   const bucket = createBucket({
     headResult: createObject({ key: 'v1.4.6/CatGo.exe', size: 100 }),
   })
@@ -174,15 +178,95 @@ test('evaluates HEAD conditionals and ranges from object metadata', async () => 
   })
 
   assert.equal(notModified.status, 304)
-  assert.equal(ranged.status, 206)
-  assert.equal(ranged.headers.get('content-range'), 'bytes 90-99/100')
-  assert.equal(ranged.headers.get('content-length'), '10')
+  assert.equal(ranged.status, 200)
+  assert.equal(ranged.headers.get('content-range'), null)
+  assert.equal(ranged.headers.get('content-length'), '100')
+})
+
+test('normalizes suffix and open-ended GET ranges before calling R2', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult: createObject({
+      body: new ReadableStream(),
+      size: 100,
+      range: { offset: 90, length: 10 },
+    }),
+  })
+
+  await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: { Range: 'bytes=-10' },
+  })
+  await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: { Range: 'bytes=90-' },
+  })
+
+  assert.deepEqual(
+    bucket.getCalls.map(({ options }) => options.range),
+    [
+      { offset: 90, length: 10 },
+      { offset: 90, length: 10 },
+    ],
+  )
+})
+
+test('returns 416 before GET for malformed, multiple, or unsatisfiable ranges', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+  })
+  const ranges = [
+    'items=0-1',
+    'bytes=',
+    'bytes=10-2',
+    'bytes=100-',
+    'bytes=0-1,4-5',
+  ]
+
+  for (const range of ranges) {
+    const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+      headers: { Range: range },
+    })
+    assert.equal(response.status, 416, range)
+    assert.equal(response.headers.get('content-range'), 'bytes */100')
+    assert.equal(response.headers.get('accept-ranges'), 'bytes')
+  }
+  assert.equal(bucket.getCalls.length, 0)
+})
+
+test('converts an R2 InvalidRange race into 416', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult() {
+      throw new Error('InvalidRange: object changed after HEAD')
+    },
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: { Range: 'bytes=90-' },
+  })
+
+  assert.equal(response.status, 416)
+  assert.equal(response.headers.get('content-range'), 'bytes */100')
+})
+
+test('honors positive conditional precedence for bodyless GET results', async () => {
+  const bucket = createBucket({
+    getResult: createObject({ body: undefined }),
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      'If-Match': '"different"',
+      'If-None-Match': '"abc123"',
+    },
+  })
+
+  assert.equal(response.status, 412)
 })
 
 test('returns bilingual 404 and method-aware 405 responses', async () => {
   const bucket = createBucket()
 
-  const missing = await fetchDownload(bucket, '/missing.exe')
+  const missing = await fetchDownload(bucket, '/v1.4.6/missing.exe')
   const unsupported = await fetchDownload(bucket, '/index.html', {
     method: 'POST',
   })
@@ -195,9 +279,13 @@ test('returns bilingual 404 and method-aware 405 responses', async () => {
   assert.equal(bucket.getCalls.length, 1)
 })
 
-test('rejects traversal, encoded separators, malformed escapes, and NULs', async () => {
+test('restricts requests to root metadata or one app-tag asset', async () => {
   const bucket = createBucket()
   const paths = [
+    '/secret',
+    '/v1.4.6/nested/secret',
+    '/v1.4.6/../secret',
+    '/v1.4.6/%2e%2e/secret',
     '/v1.4.6/%252e%252e',
     '/v1.4.6%2Fsecret',
     '/v1.4.6/%5Csecret',

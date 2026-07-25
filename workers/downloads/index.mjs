@@ -1,5 +1,6 @@
 const ALLOWED_METHODS = 'GET, HEAD'
 const INLINE_EXTENSIONS = new Set(['.html', '.json'])
+const APP_TAG_PATTERN = /^v\d+\.\d+\.\d+$/
 const CONDITIONAL_HEADERS = [
   'if-match',
   'if-none-match',
@@ -54,7 +55,18 @@ function resolveObjectKey(requestUrl) {
     }
     decoded.push(value)
   }
-  return decoded.join('/')
+  if (decoded.length === 1 && decoded[0] === 'latest.json') {
+    return decoded[0]
+  }
+  if (
+    decoded.length === 2
+    && APP_TAG_PATTERN.test(decoded[0])
+    && decoded[1] !== '.'
+    && decoded[1] !== '..'
+  ) {
+    return decoded.join('/')
+  }
+  return null
 }
 
 function requestHasConditionals(headers) {
@@ -87,19 +99,21 @@ function headPreconditionStatus(request, object) {
   const { headers } = request
   const etag = object.httpEtag
   const uploaded = object.uploaded instanceof Date
-    ? object.uploaded.getTime()
+    ? Math.floor(object.uploaded.getTime() / 1000) * 1000
     : null
 
   const ifMatch = headers.get('if-match')
   if (ifMatch && !etagListMatches(ifMatch, etag)) return 412
 
-  const ifUnmodifiedSince = validDate(headers.get('if-unmodified-since'))
-  if (
-    ifUnmodifiedSince !== null
-    && uploaded !== null
-    && uploaded > ifUnmodifiedSince
-  ) {
-    return 412
+  if (!ifMatch) {
+    const ifUnmodifiedSince = validDate(headers.get('if-unmodified-since'))
+    if (
+      ifUnmodifiedSince !== null
+      && uploaded !== null
+      && uploaded > ifUnmodifiedSince
+    ) {
+      return 412
+    }
   }
 
   const ifNoneMatch = headers.get('if-none-match')
@@ -215,14 +229,14 @@ function buildHeaders(object, key, range = null) {
   return headers
 }
 
-function conditionalStatus(request) {
-  if (
-    request.headers.has('if-none-match')
-    || request.headers.has('if-modified-since')
-  ) {
-    return 304
-  }
-  return 412
+function rangeNotSatisfiable(size) {
+  return new Response(null, {
+    status: 416,
+    headers: {
+      'accept-ranges': 'bytes',
+      'content-range': `bytes */${size}`,
+    },
+  })
 }
 
 async function serveHead(request, bucket, key) {
@@ -239,38 +253,54 @@ async function serveHead(request, bucket, key) {
     })
   }
 
-  const range = parseRangeHeader(request.headers.get('range'), object.size)
-  if (range?.invalid) {
-    return new Response(null, {
-      status: 416,
-      headers: {
-        'accept-ranges': 'bytes',
-        'content-range': `bytes */${object.size}`,
-      },
-    })
-  }
-
   return new Response(null, {
-    status: range ? 206 : 200,
-    headers: buildHeaders(object, key, range),
+    status: 200,
+    headers: buildHeaders(object, key),
   })
 }
 
 async function serveGet(request, bucket, key) {
   const options = {}
-  if (request.headers.has('range')) options.range = request.headers
+  let rangeMetadata = null
+  if (request.headers.has('range')) {
+    rangeMetadata = await bucket.head(key)
+    if (rangeMetadata === null) {
+      return textResponse('未找到 / Download not found', 404)
+    }
+    const range = parseRangeHeader(
+      request.headers.get('range'),
+      rangeMetadata.size,
+    )
+    if (range?.invalid) return rangeNotSatisfiable(rangeMetadata.size)
+    options.range = range
+  }
   if (requestHasConditionals(request.headers)) {
     options.onlyIf = request.headers
   }
 
-  const object = await bucket.get(key, options)
+  let object
+  try {
+    object = await bucket.get(key, options)
+  } catch (error) {
+    if (
+      rangeMetadata
+      && error instanceof Error
+      && /(?:invalid|unsatisfiable).*range|range.*(?:invalid|unsatisfiable)/i.test(
+        error.message,
+      )
+    ) {
+      return rangeNotSatisfiable(rangeMetadata.size)
+    }
+    throw error
+  }
   if (object === null) {
     return textResponse('未找到 / Download not found', 404)
   }
 
   if (!object.body) {
+    const status = headPreconditionStatus(request, object) ?? 412
     return new Response(null, {
-      status: conditionalStatus(request),
+      status,
       headers: buildHeaders(object, key),
     })
   }
