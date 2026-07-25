@@ -4,9 +4,9 @@
  * The bundled catgo-server binary is 463 MB — too large to ship inside a
  * VS Code Marketplace .vsix (size limit ~100 MB). Instead the extension
  * ships without the binary and pulls the platform-appropriate sidecar
- * from the matching GitHub Release on first activate, stores it under
- * `context.globalStorageUri/bin/<filename>`, and reuses that on every
- * subsequent launch.
+ * and its SHA-256 metadata from the matching Cloudflare download path on
+ * first activate. It stores the verified pair under
+ * `context.globalStorageUri/bin/` and revalidates them before reuse.
  *
  * If a binary is found bundled inside the .vsix at `extensionPath/bin/`
  * (e.g. when packaged via `vsce package` locally for dev / sideload),
@@ -15,11 +15,14 @@
  */
 
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import * as path from 'node:path'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import * as vscode from 'vscode'
 
 import pkg_json from '../package.json' with { type: 'json' }
@@ -62,9 +65,30 @@ function downloaded_binary_path(context: vscode.ExtensionContext): string {
   return path.join(context.globalStorageUri.fsPath, 'bin', get_binary_name())
 }
 
-function release_url(version: string): string {
-  const repo = `Hello-QM/catgo-LRG`
-  return `https://github.com/${repo}/releases/download/v${version}/${get_binary_name()}`
+export function sidecar_asset_urls(
+  version: string,
+  asset_name: string,
+): { binary: string; checksum: string } {
+  const binary = `https://dl.catgo-ucsd.org/v${version}/${asset_name}`
+  return {
+    binary,
+    checksum: `${binary}.sha256`,
+  }
+}
+
+export function parse_sidecar_checksum(
+  contents: string,
+  expected_filename: string,
+): string {
+  const match = contents.match(
+    /^([0-9a-fA-F]{64}) {2}([^\r\n]+)(?:\r?\n)?$/,
+  )
+  if (!match || match[2] !== expected_filename) {
+    throw new Error(
+      `Malformed checksum metadata for ${expected_filename}`,
+    )
+  }
+  return match[1].toLowerCase()
 }
 
 async function file_exists(p: string): Promise<boolean> {
@@ -76,67 +100,181 @@ async function file_exists(p: string): Promise<boolean> {
   }
 }
 
-async function follow_redirect_download(
+async function request_response(
   url: string,
-  dest: string,
-  on_progress: (downloaded: number, total: number | null) => void,
-): Promise<void> {
-  await fsp.mkdir(path.dirname(dest), { recursive: true })
-  const tmp = `${dest}.partial`
-  const file = fs.createWriteStream(tmp)
+  redirects_remaining = 5,
+): Promise<http.IncomingMessage> {
+  return await new Promise((resolve, reject) => {
+    const lib = url.startsWith(`https:`) ? https : http
+    const request = lib.get(
+      url,
+      { headers: { 'User-Agent': `catgo-vscode/${pkg_json.version}` } },
+      (response) => {
+        const status = response.statusCode ?? 0
+        if (status >= 300 && status < 400 && response.headers.location) {
+          response.resume()
+          if (redirects_remaining <= 0) {
+            reject(new Error(`Too many redirects fetching ${url}`))
+            return
+          }
+          const next = new URL(response.headers.location, url).toString()
+          request_response(next, redirects_remaining - 1).then(resolve, reject)
+          return
+        }
+        if (status !== 200) {
+          response.resume()
+          reject(new Error(`HTTP ${status} fetching ${url}`))
+          return
+        }
+        resolve(response)
+      },
+    )
+    request.on(`error`, reject)
+  })
+}
 
-  const issue = (target: string, redirects_remaining: number): Promise<void> =>
-    new Promise((resolve, reject) => {
-      const lib = target.startsWith(`https:`) ? https : http
-      const req = lib.get(
-        target,
-        { headers: { 'User-Agent': `catgo-vscode/${pkg_json.version}` } },
-        (res) => {
-          const status = res.statusCode ?? 0
-          if (status >= 300 && status < 400 && res.headers.location) {
-            if (redirects_remaining <= 0) {
-              reject(new Error(`Too many redirects fetching ${url}`))
-              return
-            }
-            res.resume()
-            // GitHub Release downloads return relative location headers; resolve.
-            const next = new URL(res.headers.location, target).toString()
-            issue(next, redirects_remaining - 1).then(resolve, reject)
-            return
-          }
-          if (status !== 200) {
-            reject(new Error(`HTTP ${status} fetching ${url}`))
-            return
-          }
-          const total = res.headers[`content-length`]
-            ? Number.parseInt(res.headers[`content-length`] as string, 10)
-            : null
-          let downloaded = 0
-          res.on(`data`, (chunk: Buffer) => {
-            downloaded += chunk.length
-            on_progress(downloaded, total)
-          })
-          res.pipe(file)
-          file.on(`finish`, () => {
-            file.close((err) => err ? reject(err) : resolve())
-          })
-          file.on(`error`, reject)
-        },
-      )
-      req.on(`error`, reject)
-    })
+async function fetch_checksum_metadata(url: string): Promise<string> {
+  const response = await request_response(url)
+  const chunks: Buffer[] = []
+  let received = 0
+  for await (const chunk of response) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    received += buffer.length
+    if (received > 4096) {
+      response.destroy()
+      throw new Error(`Checksum metadata is unexpectedly large`)
+    }
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks).toString(`utf8`)
+}
+
+async function remove_files(paths: string[]): Promise<void> {
+  await Promise.all(paths.map(async (file_path) => {
+    try {
+      await fsp.unlink(file_path)
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !(`code` in error) ||
+        error.code !== `ENOENT`
+      ) {
+        throw error
+      }
+    }
+  }))
+}
+
+async function sha256_file(file_path: string): Promise<string> {
+  const hash = createHash(`sha256`)
+  for await (const chunk of fs.createReadStream(file_path)) {
+    hash.update(chunk)
+  }
+  return hash.digest(`hex`)
+}
+
+export async function stored_sidecar_is_verified(
+  destination: string,
+  asset_name: string,
+): Promise<boolean> {
+  const receipt = `${destination}.sha256`
+  const partials = [
+    `${destination}.partial`,
+    `${receipt}.partial`,
+  ]
+  try {
+    const checksum_contents = await fsp.readFile(receipt, `utf8`)
+    if (Buffer.byteLength(checksum_contents) > 4096) {
+      throw new Error(`Checksum metadata is unexpectedly large`)
+    }
+    const expected_digest = parse_sidecar_checksum(
+      checksum_contents,
+      asset_name,
+    )
+    const actual_digest = await sha256_file(destination)
+    if (actual_digest !== expected_digest) {
+      throw new Error(`Cached sidecar checksum mismatch`)
+    }
+    await remove_files(partials)
+    return true
+  } catch {
+    await remove_files([destination, receipt, ...partials])
+    return false
+  }
+}
+
+export async function download_verified_sidecar(options: {
+  binary_url: string
+  checksum_url: string
+  destination: string
+  asset_name: string
+  on_progress?: (downloaded: number, total: number | null) => void
+}): Promise<void> {
+  const {
+    binary_url,
+    checksum_url,
+    destination,
+    asset_name,
+    on_progress = () => {},
+  } = options
+  const partial = `${destination}.partial`
+  const receipt = `${destination}.sha256`
+  const receipt_partial = `${receipt}.partial`
+  const outputs = [destination, partial, receipt, receipt_partial]
+
+  await fsp.mkdir(path.dirname(destination), { recursive: true })
+  await remove_files(outputs)
 
   try {
-    await issue(url, 5)
-    await fsp.rename(tmp, dest)
-  } catch (err) {
-    try { await fsp.unlink(tmp) } catch { /* best-effort */ }
-    throw err
+    const checksum_contents = await fetch_checksum_metadata(checksum_url)
+    const expected_digest = parse_sidecar_checksum(
+      checksum_contents,
+      asset_name,
+    )
+    const response = await request_response(binary_url)
+    const content_length = response.headers[`content-length`]
+    const parsed_length = typeof content_length === `string`
+      ? Number.parseInt(content_length, 10)
+      : Number.NaN
+    const total = Number.isFinite(parsed_length) ? parsed_length : null
+    const hash = createHash(`sha256`)
+    let downloaded = 0
+    const meter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        downloaded += chunk.length
+        hash.update(chunk)
+        on_progress(downloaded, total)
+        callback(null, chunk)
+      },
+    })
+
+    await pipeline(
+      response,
+      meter,
+      fs.createWriteStream(partial, { flags: `wx` }),
+    )
+    const actual_digest = hash.digest(`hex`)
+    if (actual_digest !== expected_digest) {
+      throw new Error(
+        `SHA-256 mismatch for ${asset_name}: expected ${expected_digest}, got ${actual_digest}`,
+      )
+    }
+
+    await fsp.writeFile(
+      receipt_partial,
+      `${expected_digest}  ${asset_name}\n`,
+      { flag: `wx` },
+    )
+    await fsp.rename(partial, destination)
+    await fsp.rename(receipt_partial, receipt)
+  } catch (error) {
+    await remove_files(outputs)
+    throw error
   }
 }
 
 /**
- * Resolve a usable sidecar binary path, downloading from GitHub Release if
+ * Resolve a usable sidecar binary path, downloading from Cloudflare if
  * neither the bundled binary nor a previously downloaded copy is present.
  *
  * Returns the absolute path to the binary (with executable bit set on
@@ -167,7 +305,10 @@ export async function ensure_sidecar_binary(
   if (await file_exists(bundled)) return bundled
 
   const downloaded = downloaded_binary_path(context)
-  if (await file_exists(downloaded)) return downloaded
+  const asset_name = get_binary_name()
+  if (await stored_sidecar_is_verified(downloaded, asset_name)) {
+    return downloaded
+  }
 
   const unsupported = unsupported_platform_reason()
   if (unsupported) {
@@ -175,25 +316,31 @@ export async function ensure_sidecar_binary(
     throw new Error(unsupported)
   }
 
-  const url = release_url(pkg_json.version)
+  const urls = sidecar_asset_urls(pkg_json.version, asset_name)
   return await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `Downloading CatGo server sidecar (${get_binary_name()})`,
+      title: `Downloading CatGo server sidecar (${asset_name})`,
       cancellable: false,
     },
     async (progress) => {
       let last_pct = 0
       try {
-        await follow_redirect_download(url, downloaded, (got, total) => {
-          if (!total) return
-          const pct = Math.floor((got / total) * 100)
-          if (pct === last_pct) return
-          progress.report({
-            message: `${pct}% (${Math.floor(got / 1024 / 1024)} / ${Math.floor(total / 1024 / 1024)} MB)`,
-            increment: pct - last_pct,
-          })
-          last_pct = pct
+        await download_verified_sidecar({
+          binary_url: urls.binary,
+          checksum_url: urls.checksum,
+          destination: downloaded,
+          asset_name,
+          on_progress: (got, total) => {
+            if (!total) return
+            const pct = Math.floor((got / total) * 100)
+            if (pct === last_pct) return
+            progress.report({
+              message: `${pct}% (${Math.floor(got / 1024 / 1024)} / ${Math.floor(total / 1024 / 1024)} MB)`,
+              increment: pct - last_pct,
+            })
+            last_pct = pct
+          },
         })
         if (process.platform !== `win32`) {
           await fsp.chmod(downloaded, 0o755)
@@ -202,8 +349,8 @@ export async function ensure_sidecar_binary(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         vscode.window.showErrorMessage(
-          `Failed to download CatGo server sidecar from ${url}: ${msg}. ` +
-          `Manually place the binary at ${downloaded} and reload.`,
+          `Failed to download and verify CatGo server sidecar from ${urls.binary}: ${msg}. ` +
+          `For an offline install, set catgo.server.sidecarPath to a trusted local binary.`,
         )
         throw err
       }
