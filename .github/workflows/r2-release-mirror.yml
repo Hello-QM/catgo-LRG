@@ -25,6 +25,10 @@
 # `stt-accel-v*` release series.
 
 name: Mirror release to R2
+run-name: >-
+  ${{ inputs.promote &&
+      format('R2 promote {0} [{1}]', inputs.tag, inputs.promotion_id) ||
+      format('R2 mirror {0}', inputs.tag || github.ref_name) }}
 
 on:
   release:
@@ -43,10 +47,30 @@ on:
         description: 'Cleared NCL release tag to mirror (e.g. v1.4.6); empty = latest release'
         required: false
         default: ''
+      promote:
+        description: 'Promote this fully verified draft to the public Cloudflare root'
+        type: boolean
+        required: false
+        default: false
+      expected_source_commit:
+        description: 'Finalizer-bound target tag commit (required for promotion)'
+        type: string
+        required: false
+        default: ''
+      expected_asset_snapshot:
+        description: 'Finalizer-bound draft asset snapshot (required for promotion)'
+        type: string
+        required: false
+        default: ''
+      promotion_id:
+        description: 'Unique finalizer correlation id (required for promotion)'
+        type: string
+        required: false
+        default: ''
 
 concurrency:
   group: r2-release-mirror
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -58,13 +82,6 @@ env:
   # Security boundary: official updater/download metadata must never be
   # redirected through a mutable repository variable.
   R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
-  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-  AWS_DEFAULT_REGION: auto
-  AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-  # aws-cli >= 2.23 sends CRC checksums by default, which R2's S3 API rejects.
-  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
 jobs:
   mirror:
@@ -78,8 +95,17 @@ jobs:
     steps:
       - name: Check R2 credentials configured
         id: creds
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          PROMOTE_MODE: ${{ inputs.promote }}
         run: |
+          set -euo pipefail
           if [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+            if [ "$PROMOTE_MODE" = "true" ]; then
+              echo "::error::R2 credentials are required for release promotion."
+              exit 1
+            fi
             echo "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY secrets not set — skipping mirror." >> "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
@@ -99,6 +125,10 @@ jobs:
         if: steps.creds.outputs.configured == 'true'
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          PROMOTE_MODE: ${{ inputs.promote }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
           RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
           REQUESTED_TAG: ${{ inputs.tag }}
           REPOSITORY: ${{ github.repository }}
@@ -113,12 +143,25 @@ jobs:
               sort -V |
               tail -n 1
           )
-          if [ -z "$latest_app_tag" ]; then
+          if [ -z "$latest_app_tag" ] &&
+             ! { [ "$EVENT_NAME" = "workflow_dispatch" ] &&
+                 [ "$PROMOTE_MODE" = "true" ] &&
+                 [ -n "$REQUESTED_TAG" ]; }; then
             echo "No published CatGo app release found." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          if [ "$EVENT_NAME" = "release" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] &&
+             [ "$PROMOTE_MODE" = "true" ]; then
+            if [ -z "$REQUESTED_TAG" ] ||
+               ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+               ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]] ||
+               ! [[ "$PROMOTION_ID" =~ ^[A-Za-z0-9._-]{1,100}$ ]]; then
+              echo "::error::Promotion requires tag, source commit, asset snapshot, and promotion id."
+              exit 1
+            fi
+            tag="$REQUESTED_TAG"
+          elif [ "$EVENT_NAME" = "release" ]; then
             tag="$RELEASE_EVENT_TAG"
           elif [ "$EVENT_NAME" = "workflow_run" ]; then
             tag="$latest_app_tag"
@@ -136,6 +179,39 @@ jobs:
             echo "latest_app_tag=$latest_app_tag"
           } >> "$GITHUB_OUTPUT"
           echo "Mirroring release: $tag"
+
+      - name: Confirm requested promotion identity
+        if: steps.creds.outputs.configured == 'true' && inputs.promote
+        env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          actual_source_commit=$(git rev-parse "$tag^{commit}")
+          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Promotion tag does not match the finalizer source commit."
+            exit 1
+          fi
+          release_json=$(mktemp)
+          gh api "repos/$REPOSITORY/releases/tags/$tag" > "$release_json"
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Promotion target must remain a draft release."
+            exit 1
+          fi
+          asset_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$asset_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Promotion assets do not match the finalizer snapshot."
+            exit 1
+          fi
 
       - name: Wait for asset list to stabilize
         # Build workflows attach assets asynchronously after the release is
@@ -203,14 +279,21 @@ jobs:
       - name: Validate release assets against target tag
         if: steps.creds.outputs.configured == 'true'
         env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="$MIRROR_TAG"
           git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
           target_source=$(mktemp -d)
-          trap 'rm -rf "$target_source"' EXIT
-          git archive "$tag" | tar -x -C "$target_source"
+          rmdir "$target_source"
+          cleanup() {
+            git worktree remove --force "$target_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_source" "$tag^{commit}"
           # Historical pre-NCL redistribution is disabled; manual dispatch
           # provides no exemption. Eligible NCL tags must still clear their
           # own rights ledger before any further validation or publication.
@@ -219,15 +302,43 @@ jobs:
             --root "$target_source" \
             --tag "$tag" \
             --require-tag
+          node scripts/verify-release-source.mjs \
+            --root "$target_source" \
+            --tag "$tag" \
+            --require-tag
           node scripts/verify-mirrored-release.mjs \
             --tag "$tag" \
             --assets-dir dist \
             --source-root "$target_source"
           source_commit=$(git rev-parse "$tag^{commit}")
+          if [ -z "$MACOS_SIGNING_IDENTITY" ] ||
+             [ -z "$APPLE_DEVELOPMENT_TEAM" ]; then
+            echo "::error::macOS signing identity and team are required."
+            exit 1
+          fi
+          node scripts/verify-macos-signing-attestation.mjs \
+            --tag "$tag" \
+            --source-commit "$source_commit" \
+            --assets-dir dist \
+            --expected-signer "$MACOS_SIGNING_IDENTITY" \
+            --expected-team "$APPLE_DEVELOPMENT_TEAM"
           node scripts/verify-ios-testflight-attestation.mjs \
             --tag "$tag" \
             --source-commit "$source_commit" \
             --assets-dir dist
+          attestation="dist/catgo-ios-testflight-${tag}.json"
+          run_id=$(jq -er '.githubRunId | select(type == "string" and test("^[1-9][0-9]*$"))' "$attestation")
+          run_json=$(mktemp)
+          jobs_json=$(mktemp)
+          gh api "repos/$REPOSITORY/actions/runs/$run_id" > "$run_json"
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+            > "$jobs_json"
+          node scripts/verify-ios-testflight-run.mjs \
+            --attestation "$attestation" \
+            --run "$run_json" \
+            --jobs "$jobs_json" \
+            --source-commit "$source_commit"
 
       - name: Generate index.html download page
         if: steps.creds.outputs.configured == 'true'
@@ -241,16 +352,56 @@ jobs:
             --base-url "$R2_PUBLIC_BASE_URL" \
             --output index.html
 
-      - name: Sync to R2
-        id: sync
-        if: steps.creds.outputs.configured == 'true'
+      - name: Re-confirm promotion identity before R2 mutation
+        if: steps.creds.outputs.configured == 'true' && inputs.promote
         env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
           MIRROR_TAG: ${{ steps.tag.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="$MIRROR_TAG"
-          aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          actual_source_commit=$(git rev-parse "$tag^{commit}")
+          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Promotion tag moved during validation."
+            exit 1
+          fi
+          release_json=$(mktemp)
+          gh api "repos/$REPOSITORY/releases/tags/$tag" > "$release_json"
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Promotion target stopped being a draft."
+            exit 1
+          fi
+          asset_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$asset_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Promotion assets changed during validation."
+            exit 1
+          fi
+
+      - name: Sync to R2
+        id: sync
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          PROMOTE_MODE: ${{ inputs.promote }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          aws s3 sync dist/ "s3://$R2_BUCKET/$tag/" --delete
 
           latest_app_tag=$(
             gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
@@ -261,15 +412,54 @@ jobs:
               sort -V |
               tail -n 1
           )
-          if [ "$tag" = "$latest_app_tag" ]; then
-            aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json" \
-              --content-type application/json --cache-control 'public, max-age=300'
+          if [ "$PROMOTE_MODE" = "true" ] || [ "$tag" = "$latest_app_tag" ]; then
             aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
               --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'
+            # Commit marker: clients only observe the new root release after
+            # every versioned asset and the matching index are available.
+            aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json" \
+              --content-type application/json --cache-control 'public, max-age=300'
             echo "root_published=true" >> "$GITHUB_OUTPUT"
           else
             echo "Backfilled $tag; latest app release is $latest_app_tag, so root metadata was not changed."
             echo "root_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify promoted Cloudflare endpoints
+        if: steps.creds.outputs.configured == 'true' && steps.sync.outputs.root_published == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          PROMOTION_ID: ${{ inputs.promotion_id || github.run_id }}
+        run: |
+          set -euo pipefail
+          manifest=$(mktemp)
+          index_page=$(mktemp)
+          verified=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                "$R2_PUBLIC_BASE_URL/latest.json?promotion=$PROMOTION_ID" \
+                --output "$manifest" &&
+               jq -e \
+                 --arg version "${MIRROR_TAG#v}" \
+                 --arg prefix "$R2_PUBLIC_BASE_URL/$MIRROR_TAG/" \
+                 '.version == $version and
+                  (.platforms | type == "object") and
+                  ([.platforms[].url | startswith($prefix)] | all)' \
+                 "$manifest" > /dev/null &&
+               curl --fail --silent --show-error \
+                 --header 'Cache-Control: no-cache' \
+                 "$R2_PUBLIC_BASE_URL/index.html?promotion=$PROMOTION_ID" \
+                 --output "$index_page" &&
+               grep -Fq "$MIRROR_TAG" "$index_page"; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$verified" != "true" ]; then
+            echo "::error::Cloudflare root endpoints do not expose $MIRROR_TAG."
+            exit 1
           fi
 
       - name: Prune older app artifacts (retain versioned sidecars)
@@ -279,6 +469,12 @@ jobs:
         # catgo-server binary and SHA-256 receipt.
         if: steps.creds.outputs.configured == 'true'
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           MIRROR_TAG: ${{ steps.tag.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         run: |

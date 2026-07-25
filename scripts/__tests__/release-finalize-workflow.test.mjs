@@ -8,86 +8,164 @@ import { load as loadYaml } from 'js-yaml'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const PATH = resolve(ROOT, '.github/workflows/finalize-release.yml')
 
-test('finalization checks the exact tag with minimum release-write permission', () => {
+function workflow() {
   assert.equal(existsSync(PATH), true, 'finalize workflow must exist')
-  const workflow = loadYaml(readFileSync(PATH, 'utf8'))
-  const validate = workflow.jobs.validate
-  const publish = workflow.jobs.publish
+  return loadYaml(readFileSync(PATH, 'utf8'))
+}
 
-  assert.deepEqual(workflow.permissions, { contents: 'read' })
-  assert.deepEqual(validate.permissions, { contents: 'read' })
-  assert.deepEqual(publish.permissions, { contents: 'write' })
-  assert.equal(publish.needs, 'validate')
-  assert.equal(validate.env.RELEASE_TAG, '${{ inputs.tag }}')
-  assert.equal(publish.env.RELEASE_TAG, '${{ inputs.tag }}')
+function stepNamed(job, name) {
+  return job.steps.find((step) => step.name === name)
+}
 
+test('executes only trusted default-branch verifiers against a detached target worktree', () => {
+  const current = workflow()
+  const validate = current.jobs.validate
   const checkout = validate.steps.find((step) =>
     String(step.uses ?? '').startsWith('actions/checkout@'),
   )
-  assert.equal(checkout.with.ref, '${{ inputs.tag }}')
+  assert.equal(
+    checkout.with.ref,
+    '${{ github.event.repository.default_branch }}',
+  )
   assert.equal(checkout.with['fetch-depth'], 0)
+
+  const prepare = stepNamed(validate, 'Prepare detached target release source')
+  assert.match(prepare.run, /git fetch --force origin "refs\/tags\/\$tag:/)
+  assert.match(prepare.run, /git worktree add --detach "\$target_source"/)
+  assert.match(prepare.run, /TARGET_SOURCE=/)
+  assert.match(prepare.run, /RELEASE_SOURCE_COMMIT=/)
+
+  const validationRun = validate.steps.map((step) => step.run ?? '').join('\n')
+  assert.match(
+    validationRun,
+    /node scripts\/verify-release-rights\.mjs --root "\$TARGET_SOURCE"/,
+  )
+  assert.match(
+    validationRun,
+    /node scripts\/verify-release-version\.mjs[\s\S]*--root "\$TARGET_SOURCE"/,
+  )
+  assert.match(
+    validationRun,
+    /node scripts\/verify-release-source\.mjs[\s\S]*--root "\$TARGET_SOURCE"/,
+  )
+  assert.match(
+    validationRun,
+    /node scripts\/verify-mirrored-release\.mjs[\s\S]*--source-root "\$TARGET_SOURCE"/,
+  )
+  assert.doesNotMatch(
+    validationRun,
+    /(?:^|\s)node "\$TARGET_SOURCE\/scripts\//,
+  )
 })
 
-test('publishes only after source, draft, complete asset, and iOS gates pass in order', () => {
-  const source = readFileSync(PATH, 'utf8')
-  const workflow = loadYaml(source)
-  const validationSteps = workflow.jobs.validate.steps
-  const publicationSteps = workflow.jobs.publish.steps
-  const index = (name) =>
-    validationSteps.findIndex((step) => step.name === name)
+test('proves the TestFlight attestation came from the exact successful iOS workflow run', () => {
+  const validate = workflow().jobs.validate
+  const attestation = stepNamed(validate, 'Verify TestFlight acceptance')
+  const runProof = stepNamed(validate, 'Verify TestFlight workflow provenance')
+  const attestationIndex = validate.steps.indexOf(attestation)
+  const proofIndex = validate.steps.indexOf(runProof)
 
-  const ordered = [
-    'Verify release rights',
-    'Verify release version',
-    'Verify release source',
-    'Confirm release is a draft',
-    'Download complete draft assets',
-    'Prepare Cloudflare validation manifest',
-    'Verify complete mirrored release',
-    'Verify TestFlight acceptance',
-  ]
-  for (let position = 0; position < ordered.length; position += 1) {
-    assert.notEqual(index(ordered[position]), -1, `${ordered[position]} exists`)
-    if (position > 0) {
-      assert.ok(
-        index(ordered[position]) > index(ordered[position - 1]),
-        `${ordered[position]} follows ${ordered[position - 1]}`,
-      )
-    }
-  }
+  assert.ok(attestationIndex >= 0)
+  assert.ok(proofIndex > attestationIndex)
+  assert.match(runProof.run, /catgo-ios-testflight-\$\{RELEASE_TAG\}\.json/)
+  assert.match(
+    runProof.run,
+    /gh api "repos\/\$REPOSITORY\/actions\/runs\/\$run_id"/,
+  )
+  assert.match(
+    runProof.run,
+    /gh api --paginate --slurp[\s\S]*"repos\/\$REPOSITORY\/actions\/runs\/\$run_id\/jobs\?per_page=100"/,
+  )
+  assert.match(
+    runProof.run,
+    /verify-ios-testflight-run\.mjs[\s\S]*--attestation[\s\S]*--run[\s\S]*--jobs[\s\S]*--source-commit/,
+  )
+})
 
-  const allRun = [...validationSteps, ...publicationSteps]
-    .map((step) => step.run ?? '')
-    .join('\n')
-  assert.doesNotMatch(allRun, /\$\{\{\s*inputs\.tag\s*\}\}/)
-  assert.match(allRun, /gh release download "\$RELEASE_TAG"/)
-  assert.match(
-    validationSteps[index('Prepare Cloudflare validation manifest')].env
-      .R2_PUBLIC_BASE_URL,
-    /^https:\/\/dl\.catgo-ucsd\.org$/,
+test('promotes and verifies Cloudflare before granting GitHub release visibility', () => {
+  const current = workflow()
+  const promote = current.jobs['promote-cloudflare']
+  const publish = current.jobs.publish
+
+  assert.deepEqual(promote.needs, ['validate'])
+  assert.deepEqual(promote.permissions, {
+    actions: 'write',
+    contents: 'read',
+  })
+  assert.deepEqual(publish.needs, ['validate', 'promote-cloudflare'])
+
+  const promotion = stepNamed(
+    promote,
+    'Dispatch and verify Cloudflare release promotion',
   )
   assert.match(
-    validationSteps[index('Verify complete mirrored release')].run,
-    /verify-mirrored-release\.mjs[\s\S]*--tag "\$RELEASE_TAG"[\s\S]*--assets-dir "\$VALIDATION_ASSETS_DIR"[\s\S]*--source-root "\$GITHUB_WORKSPACE"/,
+    promotion.run,
+    /gh workflow run r2-release-mirror\.yml[\s\S]*-f "tag=\$RELEASE_TAG"[\s\S]*-f "promote=true"/,
+  )
+  assert.match(promotion.run, /expected_source_commit=/)
+  assert.match(promotion.run, /expected_asset_snapshot=/)
+  assert.match(promotion.run, /gh run view "\$promotion_run_id"/)
+  assert.match(promotion.run, /conclusion.*success/)
+  assert.match(
+    promotion.run,
+    /curl[\s\S]*https:\/\/dl\.catgo-ucsd\.org\/latest\.json/,
   )
   assert.match(
-    validationSteps[index('Verify TestFlight acceptance')].run,
-    /verify-ios-testflight-attestation\.mjs[\s\S]*--tag "\$RELEASE_TAG"[\s\S]*--source-commit "\$RELEASE_SOURCE_COMMIT"[\s\S]*--assets-dir "\$VALIDATION_ASSETS_DIR"/,
+    promotion.run,
+    /curl[\s\S]*https:\/\/dl\.catgo-ucsd\.org\/index\.html/,
   )
-  assert.deepEqual(
-    publicationSteps.map((step) => step.name),
-    [
-      'Checkout validated release tag',
-      'Re-confirm release is a draft',
-      'Publish verified release',
-    ],
+})
+
+test('preflight, publication, and postflight form one rollback-protected step', () => {
+  const current = workflow()
+  const publish = current.jobs.publish
+  assert.deepEqual(publish.permissions, {
+    actions: 'read',
+    contents: 'write',
+  })
+
+  const mutationSteps = publish.steps.filter((step) =>
+    /gh release edit/.test(step.run ?? ''),
   )
-  assert.equal(publicationSteps[0].with.ref, '${{ inputs.tag }}')
-  assert.equal(publicationSteps[0].with['fetch-depth'], 0)
-  assert.match(publicationSteps[1].run, /git rev-parse HEAD/)
-  assert.match(publicationSteps[1].run, /EXPECTED_SOURCE_COMMIT/)
+  assert.equal(mutationSteps.length, 1)
+  const mutation = mutationSteps[0]
+  assert.equal(
+    mutation.name,
+    'Publish with atomic identity recheck and rollback',
+  )
+  assert.match(mutation.run, /trap rollback ERR/)
   assert.match(
-    publicationSteps[2].run,
+    mutation.run,
     /gh release edit "\$RELEASE_TAG"[\s\S]*--draft=false[\s\S]*--latest/,
   )
+  assert.match(
+    mutation.run,
+    /gh release edit "\$RELEASE_TAG"[\s\S]*--draft=true/,
+  )
+  const firstSnapshot = mutation.run.indexOf('actual_snapshot=')
+  const publishIndex = mutation.run.indexOf('--draft=false')
+  const secondSnapshot = mutation.run.indexOf(
+    'post_snapshot=',
+    publishIndex,
+  )
+  assert.ok(firstSnapshot >= 0 && firstSnapshot < publishIndex)
+  assert.ok(secondSnapshot > publishIndex)
+  assert.match(mutation.run, /post_draft.*false/)
+  assert.match(mutation.run, /post_source_commit/)
+})
+
+test('keeps release write permission out of validation and Cloudflare promotion', () => {
+  const current = workflow()
+  assert.deepEqual(current.permissions, {
+    actions: 'read',
+    contents: 'read',
+  })
+  assert.deepEqual(current.jobs.validate.permissions, {
+    actions: 'read',
+    contents: 'read',
+  })
+  assert.deepEqual(current.jobs['promote-cloudflare'].permissions, {
+    actions: 'write',
+    contents: 'read',
+  })
 })

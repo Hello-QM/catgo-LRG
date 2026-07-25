@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -21,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
     outputs:
       asset_snapshot: ${{ steps.draft.outputs.asset_snapshot }}
@@ -30,41 +32,56 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Checkout exact release tag
+      - name: Checkout trusted default branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
-      - name: Verify release rights
-        run: node scripts/verify-release-rights.mjs
-
-      - name: Verify release version
-        env:
-          RELEASE_VERSION_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION_REQUIRE_TAG: 'true'
-        run: node scripts/verify-release-version.mjs
-
-      - name: Verify release source
+      - name: Prepare detached target release source
         id: source
-        env:
-          RELEASE_SOURCE_TAG: ${{ inputs.tag }}
-          RELEASE_SOURCE_REQUIRE_TAG: 'true'
         run: |
           set -euo pipefail
-          node scripts/verify-release-source.mjs
-          source_commit=$(git rev-parse HEAD)
-          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+          tag="$RELEASE_TAG"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid CatGo release tag: $tag"
+            exit 1
+          fi
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          target_source="$RUNNER_TEMP/catgo-release-target"
+          if [ -e "$target_source" ]; then
+            echo "::error::Target source path already exists: $target_source"
+            exit 1
+          fi
+          git worktree add --detach "$target_source" "$tag^{commit}"
+          source_commit=$(git -C "$target_source" rev-parse HEAD)
+          echo "TARGET_SOURCE=$target_source" >> "$GITHUB_ENV"
           echo "RELEASE_SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release rights
+        run: >-
+          node scripts/verify-release-rights.mjs
+          --root "$TARGET_SOURCE"
+
+      - name: Verify release version
+        run: >-
+          node scripts/verify-release-version.mjs
+          --root "$TARGET_SOURCE"
+          --tag "$RELEASE_TAG"
+          --require-tag
+
+      - name: Verify release source
+        run: >-
+          node scripts/verify-release-source.mjs
+          --root "$TARGET_SOURCE"
+          --tag "$RELEASE_TAG"
+          --require-tag
 
       - name: Confirm release is a draft
         id: draft
         run: |
           set -euo pipefail
-          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid CatGo release tag: $RELEASE_TAG"
-            exit 1
-          fi
           release_json=$(mktemp)
           trap 'rm -f "$release_json"' EXIT
           gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
@@ -124,7 +141,25 @@ jobs:
           node scripts/verify-mirrored-release.mjs \
             --tag "$RELEASE_TAG" \
             --assets-dir "$VALIDATION_ASSETS_DIR" \
-            --source-root "$GITHUB_WORKSPACE"
+            --source-root "$TARGET_SOURCE"
+
+      - name: Verify macOS signing attestation
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MACOS_SIGNING_IDENTITY" ] ||
+             [ -z "$APPLE_DEVELOPMENT_TEAM" ]; then
+            echo "::error::macOS signing identity and team are required."
+            exit 1
+          fi
+          node scripts/verify-macos-signing-attestation.mjs \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --assets-dir "$VALIDATION_ASSETS_DIR" \
+            --expected-signer "$MACOS_SIGNING_IDENTITY" \
+            --expected-team "$APPLE_DEVELOPMENT_TEAM"
 
       - name: Verify TestFlight acceptance
         run: |
@@ -133,61 +168,205 @@ jobs:
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --assets-dir "$VALIDATION_ASSETS_DIR"
 
+      - name: Verify TestFlight workflow provenance
+        run: |
+          set -euo pipefail
+          attestation="$VALIDATION_ASSETS_DIR/catgo-ios-testflight-${RELEASE_TAG}.json"
+          run_id=$(jq -er '.githubRunId | select(type == "string" and test("^[1-9][0-9]*$"))' "$attestation")
+          run_json="$RUNNER_TEMP/ios-run.json"
+          jobs_json="$RUNNER_TEMP/ios-jobs.json"
+          gh api "repos/$REPOSITORY/actions/runs/$run_id" > "$run_json"
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+            > "$jobs_json"
+          node scripts/verify-ios-testflight-run.mjs \
+            --attestation "$attestation" \
+            --run "$run_json" \
+            --jobs "$jobs_json" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+
+  promote-cloudflare:
+    name: Promote verified release to Cloudflare
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
+      EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Dispatch and verify Cloudflare release promotion
+        run: |
+          set -euo pipefail
+          promotion_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          promotion_title="R2 promote $RELEASE_TAG [$promotion_id]"
+          gh workflow run r2-release-mirror.yml \
+            --repo "$REPOSITORY" \
+            --ref "$DEFAULT_BRANCH" \
+            -f "tag=$RELEASE_TAG" \
+            -f "promote=true" \
+            -f "expected_source_commit=$EXPECTED_SOURCE_COMMIT" \
+            -f "expected_asset_snapshot=$EXPECTED_ASSET_SNAPSHOT" \
+            -f "promotion_id=$promotion_id"
+
+          promotion_run_id=
+          for attempt in $(seq 1 60); do
+            promotion_run_id=$(
+              gh run list \
+                --repo "$REPOSITORY" \
+                --workflow r2-release-mirror.yml \
+                --event workflow_dispatch \
+                --limit 100 \
+                --json databaseId,displayTitle \
+                --jq ".[] | select(.displayTitle == \"$promotion_title\") | .databaseId" |
+                head -n 1
+            )
+            [ -n "$promotion_run_id" ] && break
+            sleep 2
+          done
+          if [ -z "$promotion_run_id" ]; then
+            echo "::error::Could not resolve the dispatched R2 promotion run."
+            exit 1
+          fi
+
+          gh run watch "$promotion_run_id" \
+            --repo "$REPOSITORY" \
+            --exit-status \
+            --interval 15
+          promotion_result=$(mktemp)
+          gh run view "$promotion_run_id" \
+            --repo "$REPOSITORY" \
+            --json status,conclusion,headBranch \
+            > "$promotion_result"
+          jq -e \
+            --arg branch "$DEFAULT_BRANCH" \
+            '.status == "completed" and
+             .conclusion == "success" and
+             .headBranch == $branch' \
+            "$promotion_result" > /dev/null
+
+          manifest=$(mktemp)
+          index_page=$(mktemp)
+          promoted=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                "https://dl.catgo-ucsd.org/latest.json?promotion=$promotion_id" \
+                --output "$manifest" &&
+               jq -e \
+                 --arg version "${RELEASE_TAG#v}" \
+                 --arg prefix "https://dl.catgo-ucsd.org/$RELEASE_TAG/" \
+                 '.version == $version and
+                  (.platforms | type == "object") and
+                  ([.platforms[].url | startswith($prefix)] | all)' \
+                 "$manifest" > /dev/null &&
+               curl --fail --silent --show-error \
+                 --header 'Cache-Control: no-cache' \
+                 "https://dl.catgo-ucsd.org/index.html?promotion=$promotion_id" \
+                 --output "$index_page" &&
+               grep -Fq "$RELEASE_TAG" "$index_page"; then
+              promoted=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$promoted" != "true" ]; then
+            echo "::error::Cloudflare endpoints did not expose $RELEASE_TAG."
+            exit 1
+          fi
+
   publish:
     name: Publish verified release
-    needs: validate
+    needs: [validate, promote-cloudflare]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_TAG: ${{ inputs.tag }}
-      REPOSITORY: ${{ github.repository }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
       EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Checkout validated release tag
+      - name: Checkout trusted default branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
-      - name: Re-confirm release is a draft
+      - name: Publish with atomic identity recheck and rollback
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          published=false
+          rollback() {
+            status=$?
+            trap - ERR
+            set +e
+            if [ "$published" = "true" ]; then
+              echo "::warning::Publication postflight failed; restoring draft state."
+              if ! gh release edit "$RELEASE_TAG" \
+                  --repo "$REPOSITORY" \
+                  --draft=true; then
+                echo "::error::Failed to restore $RELEASE_TAG to draft."
+              fi
+            fi
+            exit "$status"
+          }
+          fail() {
+            echo "::error::$1"
+            return 1
+          }
+          snapshot() {
+            jq -c \
+              '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' |
+              sha256sum |
+              cut -d ' ' -f 1
+          }
+          trap rollback ERR
+
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
              ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
              ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::Invalid validated release identity."
-            exit 1
+            fail "Invalid validated release identity."
           fi
-          actual_source_commit=$(git rev-parse HEAD)
-          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
-            echo "::error::Release tag moved after validation; refusing publication."
-            exit 1
-          fi
-          release_json=$(mktemp)
-          trap 'rm -f "$release_json"' EXIT
-          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
-          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
-            echo "::error::Release $RELEASE_TAG is no longer a draft."
-            exit 1
-          fi
-          actual_snapshot=$(
-            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
-              "$release_json" |
-              sha256sum |
-              cut -d ' ' -f 1
-          )
-          if [ "$actual_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
-            echo "::error::Draft assets changed after validation; refusing publication."
-            exit 1
-          fi
+          git fetch --force origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          actual_source_commit=$(git rev-parse "$RELEASE_TAG^{commit}")
+          [ "$actual_source_commit" = "$EXPECTED_SOURCE_COMMIT" ] ||
+            fail "Release tag moved after validation."
 
-      - name: Publish verified release
-        run: |
-          set -euo pipefail
+          release_json=$(mktemp)
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+          [ "$(jq -r '.draft' "$release_json")" = "true" ] ||
+            fail "Release is no longer a draft."
+          actual_snapshot=$(snapshot < "$release_json")
+          [ "$actual_snapshot" = "$EXPECTED_ASSET_SNAPSHOT" ] ||
+            fail "Draft assets changed after validation."
+
           gh release edit "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
             --draft=false \
             --latest
+          published=true
+
+          post_json=$(mktemp)
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$post_json"
+          post_draft=$(jq -r '.draft' "$post_json")
+          [ "$post_draft" = "false" ] ||
+            fail "Published release remained a draft."
+          post_snapshot=$(snapshot < "$post_json")
+          [ "$post_snapshot" = "$EXPECTED_ASSET_SNAPSHOT" ] ||
+            fail "Release assets changed during publication."
+          git fetch --force origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          post_source_commit=$(git rev-parse "$RELEASE_TAG^{commit}")
+          [ "$post_source_commit" = "$EXPECTED_SOURCE_COMMIT" ] ||
+            fail "Release tag moved during publication."
+          trap - ERR

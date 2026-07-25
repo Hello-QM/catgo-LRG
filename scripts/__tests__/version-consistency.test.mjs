@@ -34,8 +34,9 @@ const WORKFLOW_INVENTORY = {
     classification: 'root-versioned-publisher',
     gate: {
       step: 'Verify release version',
-      tagSource: /inputs\.tag/,
-      requireSource: /true/,
+      tagSource: /--tag "\$RELEASE_TAG"/,
+      requireSource: /--require-tag/,
+      cli: true,
     },
   },
   'hpc-bundle.yml': {

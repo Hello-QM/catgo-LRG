@@ -72,7 +72,10 @@ test('rewrites updater metadata before validating target-tag release material', 
     WORKFLOW.indexOf('- name: Generate index.html download page'),
   )
   assert.match(validationBlock, /refs\/tags\/\$tag:refs\/tags\/\$tag/)
-  assert.match(validationBlock, /git archive "\$tag"/)
+  assert.match(
+    validationBlock,
+    /git worktree add --detach "\$target_source" "\$tag\^\{commit\}"/,
+  )
   const rightsGate = validationBlock.indexOf(
     'node scripts/verify-release-rights.mjs',
   )
@@ -109,9 +112,13 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   const prune = WORKFLOW.indexOf('- name: Prune older app artifacts')
 
   assert.ok(syncAssets >= 0, 'release assets are uploaded')
-  assert.ok(uploadManifest > syncAssets, 'latest.json uploads after release assets')
-  assert.ok(uploadIndex > uploadManifest, 'index.html uploads after latest.json')
-  assert.ok(prune > uploadIndex, 'pruning starts only after root metadata uploads')
+  assert.match(
+    WORKFLOW.slice(syncAssets, uploadIndex),
+    /aws s3 sync dist\/ "s3:\/\/\$R2_BUCKET\/\$tag\/" --delete/,
+  )
+  assert.ok(uploadIndex > syncAssets, 'index.html uploads after release assets')
+  assert.ok(uploadManifest > uploadIndex, 'latest.json is the root commit marker')
+  assert.ok(prune > uploadManifest, 'pruning starts only after root metadata uploads')
   assert.doesNotMatch(WORKFLOW, /latest\.mirror\.json/)
 })
 
@@ -162,6 +169,6 @@ test('manual old-tag backfills cannot replace public root metadata', () => {
   assert.match(syncBlock, /latest_app_tag=/)
   assert.match(
     syncBlock,
-    /if \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp dist\/latest\.json[\s\S]*aws s3 cp index\.html[\s\S]*fi/,
+    /if \[ "\$PROMOTE_MODE" = "true" \] \|\| \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp index\.html[\s\S]*aws s3 cp dist\/latest\.json[\s\S]*fi/,
   )
 })
