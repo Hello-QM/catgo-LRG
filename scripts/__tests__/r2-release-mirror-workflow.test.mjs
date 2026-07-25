@@ -86,13 +86,30 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   const syncAssets = WORKFLOW.indexOf('aws s3 sync dist/')
   const uploadManifest = WORKFLOW.indexOf('aws s3 cp dist/latest.json')
   const uploadIndex = WORKFLOW.indexOf('aws s3 cp index.html')
-  const prune = WORKFLOW.indexOf('- name: Prune older releases')
+  const prune = WORKFLOW.indexOf('- name: Prune older app artifacts')
 
   assert.ok(syncAssets >= 0, 'release assets are uploaded')
   assert.ok(uploadManifest > syncAssets, 'latest.json uploads after release assets')
   assert.ok(uploadIndex > uploadManifest, 'index.html uploads after latest.json')
   assert.ok(prune > uploadIndex, 'pruning starts only after root metadata uploads')
   assert.doesNotMatch(WORKFLOW, /latest\.mirror\.json/)
+})
+
+test('pruning old app releases retains every version-coupled sidecar', () => {
+  const pruneStart = WORKFLOW.indexOf('- name: Prune older app artifacts')
+  const summaryStart = WORKFLOW.indexOf('- name: Summary')
+  assert.ok(pruneStart >= 0, 'old app artifact pruning step exists')
+  const pruneBlock = WORKFLOW.slice(pruneStart, summaryStart)
+
+  assert.match(
+    pruneBlock,
+    /aws s3 rm "s3:\/\/\$R2_BUCKET\/\$prefix" --recursive[\s\S]*--exclude ['"]catgo-server-\*['"]/,
+  )
+  assert.doesNotMatch(
+    pruneBlock,
+    /aws s3 rm "s3:\/\/\$R2_BUCKET\/\$prefix" --recursive\s*$/,
+  )
+  assert.match(pruneBlock, /retain|preserv/i)
 })
 
 test('keeps triggers but resolves only validated CatGo app releases', () => {
@@ -119,7 +136,7 @@ test('never interpolates event or output tags into secrets-bearing shell', () =>
 
 test('manual old-tag backfills cannot replace public root metadata', () => {
   const syncStart = WORKFLOW.indexOf('- name: Sync to R2')
-  const pruneStart = WORKFLOW.indexOf('- name: Prune older releases')
+  const pruneStart = WORKFLOW.indexOf('- name: Prune older app artifacts')
   const syncBlock = WORKFLOW.slice(syncStart, pruneStart)
 
   assert.match(syncBlock, /latest_app_tag=/)

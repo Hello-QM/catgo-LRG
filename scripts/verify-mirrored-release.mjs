@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
+  createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -23,6 +25,11 @@ const MIGRATION_VERSION = [1, 4, 6]
 const DEFAULT_PUBLIC_BASE_URL = 'https://dl.catgo-ucsd.org'
 const APP_ASSET =
   /\.(?:appimage|deb|dmg|exe|msi|pkg|rpm|apk|aab|ipa|vsix)$/i
+const SIDECAR_ASSETS = [
+  'catgo-server-linux-x64',
+  'catgo-server-darwin-arm64',
+  'catgo-server-win-x64.exe',
+]
 
 function parseVersionTag(tag) {
   const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag)
@@ -91,7 +98,7 @@ function publicBaseUrl(value) {
   return base
 }
 
-function verifyUpdaterUrls(latest, tag, baseUrl) {
+function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
   const expectedVersion = tag.slice(1)
   if (latest.version !== expectedVersion) {
     throw new Error(
@@ -110,6 +117,12 @@ function verifyUpdaterUrls(latest, tag, baseUrl) {
       metadata.url.length === 0
     ) {
       throw new Error(`latest.json updater URL is missing for ${platform}`)
+    }
+    if (
+      typeof metadata.signature !== 'string' ||
+      metadata.signature.trim().length === 0
+    ) {
+      throw new Error(`latest.json updater signature is missing for ${platform}`)
     }
 
     let updater
@@ -157,6 +170,12 @@ function verifyUpdaterUrls(latest, tag, baseUrl) {
         `latest.json updater URL for ${platform} must target one release asset`,
       )
     }
+    if (!assets.has(asset)) {
+      throw new Error(
+        `latest.json updater URL for ${platform} targets missing release asset: ` +
+          asset,
+      )
+    }
   }
 }
 
@@ -180,10 +199,60 @@ function verifyAppAssets(assetsDir, tag, baseUrl) {
   ) {
     throw new Error('Release latest.json has no updater platforms')
   }
-  verifyUpdaterUrls(latest, tag, baseUrl)
   const assets = readdirSync(assetsDir)
+  const assetNames = new Set(assets)
+  verifyUpdaterUrls(latest, tag, baseUrl, assetNames)
   if (!assets.some((name) => APP_ASSET.test(name))) {
     throw new Error('Release has no recognized CatGo app asset')
+  }
+}
+
+async function sha256File(path) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest('hex')
+}
+
+function requireRegularReleaseAsset(assetsDir, name, kind) {
+  const path = resolve(assetsDir, name)
+  if (!existsSync(path)) {
+    throw new Error(`Release is missing ${kind}: ${name}`)
+  }
+  const metadata = lstatSync(path)
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error(`Release ${kind} must be a regular file: ${name}`)
+  }
+  return path
+}
+
+export async function verifySidecarAssets(assetsDir) {
+  for (const name of SIDECAR_ASSETS) {
+    const binary = requireRegularReleaseAsset(
+      assetsDir,
+      name,
+      'sidecar binary',
+    )
+    const receiptName = `${name}.sha256`
+    const receipt = requireRegularReleaseAsset(
+      assetsDir,
+      receiptName,
+      'sidecar checksum',
+    )
+    const contents = readFileSync(receipt, 'utf8')
+    if (Buffer.byteLength(contents) > 4096) {
+      throw new Error(`Sidecar checksum metadata is too large: ${receiptName}`)
+    }
+    const match = /^([0-9a-fA-F]{64}) {2}([^\r\n]+)(?:\r?\n)?$/.exec(contents)
+    if (!match || match[2] !== name) {
+      throw new Error(`Malformed sidecar checksum metadata: ${receiptName}`)
+    }
+    const expected = match[1].toLowerCase()
+    const actual = await sha256File(binary)
+    if (actual !== expected) {
+      throw new Error(
+        `Sidecar checksum mismatch for ${name}: expected ${expected}, got ${actual}`,
+      )
+    }
   }
 }
 
@@ -268,7 +337,7 @@ function verifyLegalArchive(assetsDir, sourceRoot) {
   }
 }
 
-export function verifyMirroredRelease({
+export async function verifyMirroredRelease({
   tag,
   assetsDir,
   sourceRoot,
@@ -276,16 +345,19 @@ export function verifyMirroredRelease({
 }) {
   const ncl = requiresNoncommercialBundle(tag)
   verifyAppAssets(assetsDir, tag, baseUrl)
-  if (ncl) verifyLegalArchive(assetsDir, sourceRoot)
+  if (ncl) {
+    await verifySidecarAssets(assetsDir)
+    verifyLegalArchive(assetsDir, sourceRoot)
+  }
   return {
     tag,
     policy: ncl ? 'ncl-1.4.6-or-later' : 'historical-pre-1.4.6',
   }
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2))
-  const report = verifyMirroredRelease(options)
+  const report = await verifyMirroredRelease(options)
   process.stdout.write(
     options.json
       ? `${JSON.stringify(report)}\n`
@@ -294,10 +366,8 @@ function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try {
-    main()
-  } catch (error) {
+  main().catch((error) => {
     process.stderr.write(`[release-verify] ${error.message}\n`)
     process.exitCode = 1
-  }
+  })
 }

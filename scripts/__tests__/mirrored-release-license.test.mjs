@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
@@ -15,6 +16,11 @@ import { fileURLToPath } from 'node:url'
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const SIDECAR_ASSETS = [
+  'catgo-server-linux-x64',
+  'catgo-server-darwin-arm64',
+  'catgo-server-win-x64.exe',
+]
 
 function makeSourceRoot(parent, label) {
   const sourceRoot = resolve(parent, `source-${label}`)
@@ -32,7 +38,23 @@ function makeSourceRoot(parent, label) {
   return sourceRoot
 }
 
-function makeAssets(parent, tag) {
+function addSidecars(assets, { corrupt = null } = {}) {
+  for (const name of SIDECAR_ASSETS) {
+    const body = `sidecar:${name}\n`
+    const digest = createHash('sha256').update(body).digest('hex')
+    writeFileSync(resolve(assets, name), body)
+    writeFileSync(
+      resolve(assets, `${name}.sha256`),
+      `${corrupt === name ? '0'.repeat(64) : digest}  ${name}\n`,
+    )
+  }
+}
+
+function makeAssets(
+  parent,
+  tag,
+  { includeSidecars = tag !== 'v1.4.5', corruptSidecar = null } = {},
+) {
   const assets = resolve(parent, `assets-${tag}`)
   mkdirSync(assets, { recursive: true })
   writeFileSync(
@@ -42,11 +64,13 @@ function makeAssets(parent, tag) {
       platforms: {
         'linux-x86_64': {
           url: `https://dl.catgo-ucsd.org/${tag}/CatGo_${tag}_amd64.deb`,
+          signature: 'signed-updater-fixture',
         },
       },
     })}\n`,
   )
   writeFileSync(resolve(assets, `CatGo_${tag}_amd64.deb`), 'app\n')
+  if (includeSidecars) addSidecars(assets, { corrupt: corruptSidecar })
   return assets
 }
 
@@ -135,6 +159,42 @@ test('future release rejects a legal archive built from another branch', () => {
       readFileSync(resolve(targetSource, 'license'), 'utf8'),
       'license-future-target\n',
     )
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('v1.4.6 rejects a release missing version-coupled sidecar checksums', () => {
+  const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-no-sidecars-'))
+  try {
+    const sourceRoot = makeSourceRoot(fixture, 'no-sidecars')
+    const assets = makeAssets(
+      fixture,
+      'v1.4.6',
+      { includeSidecars: false },
+    )
+    addLegalArchive(fixture, assets, sourceRoot, 'no-sidecars')
+    const result = verify('v1.4.6', assets, sourceRoot)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /missing sidecar.*linux-x64/i)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('v1.4.6 rejects a sidecar whose SHA-256 receipt does not match', () => {
+  const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-bad-sidecar-'))
+  try {
+    const sourceRoot = makeSourceRoot(fixture, 'bad-sidecar')
+    const assets = makeAssets(
+      fixture,
+      'v1.4.6',
+      { corruptSidecar: 'catgo-server-darwin-arm64' },
+    )
+    addLegalArchive(fixture, assets, sourceRoot, 'bad-sidecar')
+    const result = verify('v1.4.6', assets, sourceRoot)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /checksum mismatch.*darwin-arm64/i)
   } finally {
     rmSync(fixture, { recursive: true, force: true })
   }

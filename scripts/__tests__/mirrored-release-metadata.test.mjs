@@ -18,6 +18,7 @@ const PUBLIC_BASE_URL = 'https://dl.catgo-ucsd.org'
 function fixture({
   tag = 'v1.4.5',
   version = tag.slice(1),
+  signature = 'signature',
   urls = [
     `${PUBLIC_BASE_URL}/${tag}/CatGo_${version}_x64-setup.exe`,
     `${PUBLIC_BASE_URL}/${tag}/CatGo_${version}_aarch64.app.tar.gz`,
@@ -31,7 +32,12 @@ function fixture({
   const platforms = Object.fromEntries(
     urls.map((url, index) => [
       `platform-${index}`,
-      { url, signature: `signature-${index}` },
+      {
+        url,
+        ...(signature === null
+          ? {}
+          : { signature: `${signature}-${index}` }),
+      },
     ]),
   )
   writeFileSync(
@@ -127,6 +133,27 @@ test('rejects a Cloudflare URL outside the exact release-tag path', () => {
     (result) => {
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, /updater URL.*v1\.4\.5/i)
+    },
+  )
+})
+
+test('rejects updater metadata without an artifact signature', () => {
+  withFixture({ signature: null }, (result) => {
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /signature.*platform-0/i)
+  })
+})
+
+test('rejects an updater URL whose release asset is absent', () => {
+  withFixture(
+    {
+      urls: [
+        `${PUBLIC_BASE_URL}/v1.4.5/CatGo_1.4.5_missing.AppImage`,
+      ],
+    },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /missing.*release asset/i)
     },
   )
 })

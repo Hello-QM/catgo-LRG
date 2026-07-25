@@ -1,12 +1,13 @@
 # Mirror release assets to Cloudflare R2 so users in mainland China (where
 # GitHub is often unreachable) can download CatGo and receive in-app updates.
 #
-# Layout in the bucket (keep-only-latest policy):
+# Layout in the bucket (latest app artifacts + retained versioned sidecars):
 #   <tag>/<asset>   e.g. v1.4.5/CatGo_1.4.5_x64-setup.exe
 #   latest.json     updater manifest with URLs rewritten to the mirror
 #   index.html      self-contained bilingual all-platform download page
-# Older <tag>/ prefixes are pruned after a successful sync, so storage stays
-# within R2's 10 GB free tier (~2.8 GB per release). Egress from R2 is free.
+# Older installers, updater metadata, and legal bundles are pruned after a
+# successful sync. Version-coupled catgo-server sidecars and their checksums
+# remain available so an older VS Code extension can recover a missing cache.
 #
 # One-time setup (Cloudflare dashboard):
 #   1. R2 → Create bucket `catgo-releases`.
@@ -265,9 +266,11 @@ jobs:
             echo "root_published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Prune older releases (keep only the latest)
-        # Only prune when the tag we just synced IS the repo's latest release —
-        # a manual backfill of an old tag must not delete the current one.
+      - name: Prune older app artifacts (retain versioned sidecars)
+        # Only prune when the tag we just synced IS the repo's latest release.
+        # A manual backfill must not alter the current release. Old installers
+        # can go, but every extension version remains coupled to its matching
+        # catgo-server binary and SHA-256 receipt.
         if: steps.creds.outputs.configured == 'true'
         env:
           MIRROR_TAG: ${{ steps.tag.outputs.tag }}
@@ -293,8 +296,9 @@ jobs:
           while read -r prefix; do
             [ -z "$prefix" ] || [ "$prefix" = "None" ] && continue
             if [ "$prefix" != "$tag/" ]; then
-              echo "pruning stale prefix: $prefix"
-              aws s3 rm "s3://$R2_BUCKET/$prefix" --recursive
+              echo "pruning stale app artifacts while preserving sidecars: $prefix"
+              aws s3 rm "s3://$R2_BUCKET/$prefix" --recursive \
+                --exclude 'catgo-server-*'
             fi
           done
 
