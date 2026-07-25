@@ -15,7 +15,7 @@
  */
 
 import { Buffer } from 'node:buffer'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as http from 'node:http'
@@ -26,6 +26,8 @@ import { pipeline } from 'node:stream/promises'
 import * as vscode from 'vscode'
 
 import pkg_json from '../package.json' with { type: 'json' }
+
+const TRUSTED_SIDECAR_ORIGIN = `https://dl.catgo-ucsd.org`
 
 export function get_binary_name(): string {
   const platform = process.platform
@@ -76,6 +78,46 @@ export function sidecar_asset_urls(
   }
 }
 
+function assert_trusted_sidecar_url(raw_url: string): URL {
+  let parsed: URL
+  try {
+    parsed = new URL(raw_url)
+  } catch {
+    throw new Error(`URL is not on the trusted HTTPS sidecar origin`)
+  }
+  if (
+    parsed.origin !== TRUSTED_SIDECAR_ORIGIN ||
+    parsed.protocol !== `https:` ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error(`URL is not on the trusted HTTPS sidecar origin`)
+  }
+  return parsed
+}
+
+export function assert_trusted_sidecar_urls(
+  binary_url: string,
+  checksum_url: string,
+): void {
+  assert_trusted_sidecar_url(binary_url)
+  assert_trusted_sidecar_url(checksum_url)
+}
+
+export function resolve_trusted_sidecar_redirect(
+  current_url: string,
+  location: string,
+): string {
+  assert_trusted_sidecar_url(current_url)
+  let redirected: URL
+  try {
+    redirected = new URL(location, current_url)
+  } catch {
+    throw new Error(`Malformed redirect Location from ${current_url}`)
+  }
+  return assert_trusted_sidecar_url(redirected.toString()).toString()
+}
+
 export function parse_sidecar_checksum(
   contents: string,
   expected_filename: string,
@@ -100,14 +142,40 @@ async function file_exists(p: string): Promise<boolean> {
   }
 }
 
-async function request_response(
+function assert_same_origin_url(
+  raw_url: string,
+  expected_origin: string,
+): URL {
+  let expected: URL
+  let parsed: URL
+  try {
+    expected = new URL(expected_origin)
+    parsed = new URL(raw_url)
+  } catch {
+    throw new Error(`Malformed request URL`)
+  }
+  if (
+    ![`http:`, `https:`].includes(expected.protocol) ||
+    parsed.origin !== expected.origin ||
+    parsed.protocol !== expected.protocol ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error(`Redirect escaped the expected origin`)
+  }
+  return parsed
+}
+
+export async function request_same_origin_response(
   url: string,
+  expected_origin: string,
   redirects_remaining = 5,
 ): Promise<http.IncomingMessage> {
+  const parsed = assert_same_origin_url(url, expected_origin)
   return await new Promise((resolve, reject) => {
-    const lib = url.startsWith(`https:`) ? https : http
+    const lib = parsed.protocol === `https:` ? https : http
     const request = lib.get(
-      url,
+      parsed,
       { headers: { 'User-Agent': `catgo-vscode/${pkg_json.version}` } },
       (response) => {
         const status = response.statusCode ?? 0
@@ -117,8 +185,29 @@ async function request_response(
             reject(new Error(`Too many redirects fetching ${url}`))
             return
           }
-          const next = new URL(response.headers.location, url).toString()
-          request_response(next, redirects_remaining - 1).then(resolve, reject)
+          let next: URL
+          try {
+            if (expected_origin === TRUSTED_SIDECAR_ORIGIN) {
+              next = new URL(resolve_trusted_sidecar_redirect(
+                parsed.toString(),
+                response.headers.location,
+              ))
+            } else {
+              next = new URL(response.headers.location, parsed)
+              assert_same_origin_url(next.toString(), expected_origin)
+            }
+          } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : String(error)
+            reject(new Error(`Malformed redirect Location: ${message}`))
+            return
+          }
+          request_same_origin_response(
+            next.toString(),
+            expected_origin,
+            redirects_remaining - 1,
+          ).then(resolve, reject)
           return
         }
         if (status !== 200) {
@@ -133,8 +222,11 @@ async function request_response(
   })
 }
 
-async function fetch_checksum_metadata(url: string): Promise<string> {
-  const response = await request_response(url)
+async function fetch_checksum_metadata(
+  url: string,
+  expected_origin: string,
+): Promise<string> {
+  const response = await request_same_origin_response(url, expected_origin)
   const chunks: Buffer[] = []
   let received = 0
   for await (const chunk of response) {
@@ -177,6 +269,15 @@ export async function stored_sidecar_is_verified(
   destination: string,
   asset_name: string,
 ): Promise<boolean> {
+  return await with_target_lock(destination, async () => {
+    return await stored_sidecar_is_verified_impl(destination, asset_name)
+  })
+}
+
+async function stored_sidecar_is_verified_impl(
+  destination: string,
+  asset_name: string,
+): Promise<boolean> {
   const receipt = `${destination}.sha256`
   const partials = [
     `${destination}.partial`,
@@ -203,13 +304,41 @@ export async function stored_sidecar_is_verified(
   }
 }
 
-export async function download_verified_sidecar(options: {
+type DownloadVerifiedSidecarOptions = {
   binary_url: string
   checksum_url: string
   destination: string
   asset_name: string
   on_progress?: (downloaded: number, total: number | null) => void
-}): Promise<void> {
+}
+
+const active_downloads = new Map<string, Promise<void>>()
+const target_operations = new Map<string, Promise<void>>()
+
+function with_target_lock<T>(
+  destination: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const target = path.resolve(destination)
+  const previous = target_operations.get(target) ?? Promise.resolve()
+  const result = previous.then(operation, operation)
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  target_operations.set(target, tail)
+  void tail.then(() => {
+    if (target_operations.get(target) === tail) {
+      target_operations.delete(target)
+    }
+  })
+  return result
+}
+
+async function download_verified_sidecar_impl(
+  options: DownloadVerifiedSidecarOptions,
+  expected_origin: string,
+): Promise<void> {
   const {
     binary_url,
     checksum_url,
@@ -217,21 +346,32 @@ export async function download_verified_sidecar(options: {
     asset_name,
     on_progress = () => {},
   } = options
-  const partial = `${destination}.partial`
   const receipt = `${destination}.sha256`
-  const receipt_partial = `${receipt}.partial`
+  const attempt_id = randomUUID()
+  const partial = `${destination}.${attempt_id}.partial`
+  const receipt_partial = `${receipt}.${attempt_id}.partial`
   const outputs = [destination, partial, receipt, receipt_partial]
+  const legacy_partials = [
+    `${destination}.partial`,
+    `${receipt}.partial`,
+  ]
 
   await fsp.mkdir(path.dirname(destination), { recursive: true })
-  await remove_files(outputs)
+  await remove_files([...outputs, ...legacy_partials])
 
   try {
-    const checksum_contents = await fetch_checksum_metadata(checksum_url)
+    const checksum_contents = await fetch_checksum_metadata(
+      checksum_url,
+      expected_origin,
+    )
     const expected_digest = parse_sidecar_checksum(
       checksum_contents,
       asset_name,
     )
-    const response = await request_response(binary_url)
+    const response = await request_same_origin_response(
+      binary_url,
+      expected_origin,
+    )
     const content_length = response.headers[`content-length`]
     const parsed_length = typeof content_length === `string`
       ? Number.parseInt(content_length, 10)
@@ -271,6 +411,42 @@ export async function download_verified_sidecar(options: {
     await remove_files(outputs)
     throw error
   }
+}
+
+function coalesced_download(
+  options: DownloadVerifiedSidecarOptions,
+  expected_origin: string,
+): Promise<void> {
+  const target = path.resolve(options.destination)
+  const active = active_downloads.get(target)
+  if (active) return active
+
+  const operation = with_target_lock(options.destination, async () => {
+    await download_verified_sidecar_impl(options, expected_origin)
+  })
+  active_downloads.set(target, operation)
+  const clear = () => {
+    if (active_downloads.get(target) === operation) {
+      active_downloads.delete(target)
+    }
+  }
+  operation.then(clear, clear)
+  return operation
+}
+
+export async function download_verified_sidecar(
+  options: DownloadVerifiedSidecarOptions,
+): Promise<void> {
+  assert_trusted_sidecar_urls(options.binary_url, options.checksum_url)
+  await coalesced_download(options, TRUSTED_SIDECAR_ORIGIN)
+}
+
+/** @internal Test seam for exercising the real downloader with a local origin. */
+export async function download_verified_sidecar_from_origin(
+  options: DownloadVerifiedSidecarOptions,
+  expected_origin: string,
+): Promise<void> {
+  await coalesced_download(options, expected_origin)
 }
 
 /**
