@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: If you use CatGo, you must acknowledge and cite it as described below.
+message: This work used CatGo (https://catgo-ucsd.org). If you use CatGo, you must acknowledge and cite it as described below.
 version: 1.4.6
 title: CatGo
 authors:

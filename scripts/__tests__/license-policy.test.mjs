@@ -71,6 +71,7 @@ const workflowInventory = {
 const licenseClaimInventory = {
   activeFirstParty: [
     'COMMERCIAL_LICENSE.md',
+    'docs/.vitepress/config.ts',
     'extensions/rust-wasm/README.md',
     'extensions/vscode/readme.md',
     'license',
@@ -83,9 +84,12 @@ const licenseClaimInventory = {
     'docs/reference/changelog.md',
     'docs/zh/reference/changelog.md',
   ],
-  // Final-review I1 is owned by a separate remediation. Keep it classified
-  // here so a new active claim cannot evade this I3/I4 inventory branch.
-  parallelReviewRemediation: ['docs/.vitepress/config.ts'],
+  redistributedThirdPartyNotices: [
+    'THIRD_PARTY_NOTICES.md',
+    'extensions/rust-wasm/THIRD_PARTY_NOTICES.md',
+    'extensions/vscode/THIRD_PARTY_NOTICES.md',
+    'server/THIRD_PARTY_NOTICES.md',
+  ],
 }
 
 const flattenInventory = (inventory) =>

@@ -15,7 +15,7 @@ test('active documentation footers state the CatGo noncommercial terms', () => {
   ].map((match) => match[1])
 
   assert.equal(footerMessages.length, 2)
-  assert.doesNotMatch(footerMessages.join('\n'), /AGPL|MIT License/i)
+  assert.doesNotMatch(footerMessages.join('\n'), /AGPL|\bMIT\b/i)
 
   const [chinese, english] = footerMessages
   for (const message of footerMessages) {
