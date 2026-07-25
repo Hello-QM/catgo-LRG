@@ -134,6 +134,22 @@ test('forwards byte ranges to R2 and emits resumable response metadata', async (
   )
 })
 
+test('returns a complete GET response when R2 reports a full-object range', async () => {
+  const bucket = createBucket({
+    getResult: createObject({
+      body: new ReadableStream(),
+      size: 100,
+      range: { offset: 0, length: 100 },
+    }),
+  })
+
+  const response = await fetchDownload(bucket, '/v1.4.6/CatGo.exe')
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-range'), null)
+  assert.equal(response.headers.get('content-length'), '100')
+})
+
 test('returns an empty 304 when an R2 conditional GET has no body', async () => {
   const bucket = createBucket({
     getResult: createObject({ body: undefined, key: 'latest.json' }),
