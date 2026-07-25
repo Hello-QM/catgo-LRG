@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 import { requiredReleaseAssets } from '../release-asset-policy.mjs'
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
+import { createTauriSigningFixture } from './helpers/tauri-signing-fixture.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const SIDECAR_ASSETS = [
@@ -54,6 +55,7 @@ function addSidecars(assets, { corrupt = null } = {}) {
 function makeAssets(
   parent,
   tag,
+  sourceRoot,
   { includeSidecars = tag !== 'v1.4.5', corruptSidecar = null } = {},
 ) {
   const assets = resolve(parent, `assets-${tag}`)
@@ -61,6 +63,10 @@ function makeAssets(
   const windowsUpdater = `CatGo_${version}_x64-setup.exe`
   const macosUpdater = 'CatGo_aarch64.app.tar.gz'
   mkdirSync(assets, { recursive: true })
+  for (const requirement of requiredReleaseAssets(tag)) {
+    writeFileSync(resolve(assets, requirement.name), `${requirement.label}\n`)
+  }
+  const signer = createTauriSigningFixture(sourceRoot)
   writeFileSync(
     resolve(assets, 'latest.json'),
     `${JSON.stringify({
@@ -68,18 +74,15 @@ function makeAssets(
       platforms: {
         'windows-x86_64': {
           url: `https://dl.catgo-ucsd.org/${tag}/${windowsUpdater}`,
-          signature: 'signed-windows-updater-fixture',
+          signature: signer.signArtifact(resolve(assets, windowsUpdater)),
         },
         'darwin-aarch64': {
           url: `https://dl.catgo-ucsd.org/${tag}/${macosUpdater}`,
-          signature: 'signed-macos-updater-fixture',
+          signature: signer.signArtifact(resolve(assets, macosUpdater)),
         },
       },
     })}\n`,
   )
-  for (const requirement of requiredReleaseAssets(tag)) {
-    writeFileSync(resolve(assets, requirement.name), `${requirement.label}\n`)
-  }
   if (includeSidecars) addSidecars(assets, { corrupt: corruptSidecar })
   return assets
 }
@@ -115,7 +118,7 @@ test('v1.4.5 historical redistribution fails closed without documented clearance
   const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-historical-'))
   try {
     const sourceRoot = makeSourceRoot(fixture, 'historical')
-    const assets = makeAssets(fixture, 'v1.4.5')
+    const assets = makeAssets(fixture, 'v1.4.5', sourceRoot)
     const result = verify('v1.4.5', assets, sourceRoot)
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /historical release redistribution.*disabled/i)
@@ -144,7 +147,7 @@ for (const tag of ['v1.4.6', 'v2.0.0']) {
     const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-ncl-'))
     try {
       const sourceRoot = makeSourceRoot(fixture, tag)
-      const assets = makeAssets(fixture, tag)
+      const assets = makeAssets(fixture, tag, sourceRoot)
       addLegalArchive(fixture, assets, sourceRoot, tag)
       const result = verify(tag, assets, sourceRoot)
       assert.equal(result.status, 0, result.stderr || result.stdout)
@@ -160,7 +163,7 @@ test('future release rejects a legal archive built from another branch', () => {
   try {
     const targetSource = makeSourceRoot(fixture, 'future-target')
     const defaultSource = makeSourceRoot(fixture, 'future-default')
-    const assets = makeAssets(fixture, 'v1.5.0')
+    const assets = makeAssets(fixture, 'v1.5.0', targetSource)
     addLegalArchive(fixture, assets, defaultSource, 'default')
     const result = verify('v1.5.0', assets, targetSource)
     assert.notEqual(result.status, 0)
@@ -182,6 +185,7 @@ test('v1.4.6 rejects a release missing version-coupled sidecar checksums', () =>
     const assets = makeAssets(
       fixture,
       'v1.4.6',
+      sourceRoot,
       { includeSidecars: false },
     )
     addLegalArchive(fixture, assets, sourceRoot, 'no-sidecars')
@@ -200,6 +204,7 @@ test('v1.4.6 rejects a sidecar whose SHA-256 receipt does not match', () => {
     const assets = makeAssets(
       fixture,
       'v1.4.6',
+      sourceRoot,
       { corruptSidecar: 'catgo-server-darwin-arm64' },
     )
     addLegalArchive(fixture, assets, sourceRoot, 'bad-sidecar')

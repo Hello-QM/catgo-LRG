@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -13,6 +14,10 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { syncLegalBundle } from '../sync-legal-bundle.mjs'
+import {
+  createTauriSigningFixture,
+  tamperInlineTauriSignature,
+} from './helpers/tauri-signing-fixture.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-mirrored-release.mjs')
@@ -64,7 +69,7 @@ function addReleaseBundle(root, assets, sourceRoot) {
 function fixture({
   tag = 'v1.4.6',
   version = tag.slice(1),
-  signature = 'signature',
+  signature = undefined,
   omitRequiredAsset = null,
   publicBaseUrl = PUBLIC_BASE_URL,
   platformNames = ['windows-x86_64', 'darwin-aarch64'],
@@ -78,6 +83,15 @@ function fixture({
   const sourceRoot = resolve(root, 'source')
   mkdirSync(assets)
   mkdirSync(sourceRoot)
+  const signer = createTauriSigningFixture(sourceRoot)
+  const windowsUpdater = resolve(assets, `CatGo_${version}_x64-setup.exe`)
+  const macosUpdater = resolve(assets, 'CatGo_aarch64.app.tar.gz')
+  writeFileSync(windowsUpdater, 'app\n')
+  writeFileSync(macosUpdater, 'updater\n')
+  const updaterSignatures = [
+    signer.signArtifact(windowsUpdater),
+    signer.signArtifact(macosUpdater),
+  ]
   const platforms = Object.fromEntries(
     urls.map((url, index) => [
       platformNames[index] ?? `platform-${index}`,
@@ -85,18 +99,18 @@ function fixture({
         url,
         ...(signature === null
           ? {}
-          : { signature: `${signature}-${index}` }),
+          : {
+              signature:
+                typeof signature === 'function'
+                  ? signature(updaterSignatures[index], index)
+                  : updaterSignatures[index],
+            }),
       },
     ]),
   )
   writeFileSync(
     resolve(assets, 'latest.json'),
     `${JSON.stringify({ version, platforms })}\n`,
-  )
-  writeFileSync(resolve(assets, `CatGo_${version}_x64-setup.exe`), 'app\n')
-  writeFileSync(
-    resolve(assets, 'CatGo_aarch64.app.tar.gz'),
-    'updater\n',
   )
   for (const name of REQUIRED_RELEASE_ASSETS) {
     const versionedName = name.replaceAll('1.4.6', version)
@@ -105,7 +119,15 @@ function fixture({
     }
   }
   addReleaseBundle(root, assets, sourceRoot)
-  return { root, assets, sourceRoot, tag, publicBaseUrl }
+  return {
+    root,
+    assets,
+    sourceRoot,
+    tag,
+    publicBaseUrl,
+    signer,
+    windowsUpdater,
+  }
 }
 
 function verify(options) {
@@ -214,6 +236,51 @@ test('rejects updater metadata without an artifact signature', () => {
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /signature.*windows-x86_64/i)
   })
+})
+
+test('rejects an updater artifact modified after its signature was created', () => {
+  const current = fixture()
+  try {
+    writeFileSync(current.windowsUpdater, 'tampered app\n')
+    const result = verify(current)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /signature verification failed.*windows-x86_64/i)
+  } finally {
+    rmSync(current.root, { recursive: true, force: true })
+  }
+})
+
+test('rejects a tampered inline Tauri updater signature', () => {
+  withFixture(
+    {
+      signature: (valid, index) =>
+        index === 0 ? tamperInlineTauriSignature(valid) : valid,
+    },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /signature verification failed.*windows-x86_64/i)
+    },
+  )
+})
+
+test('rejects updater signatures made by a different key', () => {
+  const current = fixture()
+  try {
+    const otherSource = resolve(current.root, 'other-source')
+    mkdirSync(otherSource)
+    const otherSigner = createTauriSigningFixture(otherSource)
+    const latestPath = resolve(current.assets, 'latest.json')
+    const latest = JSON.parse(readFileSync(latestPath, 'utf8'))
+    latest.platforms['windows-x86_64'].signature =
+      otherSigner.signArtifact(current.windowsUpdater)
+    writeFileSync(latestPath, `${JSON.stringify(latest)}\n`)
+
+    const result = verify(current)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /signature key.*does not match.*windows-x86_64/i)
+  } finally {
+    rmSync(current.root, { recursive: true, force: true })
+  }
 })
 
 test('rejects an updater URL whose release asset is absent', () => {

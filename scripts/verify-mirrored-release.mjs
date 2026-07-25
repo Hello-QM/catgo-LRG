@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import {
+  createHash,
+  createPublicKey,
+  verify as verifyEd25519,
+} from 'node:crypto'
 import {
   createReadStream,
   existsSync,
@@ -16,6 +20,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { TextDecoder } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -38,6 +43,11 @@ const SIDECAR_ASSETS = [
   'catgo-server-darwin-arm64',
   'catgo-server-win-x64.exe',
 ]
+const ED25519_SPKI_PREFIX = Buffer.from(
+  '302a300506032b6570032100',
+  'hex',
+)
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 function isTauriUpdaterAsset(asset) {
   return TAURI_UPDATER_ASSETS.some((pattern) => pattern.test(asset))
@@ -111,7 +121,220 @@ function publicBaseUrl(value) {
   return base
 }
 
-function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
+function decodeBase64(value, kind) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${kind} is not a non-empty base64 string`)
+  }
+  const unpadded = value.replace(/=+$/, '')
+  const paddingLength = value.length - unpadded.length
+  const expectedPadding = (4 - (unpadded.length % 4)) % 4
+  if (
+    !/^[A-Za-z0-9+/]+$/.test(unpadded) ||
+    unpadded.length % 4 === 1 ||
+    paddingLength > 2 ||
+    (paddingLength > 0 &&
+      (value.length % 4 !== 0 || paddingLength !== expectedPadding))
+  ) {
+    throw new Error(`${kind} is not valid base64`)
+  }
+  const decoded = Buffer.from(value, 'base64')
+  if (decoded.toString('base64').replace(/=+$/, '') !== unpadded) {
+    throw new Error(`${kind} is not canonical base64`)
+  }
+  return decoded
+}
+
+function decodeBase64Utf8(value, kind) {
+  try {
+    return UTF8_DECODER.decode(decodeBase64(value, kind))
+  } catch (error) {
+    throw new Error(`${kind} cannot be decoded: ${error.message}`)
+  }
+}
+
+function parseMinisignPublicKey(encoded) {
+  const text = decodeBase64Utf8(encoded, 'Tauri updater public key')
+  const lines = text.split(/\r?\n/)
+  if (lines.length < 2 || !lines[0].startsWith('untrusted comment: ')) {
+    throw new Error('Tauri updater public key has invalid minisign text')
+  }
+  const packet = decodeBase64(lines[1], 'minisign public key packet')
+  if (packet.length !== 42) {
+    throw new Error('minisign public key packet must be 42 bytes')
+  }
+  const algorithm = packet.subarray(0, 2).toString('ascii')
+  if (algorithm !== 'Ed' && algorithm !== 'ED') {
+    throw new Error(`unsupported minisign public key algorithm: ${algorithm}`)
+  }
+  const rawKey = packet.subarray(10)
+  let key
+  try {
+    key = createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, rawKey]),
+      format: 'der',
+      type: 'spki',
+    })
+  } catch (error) {
+    throw new Error(`invalid minisign Ed25519 public key: ${error.message}`)
+  }
+  return {
+    key,
+    keyId: packet.subarray(2, 10),
+  }
+}
+
+function updaterPublicKey(sourceRoot) {
+  const configPath = resolve(sourceRoot, 'src-tauri/tauri.conf.json')
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `Target release source is missing Tauri updater config: ${configPath}`,
+    )
+  }
+  const metadata = lstatSync(configPath)
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error(
+      `Target release Tauri updater config must be a regular file: ${configPath}`,
+    )
+  }
+  let config
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf8'))
+  } catch (error) {
+    throw new Error(
+      `Target release Tauri updater config is invalid: ${error.message}`,
+    )
+  }
+  const encoded = config?.plugins?.updater?.pubkey
+  if (typeof encoded !== 'string' || encoded.length === 0) {
+    throw new Error(
+      'Target release Tauri updater config has no plugins.updater.pubkey',
+    )
+  }
+  try {
+    return parseMinisignPublicKey(encoded)
+  } catch (error) {
+    throw new Error(
+      `Target release Tauri updater public key is invalid: ${error.message}`,
+    )
+  }
+}
+
+function parseInlineTauriSignature(encoded, platform) {
+  let text
+  try {
+    text = decodeBase64Utf8(
+      encoded,
+      `latest.json updater signature for ${platform}`,
+    )
+  } catch (error) {
+    throw new Error(error.message)
+  }
+  const lines = text.split(/\r?\n/)
+  if (
+    lines.length < 4 ||
+    !lines[0].startsWith('untrusted comment: ') ||
+    !lines[2].startsWith('trusted comment: ')
+  ) {
+    throw new Error(
+      `latest.json updater signature for ${platform} has invalid minisign text`,
+    )
+  }
+  let primaryPacket
+  let globalSignature
+  try {
+    primaryPacket = decodeBase64(
+      lines[1],
+      `minisign primary signature for ${platform}`,
+    )
+    globalSignature = decodeBase64(
+      lines[3],
+      `minisign global signature for ${platform}`,
+    )
+  } catch (error) {
+    throw new Error(
+      `latest.json updater signature for ${platform} is invalid: ${error.message}`,
+    )
+  }
+  if (primaryPacket.length !== 74 || globalSignature.length !== 64) {
+    throw new Error(
+      `latest.json updater signature for ${platform} has invalid packet lengths`,
+    )
+  }
+  const algorithm = primaryPacket.subarray(0, 2).toString('ascii')
+  if (algorithm !== 'Ed' && algorithm !== 'ED') {
+    throw new Error(
+      `latest.json updater signature for ${platform} uses unsupported ` +
+        `minisign algorithm: ${algorithm}`,
+    )
+  }
+  return {
+    algorithm,
+    keyId: primaryPacket.subarray(2, 10),
+    primary: primaryPacket.subarray(10),
+    trustedComment: lines[2].slice('trusted comment: '.length),
+    global: globalSignature,
+  }
+}
+
+async function hashFile(path, algorithm) {
+  const hash = createHash(algorithm)
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest()
+}
+
+async function verifyUpdaterSignature({
+  assetsDir,
+  asset,
+  metadata,
+  platform,
+  publicKey,
+}) {
+  const signature = parseInlineTauriSignature(metadata.signature, platform)
+  if (!signature.keyId.equals(publicKey.keyId)) {
+    throw new Error(
+      `latest.json updater signature key does not match target source ` +
+        `updater key for ${platform}`,
+    )
+  }
+  const artifact = requireRegularReleaseAsset(
+    assetsDir,
+    asset,
+    'Tauri updater artifact',
+  )
+  const signedMessage =
+    signature.algorithm === 'ED'
+      ? await hashFile(artifact, 'blake2b512')
+      : readFileSync(artifact)
+  const primaryValid = verifyEd25519(
+    null,
+    signedMessage,
+    publicKey.key,
+    signature.primary,
+  )
+  const globalValid = verifyEd25519(
+    null,
+    Buffer.concat([
+      signature.primary,
+      Buffer.from(signature.trustedComment),
+    ]),
+    publicKey.key,
+    signature.global,
+  )
+  if (!primaryValid || !globalValid) {
+    throw new Error(
+      `latest.json updater signature verification failed for ${platform}`,
+    )
+  }
+}
+
+async function verifyUpdaterUrls(
+  latest,
+  tag,
+  baseUrl,
+  assets,
+  assetsDir,
+  publicKey,
+) {
   const expectedVersion = tag.slice(1)
   if (latest.version !== expectedVersion) {
     throw new Error(
@@ -196,6 +419,13 @@ function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
           asset,
       )
     }
+    await verifyUpdaterSignature({
+      assetsDir,
+      asset,
+      metadata,
+      platform,
+      publicKey,
+    })
     updaterAssets.set(platform, asset)
   }
 
@@ -216,7 +446,7 @@ function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
   }
 }
 
-function verifyAppAssets(assetsDir, tag, baseUrl) {
+async function verifyAppAssets(assetsDir, tag, baseUrl, sourceRoot) {
   if (!existsSync(assetsDir) || !statSync(assetsDir).isDirectory()) {
     throw new Error(`Release assets directory does not exist: ${assetsDir}`)
   }
@@ -238,7 +468,15 @@ function verifyAppAssets(assetsDir, tag, baseUrl) {
   }
   const assets = readdirSync(assetsDir)
   const assetNames = new Set(assets)
-  verifyUpdaterUrls(latest, tag, baseUrl, assetNames)
+  const publicKey = updaterPublicKey(sourceRoot)
+  await verifyUpdaterUrls(
+    latest,
+    tag,
+    baseUrl,
+    assetNames,
+    assetsDir,
+    publicKey,
+  )
   verifyRequiredReleaseAssets(assetNames, tag)
   if (!assets.some(isTauriUpdaterAsset)) {
     throw new Error('Release has no recognized Tauri updater artifact')
@@ -387,7 +625,7 @@ export async function verifyMirroredRelease({
         `documented redistribution rights clearance is available`,
     )
   }
-  verifyAppAssets(assetsDir, tag, baseUrl)
+  await verifyAppAssets(assetsDir, tag, baseUrl, sourceRoot)
   await verifySidecarAssets(assetsDir)
   verifyLegalArchive(assetsDir, sourceRoot)
   return {
