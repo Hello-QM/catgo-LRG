@@ -2363,6 +2363,13 @@ def _handle_verify(args: dict) -> list[TextContent]:
         return [T(type="text", text=f"catgo_verify: {e}")]
 
     cov = report["coverage"]
+    # clear the pending-verification state ONLY if a gate actually ran — an empty
+    # verify (all SKIP) must not bypass the enforcement gate.
+    try:
+        from . import verify_enforcement as _enf
+    except ImportError:
+        import verify_enforcement as _enf
+    _enf.mark_verified(cov["ran"] > 0)
     lines = []
     for v in report["verdicts"]:
         mark = {"PASS": "✓", "FAIL": "✗", "SKIP": "·"}[v["status"]]

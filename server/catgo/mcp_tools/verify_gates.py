@@ -354,7 +354,9 @@ NOT_CERTIFIED = ("UNVERIFIABLE", "UNKNOWN-CLAIM")
 
 
 def _group_present(result, group):
-    return all(k in result for k in group)
+    # a key must be present AND carry a non-empty value — None / [] / {} / "" do NOT
+    # satisfy provenance (else a claim declaring `ads_titels: None` would be certified).
+    return all(result.get(k) not in (None, [], {}, "") for k in group)
 
 
 def workflow_consistency(steps):

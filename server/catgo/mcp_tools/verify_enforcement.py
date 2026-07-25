@@ -47,8 +47,16 @@ IRREVERSIBLE = {"catgo_workflow", "catgo_workflow_engine"}
 # (tool, action) pairs that actually submit; other actions of the same tool are benign
 _IRREVERSIBLE_ACTIONS = {"submit", "run", "execute", "start"}
 
-# numeric-producing (tool, action-prefix) — outputs that downstream conclusions cite
-_NUMERIC_TOOLS = {"catgo_analyze", "catgo_catalysis"}
+# numeric-producing tool families — matched by PREFIX so this covers BOTH server
+# variants: the merged variant (catgo_analyze / catgo_catalysis) AND the 61-tool
+# variant's fine-grained names (catgo_dos_*, catgo_catalysis_*, catgo_cohp_*,
+# catgo_bands_*, catgo_energy, catgo_freq_*, ...). Exact-name matching left the
+# fine-grained variant unguarded (enforcement never fired there).
+_NUMERIC_PREFIXES = (
+    "catgo_analyze", "catgo_catalysis", "catgo_dos", "catgo_cohp", "catgo_band",
+    "catgo_bands", "catgo_energy", "catgo_freq", "catgo_bader", "catgo_gibbs",
+    "catgo_thermo", "catgo_overpot", "catgo_charge",
+)
 _NUMERIC_EXEMPT_PREFIXES = ("hub_",)  # plugin-hub admin actions produce no physics
 
 _sessions = {}  # session_key -> {"unverified": int, "last_numeric": str|None}
@@ -67,7 +75,7 @@ def _is_submit(tool, args):
 
 
 def _is_numeric(tool, args):
-    if tool not in _NUMERIC_TOOLS:
+    if not tool.startswith(_NUMERIC_PREFIXES):
         return False
     action = str((args or {}).get("action", ""))
     return not action.startswith(_NUMERIC_EXEMPT_PREFIXES)
@@ -87,15 +95,27 @@ def precheck(tool, args, session_key="default"):
 
 
 def postmark(tool, args, ok=True, session_key="default"):
-    """Call AFTER a tool ran. Tracks pending-verification state."""
+    """Call AFTER a tool ran. Tracks pending-verification state.
+
+    NOTE: catgo_verify does NOT clear state here — clearing is done by the handler
+    via mark_verified() ONLY when the audit actually ran a gate, so an EMPTY
+    catgo_verify (a result with no verifiable fields → all gates SKIP) cannot wipe
+    the pending state and bypass enforcement.
+    """
     st = _st(session_key)
     if not ok:
         return
-    if tool == "catgo_verify":
-        st["unverified"] = 0
-    elif _is_numeric(tool, args):
+    if _is_numeric(tool, args):
         st["unverified"] += 1
         st["last_numeric"] = tool
+
+
+def mark_verified(covered, session_key="default"):
+    """Called by the catgo_verify handler after an audit. Clears the pending
+    unverified state ONLY if at least one gate actually ran (covered is truthy /
+    coverage.ran > 0). An empty or no-coverage verify does not clear it."""
+    if covered:
+        _st(session_key)["unverified"] = 0
 
 
 if __name__ == "__main__":
