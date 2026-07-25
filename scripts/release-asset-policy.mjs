@@ -1,11 +1,6 @@
+import { classifyDownloadAsset } from './download-asset-classifier.mjs'
+
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/
-const USER_FACING_RELEASE_ASSET = [
-  /^CatGo_\d+\.\d+\.\d+_(?:x64|aarch64)(?:_[A-Za-z0-9-]+)?(?:-setup)?\.(?:exe|msi|dmg)$/i,
-  /^CatGo_\d+\.\d+\.\d+_(?:amd64|aarch64)\.(?:deb|AppImage)$/i,
-  /^CatGo-\d+\.\d+\.\d+-\d+\.(?:x86_64|aarch64)\.rpm$/i,
-  /^CatGo-v\d+\.\d+\.\d+-android-universal\.apk$/i,
-  /^catgo-\d+\.\d+\.\d+\.vsix$/i,
-]
 
 function versionForTag(tag) {
   const match = RELEASE_TAG.exec(tag)
@@ -88,7 +83,7 @@ export function verifyRequiredReleaseAssets(assetNames, tag) {
   ])
   for (const asset of assets) {
     if (
-      USER_FACING_RELEASE_ASSET.some((pattern) => pattern.test(asset)) &&
+      classifyDownloadAsset(asset).userFacing &&
       !allowedUserFacingAssets.has(asset)
     ) {
       throw new Error(
