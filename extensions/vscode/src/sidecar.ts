@@ -265,12 +265,177 @@ async function sha256_file(file_path: string): Promise<string> {
   return hash.digest(`hex`)
 }
 
+type SidecarFileLockOptions = {
+  wait_timeout_ms?: number
+  stale_after_ms?: number
+  poll_interval_ms?: number
+}
+
+type SidecarFileLockRecord = {
+  version: 1
+  pid: number
+  token: string
+  created_at: number
+}
+
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 10 * 60 * 1000
+const DEFAULT_LOCK_STALE_AFTER_MS = 2 * 60 * 1000
+const DEFAULT_LOCK_POLL_INTERVAL_MS = 100
+
+function filesystem_error_code(error: unknown): string | undefined {
+  if (error instanceof Error && `code` in error) {
+    return String(error.code)
+  }
+  return undefined
+}
+
+function parse_lock_record(contents: string): SidecarFileLockRecord | null {
+  try {
+    const parsed = JSON.parse(contents) as Partial<SidecarFileLockRecord>
+    if (
+      parsed.version === 1 &&
+      Number.isInteger(parsed.pid) &&
+      (parsed.pid ?? 0) > 0 &&
+      typeof parsed.token === `string` &&
+      parsed.token.length > 0 &&
+      typeof parsed.created_at === `number` &&
+      Number.isFinite(parsed.created_at)
+    ) {
+      return parsed as SidecarFileLockRecord
+    }
+  } catch {
+    // A process can die between atomic creation and writing its metadata.
+  }
+  return null
+}
+
+function process_is_alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    const code = filesystem_error_code(error)
+    if (code === `EPERM`) return true
+    return false
+  }
+}
+
+async function stale_lock_is_recoverable(
+  lock_path: string,
+  stale_after_ms: number,
+): Promise<boolean> {
+  let lock_stat: fs.Stats
+  let contents: string
+  try {
+    [lock_stat, contents] = await Promise.all([
+      fsp.stat(lock_path),
+      fsp.readFile(lock_path, `utf8`),
+    ])
+  } catch (error) {
+    return filesystem_error_code(error) === `ENOENT`
+  }
+
+  const record = parse_lock_record(contents)
+  if (record) return !process_is_alive(record.pid)
+  return Date.now() - lock_stat.mtimeMs >= stale_after_ms
+}
+
+async function release_sidecar_file_lock(
+  lock_path: string,
+  token: string,
+): Promise<void> {
+  try {
+    const record = parse_lock_record(await fsp.readFile(lock_path, `utf8`))
+    if (record?.token !== token) return
+    await fsp.unlink(lock_path)
+  } catch (error) {
+    if (filesystem_error_code(error) !== `ENOENT`) throw error
+  }
+}
+
+export async function with_sidecar_file_lock<T>(
+  destination: string,
+  operation: () => Promise<T>,
+  options: SidecarFileLockOptions = {},
+): Promise<T> {
+  const lock_path = `${path.resolve(destination)}.lock`
+  const wait_timeout_ms = Math.max(
+    0,
+    options.wait_timeout_ms ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS,
+  )
+  const stale_after_ms = Math.max(
+    0,
+    options.stale_after_ms ?? DEFAULT_LOCK_STALE_AFTER_MS,
+  )
+  const poll_interval_ms = Math.max(
+    1,
+    options.poll_interval_ms ?? DEFAULT_LOCK_POLL_INTERVAL_MS,
+  )
+  const started_at = Date.now()
+  const record: SidecarFileLockRecord = {
+    version: 1,
+    pid: process.pid,
+    token: randomUUID(),
+    created_at: Date.now(),
+  }
+
+  await fsp.mkdir(path.dirname(lock_path), { recursive: true })
+  while (true) {
+    try {
+      const handle = await fsp.open(lock_path, `wx`, 0o600)
+      let metadata_written = false
+      try {
+        await handle.writeFile(`${JSON.stringify(record)}\n`, `utf8`)
+        await handle.sync()
+        metadata_written = true
+      } finally {
+        await handle.close()
+        if (!metadata_written) {
+          try { await fsp.unlink(lock_path) } catch { /* best effort */ }
+        }
+      }
+      break
+    } catch (error) {
+      if (filesystem_error_code(error) !== `EEXIST`) throw error
+      if (await stale_lock_is_recoverable(lock_path, stale_after_ms)) {
+        try {
+          await fsp.unlink(lock_path)
+        } catch (unlink_error) {
+          if (filesystem_error_code(unlink_error) !== `ENOENT`) {
+            throw unlink_error
+          }
+        }
+        continue
+      }
+
+      const elapsed = Date.now() - started_at
+      if (elapsed >= wait_timeout_ms) {
+        throw new Error(
+          `Timed out waiting for sidecar lock ${lock_path}`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(
+        resolve,
+        Math.min(poll_interval_ms, wait_timeout_ms - elapsed),
+      ))
+    }
+  }
+
+  try {
+    return await operation()
+  } finally {
+    await release_sidecar_file_lock(lock_path, record.token)
+  }
+}
+
 export async function stored_sidecar_is_verified(
   destination: string,
   asset_name: string,
 ): Promise<boolean> {
   return await with_target_lock(destination, async () => {
-    return await stored_sidecar_is_verified_impl(destination, asset_name)
+    return await with_sidecar_file_lock(destination, async () => {
+      return await stored_sidecar_is_verified_impl(destination, asset_name)
+    })
   })
 }
 
@@ -350,14 +515,9 @@ async function download_verified_sidecar_impl(
   const attempt_id = randomUUID()
   const partial = `${destination}.${attempt_id}.partial`
   const receipt_partial = `${receipt}.${attempt_id}.partial`
-  const outputs = [destination, partial, receipt, receipt_partial]
-  const legacy_partials = [
-    `${destination}.partial`,
-    `${receipt}.partial`,
-  ]
+  const attempt_outputs = [partial, receipt_partial]
 
   await fsp.mkdir(path.dirname(destination), { recursive: true })
-  await remove_files([...outputs, ...legacy_partials])
 
   try {
     const checksum_contents = await fetch_checksum_metadata(
@@ -408,7 +568,7 @@ async function download_verified_sidecar_impl(
     await fsp.rename(partial, destination)
     await fsp.rename(receipt_partial, receipt)
   } catch (error) {
-    await remove_files(outputs)
+    await remove_files(attempt_outputs)
     throw error
   }
 }
@@ -422,7 +582,13 @@ function coalesced_download(
   if (active) return active
 
   const operation = with_target_lock(options.destination, async () => {
-    await download_verified_sidecar_impl(options, expected_origin)
+    await with_sidecar_file_lock(options.destination, async () => {
+      if (await stored_sidecar_is_verified_impl(
+        options.destination,
+        options.asset_name,
+      )) return
+      await download_verified_sidecar_impl(options, expected_origin)
+    })
   })
   active_downloads.set(target, operation)
   const clear = () => {

@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process'
 import * as fsp from 'node:fs/promises'
 import {
   createServer,
@@ -6,10 +7,17 @@ import {
 } from 'node:http'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, test } from 'vitest'
 
 import * as sidecar from '../sidecar'
+
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url))
+const EXTENSION_ROOT = path.resolve(TEST_DIR, `../..`)
+const VITEST_ENTRY = fileURLToPath(
+  new URL(`../vitest.mjs`, import.meta.resolve(`vitest`)),
+)
 
 type SidecarAssetUrls = (
   version: string,
@@ -46,6 +54,15 @@ type RequestSameOriginResponse = (
   url: string,
   expected_origin: string,
 ) => Promise<IncomingMessage>
+type WithSidecarFileLock = <T>(
+  destination: string,
+  operation: () => Promise<T>,
+  options?: {
+    wait_timeout_ms?: number
+    stale_after_ms?: number
+    poll_interval_ms?: number
+  },
+) => Promise<T>
 
 const api = sidecar as unknown as {
   sidecar_asset_urls?: SidecarAssetUrls
@@ -56,6 +73,7 @@ const api = sidecar as unknown as {
   assert_trusted_sidecar_urls?: AssertTrustedSidecarUrls
   resolve_trusted_sidecar_redirect?: ResolveTrustedSidecarRedirect
   request_same_origin_response?: RequestSameOriginResponse
+  with_sidecar_file_lock?: WithSidecarFileLock
 }
 
 async function with_server<T>(
@@ -94,6 +112,82 @@ async function wait_until(
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   throw new Error(failure_message)
+}
+
+type ChildResult = {
+  code: number | null
+  stdout: string
+  stderr: string
+}
+
+function spawn_sidecar_child(
+  mode: `success` | `failure`,
+  environment: {
+    base_url: string
+    destination: string
+    asset_name: string
+  },
+): { child: ChildProcess; result: Promise<ChildResult> } {
+  const child = spawn(
+    process.execPath,
+    [
+      VITEST_ENTRY,
+      `run`,
+      `src/__tests__/fixtures/sidecar-download-process.test.ts`,
+    ],
+    {
+      cwd: EXTENSION_ROOT,
+      env: {
+        ...process.env,
+        NO_COLOR: `1`,
+        CATGO_SIDECAR_CHILD_MODE: mode,
+        CATGO_SIDECAR_CHILD_BASE_URL: environment.base_url,
+        CATGO_SIDECAR_CHILD_DESTINATION: environment.destination,
+        CATGO_SIDECAR_CHILD_ASSET_NAME: environment.asset_name,
+      },
+      stdio: [`ignore`, `pipe`, `pipe`],
+    },
+  )
+  let stdout = ``
+  let stderr = ``
+  child.stdout?.setEncoding(`utf8`)
+  child.stderr?.setEncoding(`utf8`)
+  child.stdout?.on(`data`, (chunk: string) => { stdout += chunk })
+  child.stderr?.on(`data`, (chunk: string) => { stderr += chunk })
+
+  const result = new Promise<ChildResult>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill(`SIGKILL`)
+      reject(new Error(`Sidecar ${mode} child process timed out`))
+    }, 15_000)
+    child.once(`error`, (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once(`close`, (code) => {
+      clearTimeout(timer)
+      resolve({ code, stdout, stderr })
+    })
+  })
+  return { child, result }
+}
+
+async function with_timeout<T>(
+  promise: Promise<T>,
+  timeout_ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeout_ms)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 describe(`VS Code sidecar acquisition`, () => {
@@ -483,6 +577,196 @@ describe(`VS Code sidecar acquisition`, () => {
       })
     } finally {
       release_binary()
+      await fsp.rm(temp_dir, { recursive: true, force: true })
+    }
+  })
+
+  test(`preserves a successful cache across independent extension-host processes`, async () => {
+    const asset_name = `catgo-server-linux-x64`
+    const body = `verified sidecar\n`
+    const digest = `63ce0212769a70e03da7aae4b05a45c1cbdea457c44b63caffbe00714bd0c0e4`
+    const temp_dir = await fsp.mkdtemp(path.join(os.tmpdir(), `catgo-sidecar-`))
+    const destination = path.join(temp_dir, asset_name)
+    let signal_success_started: () => void = () => {}
+    let signal_failure_started: () => void = () => {}
+    let release_success: () => void = () => {}
+    let release_failure: () => void = () => {}
+    const success_started = new Promise<void>((resolve) => {
+      signal_success_started = resolve
+    })
+    const failure_started = new Promise<void>((resolve) => {
+      signal_failure_started = resolve
+    })
+    const success_release = new Promise<void>((resolve) => {
+      release_success = resolve
+    })
+    const failure_release = new Promise<void>((resolve) => {
+      release_failure = resolve
+    })
+    let success_child: ChildProcess | undefined
+    let failure_child: ChildProcess | undefined
+    let failure_requests = 0
+
+    try {
+      await with_server((request, response) => {
+        const request_url = request.url ?? ``
+        const is_failure = request_url.startsWith(`/failure/`)
+        if (is_failure) failure_requests += 1
+
+        if (request_url.endsWith(`.sha256`)) {
+          response.writeHead(200)
+          response.end(`${digest}  ${asset_name}\n`)
+          return
+        }
+        if (is_failure) {
+          response.writeHead(200)
+          response.write(`tampered `)
+          signal_failure_started()
+          void failure_release.then(() => response.end(`sidecar\n`))
+          return
+        }
+        response.writeHead(200)
+        response.write(`verified `)
+        signal_success_started()
+        void success_release.then(() => response.end(`sidecar\n`))
+      }, async (base_url) => {
+        const child_environment = { base_url, destination, asset_name }
+        const success = spawn_sidecar_child(`success`, child_environment)
+        success_child = success.child
+        await with_timeout(
+          success_started,
+          5_000,
+          `Success child never began its binary download`,
+        )
+
+        const failure = spawn_sidecar_child(`failure`, child_environment)
+        failure_child = failure.child
+        const failure_started_before_publish = await Promise.race([
+          failure_started.then(() => true),
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), 2_000)
+          }),
+        ])
+
+        release_success()
+        const success_result = await success.result
+        release_failure()
+        const failure_result = await failure.result
+
+        expect(
+          success_result.code,
+          `${success_result.stdout}\n${success_result.stderr}`,
+        ).toBe(0)
+        expect(failure_started_before_publish).toBe(false)
+        expect(
+          failure_result.code,
+          `${failure_result.stdout}\n${failure_result.stderr}`,
+        ).toBe(0)
+        expect(failure_requests).toBe(0)
+        await expect(fsp.readFile(destination, `utf8`)).resolves.toBe(body)
+        await expect(
+          fsp.readFile(`${destination}.sha256`, `utf8`),
+        ).resolves.toBe(`${digest}  ${asset_name}\n`)
+      })
+    } finally {
+      release_success()
+      release_failure()
+      if (success_child?.exitCode === null) success_child.kill(`SIGKILL`)
+      if (failure_child?.exitCode === null) failure_child.kill(`SIGKILL`)
+      await fsp.rm(temp_dir, { recursive: true, force: true })
+    }
+  }, 25_000)
+
+  test(`bounds lock waiting without stealing a live owner's lock`, async () => {
+    expect(typeof api.with_sidecar_file_lock).toBe(`function`)
+    if (!api.with_sidecar_file_lock) return
+
+    const temp_dir = await fsp.mkdtemp(path.join(os.tmpdir(), `catgo-sidecar-`))
+    const destination = path.join(temp_dir, `catgo-server-linux-x64`)
+    const lock_path = `${destination}.lock`
+    let signal_entered: () => void = () => {}
+    let release_owner: () => void = () => {}
+    const entered = new Promise<void>((resolve) => {
+      signal_entered = resolve
+    })
+    const owner_release = new Promise<void>((resolve) => {
+      release_owner = resolve
+    })
+
+    try {
+      const owner = api.with_sidecar_file_lock(destination, async () => {
+        signal_entered()
+        await owner_release
+      })
+      await entered
+      await expect(api.with_sidecar_file_lock(
+        destination,
+        async () => `unexpected`,
+        {
+          wait_timeout_ms: 40,
+          stale_after_ms: 5,
+          poll_interval_ms: 5,
+        },
+      )).rejects.toThrow(/timed out waiting for sidecar lock/i)
+      await expect(fsp.readFile(lock_path, `utf8`)).resolves.toContain(
+        `"pid":${process.pid}`,
+      )
+      release_owner()
+      await owner
+      await expect_absent(lock_path)
+    } finally {
+      release_owner()
+      await fsp.rm(temp_dir, { recursive: true, force: true })
+    }
+  })
+
+  test(`recovers a lock whose owner process no longer exists`, async () => {
+    expect(typeof api.with_sidecar_file_lock).toBe(`function`)
+    if (!api.with_sidecar_file_lock) return
+
+    const temp_dir = await fsp.mkdtemp(path.join(os.tmpdir(), `catgo-sidecar-`))
+    const destination = path.join(temp_dir, `catgo-server-linux-x64`)
+    const lock_path = `${destination}.lock`
+
+    try {
+      await fsp.writeFile(
+        lock_path,
+        `${JSON.stringify({
+          version: 1,
+          pid: 2_147_483_647,
+          token: `dead-owner`,
+          created_at: 0,
+        })}\n`,
+      )
+      await expect(api.with_sidecar_file_lock(
+        destination,
+        async () => `recovered`,
+        {
+          wait_timeout_ms: 100,
+          stale_after_ms: 0,
+          poll_interval_ms: 5,
+        },
+      )).resolves.toBe(`recovered`)
+      await expect_absent(lock_path)
+    } finally {
+      await fsp.rm(temp_dir, { recursive: true, force: true })
+    }
+  })
+
+  test(`releases the filesystem lock when the protected operation rejects`, async () => {
+    expect(typeof api.with_sidecar_file_lock).toBe(`function`)
+    if (!api.with_sidecar_file_lock) return
+
+    const temp_dir = await fsp.mkdtemp(path.join(os.tmpdir(), `catgo-sidecar-`))
+    const destination = path.join(temp_dir, `catgo-server-linux-x64`)
+    const lock_path = `${destination}.lock`
+
+    try {
+      await expect(api.with_sidecar_file_lock(destination, async () => {
+        throw new Error(`intentional operation failure`)
+      })).rejects.toThrow(/intentional operation failure/)
+      await expect_absent(lock_path)
+    } finally {
       await fsp.rm(temp_dir, { recursive: true, force: true })
     }
   })
