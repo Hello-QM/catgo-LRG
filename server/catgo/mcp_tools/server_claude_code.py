@@ -825,6 +825,61 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_verify",
+        description=(
+            "Physics sanity-check an agent-produced computational-chemistry RESULT "
+            "before trusting or reporting it. Catches SILENT errors — the run exits "
+            "0, the numbers look normal, but the physics is wrong: PAW/POTCAR "
+            "reference mismatch, binding energy outside the physical window, "
+            "gas-phase step missing translational/rotational entropy, ZPE zero-fill, "
+            "a STALE 'reached required accuracy' flag, a mid-run (non-converged) "
+            "energy, a job marked COMPLETED whose products never appeared, a "
+            "corrupted Hessian that n_imag cannot detect, a stale-geometry frequency "
+            "run, residual imaginary modes, an out-of-range limiting potential, or "
+            "an MLIP whose absolute force RMSE flatters a poor relative fit. Every "
+            "gate reports PASS / FAIL / SKIP (absent inputs are declared, never "
+            "silently dropped). Pass the parsed result dict; unknown fields are "
+            "ignored. Use after catgo_analyze / harvest, before concluding."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "description": (
+                        "Parsed result dict. Recognized keys (all optional): dG, "
+                        "species; ads_titels, bare_titels; nelect_ads, nelect_bare, "
+                        "zval_adsorbate; fmax, ediffg; energy, n_atoms; opt_conv; "
+                        "products_found, products_expected; hessian_max_asym; "
+                        "freq_frame0_maxdev; n_imag, imag_max_cm; ul_v; "
+                        "ladder {species:{zpe,gcorr,gas_thermo_full}}; rmse_f, force_std."
+                    ),
+                },
+                "require": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional gate names that MUST run; the tool reports an error "
+                        "if their inputs are absent (use so a result missing a field "
+                        "fails loudly instead of scoring a silent clean sheet)."
+                    ),
+                },
+                "claims": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional claim types this result asserts, for the verifiability "
+                        "check. Known: binding_dG, her_dGH, band_gap, field_energy, "
+                        "stratified, converged_E. A claim whose provenance is absent is "
+                        "flagged UNVERIFIABLE — the tool refuses to certify a value it "
+                        "cannot check, rather than passing it silently."
+                    ),
+                },
+            },
+            "required": ["result"],
+        },
+    ),
+    Tool(
         name="catgo_heterostructure",
         description=(
             "Build heterostructures / interfaces / van der Waals stacks "
@@ -2286,6 +2341,70 @@ async def _handle_validate_config(client, args: dict) -> list[TextContent]:
     return [T(type="text", text=verdict + "\n" + "\n".join(lines))]
 
 
+def _handle_verify(args: dict) -> list[TextContent]:
+    """Dispatch catgo_verify — physics sanity gates + verifiability over a result dict.
+
+    Pure-local (no backend call): audits result against the comp-chem silent-error
+    taxonomy and returns per-gate PASS/FAIL/SKIP plus a coverage summary; with `claims`,
+    also runs the verifiability layer (a claim lacking provenance is UNVERIFIABLE, not a
+    silent pass). Imported lazily so a missing verify_gates module never breaks other tools.
+    """
+    T = TextContent
+    result = args.get("result")
+    if not isinstance(result, dict):
+        return [T(type="text", text="catgo_verify requires 'result' as an object/dict.")]
+    try:
+        from . import verify_gates
+    except ImportError:
+        import verify_gates  # flat-layout fallback
+    try:
+        report = verify_gates.audit(result, require=args.get("require"))
+    except ValueError as e:
+        return [T(type="text", text=f"catgo_verify: {e}")]
+
+    cov = report["coverage"]
+    # clear the pending-verification state ONLY if a gate actually ran — an empty
+    # verify (all SKIP) must not bypass the enforcement gate.
+    try:
+        from . import verify_enforcement as _enf
+    except ImportError:
+        import verify_enforcement as _enf
+    _enf.mark_verified(cov["ran"] > 0)
+    lines = []
+    for v in report["verdicts"]:
+        mark = {"PASS": "✓", "FAIL": "✗", "SKIP": "·"}[v["status"]]
+        lines.append(f"  {mark} [{v['taxon']}] {v['gate']}: {v['detail']}")
+    verdict = "FAIL" if cov["failed"] else ("PASS" if cov["ran"] else "NO-COVERAGE")
+    head = (
+        f"catgo_verify → {verdict}  "
+        f"({cov['ran']} ran, {cov['failed']} failed, {cov['skipped']} skipped "
+        f"of {cov['gates_total']} gates)"
+    )
+    if cov["failed"]:
+        head += f"\n  failed taxa: {', '.join(cov['failed_taxa'])} "
+        head += "— silent-error class(es); do NOT report this result as correct."
+    elif not cov["ran"]:
+        head += "\n  no gate had its inputs — this is NOT a clean bill of health."
+
+    claims = args.get("claims") or []
+    vlines = []
+    if claims:
+        vres = verify_gates.verifiability(result, claims)  # compute once
+        for vf in vres:
+            m = {"VERIFIABLE": "✓", "UNVERIFIABLE": "✗", "UNKNOWN-CLAIM": "?"}[vf["status"]]
+            vlines.append(f"  {m} claim '{vf['claim']}': {vf['status']} — {vf['detail']}")
+        # default-deny: an unregistered claim (UNKNOWN-CLAIM) is NOT a silent pass.
+        unver = [vf for vf in vres if vf["status"] in ("UNVERIFIABLE", "UNKNOWN-CLAIM")]
+        if unver:
+            head += (f"\n  {len(unver)} claim(s) not certified (UNVERIFIABLE / UNKNOWN-CLAIM) "
+                     "— asserted but lacking provenance to check.")
+
+    body = head + "\n" + "\n".join(lines)
+    if vlines:
+        body += "\n\nverifiability:\n" + "\n".join(vlines)
+    return [T(type="text", text=body)]
+
+
 async def _handle_skills(args: dict) -> list[TextContent]:
     """Dispatch catgo_skills actions."""
     T = TextContent
@@ -3393,6 +3512,26 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     arguments = arguments or {}
     T = TextContent
 
+    # verification enforcement (additive): an irreversible call (HPC submit) while
+    # numeric results are pending un-verified is blocked outright — the agent is
+    # told to run catgo_verify first instead of silently skipping the gate.
+    try:
+        from . import verify_enforcement as _enf
+    except ImportError:
+        import verify_enforcement as _enf  # flat-layout fallback
+    decision, reason = _enf.precheck(name, arguments)
+    if decision == _enf.FORBIDDEN:
+        return [T(type="text", text=reason)]
+
+    result = await _dispatch_tool(name, arguments)
+    ok = not (result and isinstance(result[0].text, str) and
+              result[0].text.startswith(("Unknown tool:", f"{name} failed:", "Cannot connect")))
+    _enf.postmark(name, arguments, ok=ok)
+    return result
+
+
+async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:
+    T = TextContent
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if name == "catgo_structure":
@@ -3421,6 +3560,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 return await _handle_skills(arguments)
             elif name == "catgo_validate_config":
                 return await _handle_validate_config(client, arguments)
+            elif name == "catgo_verify":
+                return _handle_verify(arguments)
             elif name == "catgo_quickbuild":
                 return await _handle_quickbuild(client, arguments)
             elif name == "catgo_heterostructure":

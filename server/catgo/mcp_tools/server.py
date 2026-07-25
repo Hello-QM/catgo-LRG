@@ -56,6 +56,9 @@ from catgo.mcp_tools.structure_tools import (
     _handle_fetch_molecule,
 )
 from catgo.mcp_tools.plugin_tools import _handle_plugin_analyzer, _handle_plugin_reader
+# verification layer (additive): reuse the merged variant's handler + enforcement
+from catgo.mcp_tools.server_claude_code import _handle_verify
+from catgo.mcp_tools import verify_enforcement as _verify_enf
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +374,40 @@ async def handle_list_tools() -> list[Tool]:
         "and ~/.catgo/tools/ (trust=sandboxed or user)."
     )
 
+    all_tools.append(Tool(
+        name="catgo_verify",
+        description=(
+            "Physics sanity-check an agent-produced computational-chemistry RESULT "
+            "before trusting or reporting it. Catches SILENT errors — the run exits 0, "
+            "the numbers look normal, but the physics is wrong: PAW/POTCAR mismatch, "
+            "binding energy outside the physical window, gas-phase step missing "
+            "translational/rotational entropy, ZPE zero-fill, a STALE convergence flag, "
+            "a mid-run energy, a COMPLETED job whose products never appeared, a corrupted "
+            "Hessian n_imag cannot detect, a stale-geometry freq run, residual imaginary "
+            "modes, an out-of-range limiting potential, or an MLIP whose absolute force "
+            "RMSE flatters a poor relative fit. Every gate reports PASS/FAIL/SKIP. With "
+            "`claims`, a claim lacking provenance is flagged UNVERIFIABLE (refuse to "
+            "certify), not passed silently. Use after analysis/harvest, before concluding."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "result": {"type": "object", "description": (
+                    "Parsed result dict. Optional keys: dG, species; ads_titels, "
+                    "bare_titels; nelect_ads, nelect_bare, zval_adsorbate; fmax, ediffg; "
+                    "energy, n_atoms; opt_conv; products_found, products_expected; "
+                    "hessian_max_asym; freq_frame0_maxdev; n_imag, imag_max_cm; ul_v; "
+                    "ladder{species:{zpe,gcorr,gas_thermo_full}}; rmse_f, force_std.")},
+                "require": {"type": "array", "items": {"type": "string"},
+                            "description": "Gate names that MUST run (error if inputs absent)."},
+                "claims": {"type": "array", "items": {"type": "string"},
+                           "description": "Claim types asserted (binding_dG, her_dGH, band_gap, "
+                                          "field_energy, stratified, converged_E) for the "
+                                          "verifiability check."},
+            },
+            "required": ["result"],
+        },
+    ))
     all_tools.extend([
         Tool(name="catgo_create_tool", description=_CREATE_TOOL_DESC, inputSchema={
             "type": "object",
@@ -502,6 +539,24 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
+    # verification enforcement (additive): block an irreversible submit while numeric
+    # results are pending un-verified; track produced/verified state around dispatch.
+    decision, reason = _verify_enf.precheck(name, arguments)
+    if decision == _verify_enf.FORBIDDEN:
+        return [TextContent(type="text", text=reason)]
+    result = await _dispatch_tool(name, arguments)
+    ok = not (result and isinstance(result[0].text, str) and
+              (result[0].text.startswith("Unknown tool:") or result[0].text.startswith("Error:")))
+    _verify_enf.postmark(name, arguments, ok=ok)
+    return result
+
+
+async def _dispatch_tool(name: str, arguments: dict | None) -> list[TextContent]:
+    arguments = arguments or {}
+
+    # verification layer (pure-local, no backend): audit + verifiability
+    if name == "catgo_verify":
+        return _handle_verify(arguments)
 
     # Find tool definition
     tool_def = next((t for t in TOOLS if t["name"] == name), None)
