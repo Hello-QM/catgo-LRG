@@ -63,8 +63,20 @@ function bundled_binary_path(context: vscode.ExtensionContext): string {
   return path.join(context.extensionPath, 'bin', get_binary_name())
 }
 
+export function sidecar_cache_path(
+  storage_root: string,
+  version: string,
+  asset_name: string,
+): string {
+  return path.join(storage_root, `bin`, `v${version}`, asset_name)
+}
+
 function downloaded_binary_path(context: vscode.ExtensionContext): string {
-  return path.join(context.globalStorageUri.fsPath, 'bin', get_binary_name())
+  return sidecar_cache_path(
+    context.globalStorageUri.fsPath,
+    pkg_json.version,
+    get_binary_name(),
+  )
 }
 
 export function sidecar_asset_urls(

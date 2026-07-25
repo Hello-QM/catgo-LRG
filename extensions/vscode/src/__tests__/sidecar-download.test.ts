@@ -24,6 +24,11 @@ type SidecarAssetUrls = (
   version: string,
   asset_name: string,
 ) => { binary: string; checksum: string }
+type SidecarCachePath = (
+  storage_root: string,
+  version: string,
+  asset_name: string,
+) => string
 type ParseSidecarChecksum = (
   contents: string,
   expected_filename: string,
@@ -67,6 +72,7 @@ type WithSidecarFileLock = <T>(
 
 const api = sidecar as unknown as {
   sidecar_asset_urls?: SidecarAssetUrls
+  sidecar_cache_path?: SidecarCachePath
   parse_sidecar_checksum?: ParseSidecarChecksum
   download_verified_sidecar?: DownloadVerifiedSidecar
   download_verified_sidecar_from_origin?: DownloadVerifiedSidecarFromOrigin
@@ -331,6 +337,32 @@ describe(`VS Code sidecar acquisition`, () => {
       binary: `https://dl.catgo-ucsd.org/v1.4.6/catgo-server-linux-x64`,
       checksum: `https://dl.catgo-ucsd.org/v1.4.6/catgo-server-linux-x64.sha256`,
     })
+  })
+
+  test(`isolates downloaded sidecars by extension version`, () => {
+    expect(typeof api.sidecar_cache_path).toBe(`function`)
+    if (!api.sidecar_cache_path) return
+
+    const storage_root = path.join(os.tmpdir(), `catgo-storage`)
+    const asset_name = `catgo-server-linux-x64`
+    const old_cache = api.sidecar_cache_path(
+      storage_root,
+      `1.4.5`,
+      asset_name,
+    )
+    const current_cache = api.sidecar_cache_path(
+      storage_root,
+      `1.4.6`,
+      asset_name,
+    )
+
+    expect(old_cache).toBe(
+      path.join(storage_root, `bin`, `v1.4.5`, asset_name),
+    )
+    expect(current_cache).toBe(
+      path.join(storage_root, `bin`, `v1.4.6`, asset_name),
+    )
+    expect(current_cache).not.toBe(old_cache)
   })
 
   test(`accepts only a checksum bound to the requested asset filename`, () => {
