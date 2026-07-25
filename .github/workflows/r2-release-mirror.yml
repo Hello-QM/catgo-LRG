@@ -5,9 +5,8 @@
 #   <tag>/<asset>   e.g. v1.4.6/CatGo_1.4.6_x64-setup.exe
 #   latest.json     updater manifest with URLs rewritten to the mirror
 #   index.html      self-contained bilingual all-platform download page
-# Older installers, updater metadata, and legal bundles are pruned after a
-# successful sync. Version-coupled catgo-server sidecars and their checksums
-# remain available so an older VS Code extension can recover a missing cache.
+# Versioned release prefixes remain available for rollback and for older VS
+# Code extensions that must recover a version-coupled catgo-server sidecar.
 #
 # One-time setup (Cloudflare dashboard):
 #   1. R2 → Create bucket `catgo-releases`.
@@ -255,12 +254,22 @@ jobs:
           aws s3 cp \
             "s3://$R2_BUCKET/$backup_prefix/previous-root.json" \
             "$work/previous-root.json"
-          aws s3 cp "s3://$R2_BUCKET/latest.json" "$work/promoted-latest.json"
-          aws s3 cp "s3://$R2_BUCKET/index.html" "$work/promoted-index.html"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-latest.json" \
+            "$work/promoted-latest.json"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-index.html" \
+            "$work/promoted-index.html"
+          mkdir "$work/assets"
+          aws s3 sync \
+            "s3://$R2_BUCKET/$MIRROR_TAG/" \
+            "$work/assets/" \
+            --only-show-errors
 
           verify_args=(
             verify
             --receipt "$work/receipt.json"
+            --assets-dir "$work/assets"
             --tag "$MIRROR_TAG"
             --source-commit "$EXPECTED_SOURCE_COMMIT"
             --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT"
@@ -285,6 +294,73 @@ jobs:
           fi
           node scripts/verify-release-promotion-receipt.mjs \
             "${verify_args[@]}"
+
+          inspect_root_object() {
+            key=$1
+            promoted_hash=$2
+            previous_present=$3
+            previous_hash=$4
+            output=$5
+            error_log=$6
+            if aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$key" > /dev/null 2>"$error_log"; then
+              aws s3 cp \
+                "s3://$R2_BUCKET/$key" \
+                "$output" \
+                --only-show-errors
+              current_hash=$(sha256sum "$output" | cut -d ' ' -f 1)
+              if [ "$current_hash" = "$promoted_hash" ]; then
+                return 0
+              fi
+              if [ "$previous_present" = "true" ] &&
+                 [ "$current_hash" = "$previous_hash" ]; then
+                return 0
+              fi
+            elif grep -Eqi '404|Not Found|NoSuchKey' "$error_log" &&
+                 [ "$previous_present" = "false" ]; then
+              return 0
+            else
+              cat "$error_log" >&2
+            fi
+            echo "::error::Unexpected current R2 root object: $key"
+            return 1
+          }
+          promoted_latest_hash=$(
+            jq -r '.latestSha256' "$work/receipt.json"
+          )
+          promoted_index_hash=$(
+            jq -r '.indexSha256' "$work/receipt.json"
+          )
+          previous_latest_present=$(
+            jq -r '.latest.present' "$work/previous-root.json"
+          )
+          previous_latest_hash=$(
+            jq -r '.latest.sha256 // ""' "$work/previous-root.json"
+          )
+          previous_index_present=$(
+            jq -r '.index.present' "$work/previous-root.json"
+          )
+          previous_index_hash=$(
+            jq -r '.index.sha256 // ""' "$work/previous-root.json"
+          )
+          # Each object may independently be either the promoted or previous
+          # byte sequence. This makes a partially completed rollback safe to
+          # retry without accepting unrelated root content.
+          inspect_root_object \
+            latest.json \
+            "$promoted_latest_hash" \
+            "$previous_latest_present" \
+            "$previous_latest_hash" \
+            "$work/current-latest.json" \
+            "$work/current-latest.error"
+          inspect_root_object \
+            index.html \
+            "$promoted_index_hash" \
+            "$previous_index_present" \
+            "$previous_index_hash" \
+            "$work/current-index.html" \
+            "$work/current-index.error"
 
           if jq -e '.index.present == true' \
               "$work/previous-root.json" > /dev/null; then
@@ -698,6 +774,12 @@ jobs:
           require_unused_key \
             "$backup_prefix/previous-root.json" \
             "$work/backup-head.error"
+          require_unused_key \
+            "$backup_prefix/promoted-latest.json" \
+            "$work/promoted-latest-head.error"
+          require_unused_key \
+            "$backup_prefix/promoted-index.html" \
+            "$work/promoted-index-head.error"
 
           backup_root_object() {
             key=$1
@@ -751,6 +833,14 @@ jobs:
               "$work/previous-index.html" \
               "s3://$R2_BUCKET/$backup_prefix/index.html"
           fi
+          aws s3 cp \
+            dist/latest.json \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-latest.json" \
+            --content-type application/json
+          aws s3 cp \
+            index.html \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-index.html" \
+            --content-type 'text/html; charset=utf-8'
 
           receipt_args=(
             create
@@ -761,6 +851,7 @@ jobs:
             --promotion-id "$PROMOTION_ID"
             --latest dist/latest.json
             --index index.html
+            --assets-dir dist
             --previous-state "$work/previous-root.json"
           )
           if [ "$previous_latest_hash" != "absent" ]; then
@@ -805,6 +896,8 @@ jobs:
           receipt=$(mktemp)
           manifest=$(mktemp)
           index_page=$(mktemp)
+          assets_dir=$(mktemp -d)
+          trap 'rm -rf "$assets_dir"; rm -f "$receipt" "$manifest" "$index_page"' EXIT
           verified=false
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error \
@@ -826,30 +919,39 @@ jobs:
                  --header 'Cache-Control: no-cache' \
                  "$R2_PUBLIC_BASE_URL/promotion-receipts/$PROMOTION_ID.json?promotion=$PROMOTION_ID" \
                  --output "$receipt" &&
+               jq -e \
+                 '.schemaVersion == 2 and
+                  (.requiredAssets | type == "array")' \
+                 "$receipt" > /dev/null &&
                grep -Fq "$MIRROR_TAG" "$index_page" &&
-               node scripts/verify-release-promotion-receipt.mjs \
-                 verify \
-                 --receipt "$receipt" \
-                 --tag "$MIRROR_TAG" \
-                 --source-commit "$EXPECTED_SOURCE_COMMIT" \
-                 --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
-                 --promotion-id "$PROMOTION_ID" \
-                 --latest "$manifest" \
-                 --index "$index_page"; then
+               rm -rf "$assets_dir" &&
+               mkdir "$assets_dir"; then
               assets_available=true
               while IFS= read -r asset; do
-                status=$(
-                  curl --head --silent --show-error \
-                    --output /dev/null \
-                    --write-out '%{http_code}' \
-                    "$R2_PUBLIC_BASE_URL/$MIRROR_TAG/$asset?promotion=$PROMOTION_ID"
-                )
-                if [ "$status" != "200" ]; then
+                if ! [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
                   assets_available=false
                   break
                 fi
-              done < <(jq -r '.requiredAssets[]' "$receipt")
-              if [ "$assets_available" = "true" ]; then
+                asset_path="$assets_dir/$asset"
+                if ! curl --fail --location --silent --show-error \
+                    --header 'Cache-Control: no-cache' \
+                    --output "$asset_path" \
+                    "$R2_PUBLIC_BASE_URL/$MIRROR_TAG/$asset?promotion=$PROMOTION_ID"; then
+                  assets_available=false
+                  break
+                fi
+              done < <(jq -r '.requiredAssets[].name' "$receipt")
+              if [ "$assets_available" = "true" ] &&
+                 node scripts/verify-release-promotion-receipt.mjs \
+                   verify \
+                   --receipt "$receipt" \
+                   --assets-dir "$assets_dir" \
+                   --tag "$MIRROR_TAG" \
+                   --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                   --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                   --promotion-id "$PROMOTION_ID" \
+                   --latest "$manifest" \
+                   --index "$index_page"; then
                 verified=true
                 break
               fi

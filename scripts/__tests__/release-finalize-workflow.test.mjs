@@ -144,12 +144,46 @@ test('promotes and verifies Cloudflare before granting GitHub release visibility
     promotion.run,
     /verify-release-promotion-receipt\.mjs/,
   )
+  assert.match(promotion.run, /\.requiredAssets\[\]\.name/)
+  assert.match(promotion.run, /curl[\s\S]*--output "\$asset_path"/)
+  assert.match(promotion.run, /--assets-dir "\$assets_dir"/)
 })
 
 test('globally serializes finalization across release tags', () => {
   const current = workflow()
   assert.equal(current.concurrency.group, 'finalize-release')
   assert.equal(current.concurrency['cancel-in-progress'], false)
+})
+
+test('independently compensates every failed finalization path after validation', () => {
+  const current = workflow()
+  const cleanup = current.jobs['compensate-finalization-failure']
+
+  assert.deepEqual(cleanup.needs, [
+    'validate',
+    'promote-cloudflare',
+    'publish',
+  ])
+  assert.match(cleanup.if, /always\(\)/)
+  assert.match(cleanup.if, /validate\.result == 'success'/)
+  assert.match(cleanup.if, /publish\.result != 'success'/)
+  assert.deepEqual(cleanup.permissions, {
+    actions: 'write',
+    contents: 'write',
+  })
+  const run = cleanup.steps.map((step) => step.run ?? '').join('\n')
+  assert.match(run, /promotion_title=/)
+  assert.match(run, /gh run view "\$promotion_run_id"/)
+  assert.match(
+    run,
+    /gh api[\s\\]*"repos\/\$REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/,
+  )
+  assert.match(
+    run,
+    /gh workflow run r2-release-mirror\.yml[\s\S]*-f "rollback_root=true"/,
+  )
+  assert.match(run, /gh run watch "\$rollback_run_id"/)
+  assert.match(run, /conclusion.*success/)
 })
 
 test('preflight, publication, and postflight revalidate Cloudflare in one rollback-protected step', () => {
@@ -180,6 +214,11 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   )
   assert.match(
     mutation.run,
+    /gh api "repos\/\$REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/,
+  )
+  assert.doesNotMatch(mutation.run, /if \[ "\$published" = "true" \]/)
+  assert.match(
+    mutation.run,
     /gh workflow run r2-release-mirror\.yml[\s\S]*-f "rollback_root=true"/,
   )
   assert.match(mutation.run, /gh run watch "\$rollback_run_id"/)
@@ -200,11 +239,12 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
     mutation.run,
     /verify-release-promotion-receipt\.mjs/,
   )
-  assert.match(
+  assert.doesNotMatch(
     mutation.run,
     /(?:--head|-I)[\s\S]*http_code/,
   )
-  assert.match(mutation.run, /requiredAssets/)
+  assert.match(mutation.run, /\.requiredAssets\[\]\.name/)
+  assert.match(mutation.run, /--assets-dir "\$assets_dir"/)
   const firstSnapshot = mutation.run.indexOf('actual_snapshot=')
   const secondSnapshot = mutation.run.indexOf(
     'post_snapshot=',

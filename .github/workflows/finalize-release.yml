@@ -288,6 +288,8 @@ jobs:
           receipt=$(mktemp)
           manifest=$(mktemp)
           index_page=$(mktemp)
+          assets_dir=$(mktemp -d)
+          trap 'rm -rf "$assets_dir"; rm -f "$receipt" "$manifest" "$index_page"' EXIT
           promoted=false
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error \
@@ -309,30 +311,39 @@ jobs:
                  --header 'Cache-Control: no-cache' \
                  "https://dl.catgo-ucsd.org/promotion-receipts/$promotion_id.json?promotion=$promotion_id" \
                  --output "$receipt" &&
+               jq -e \
+                 '.schemaVersion == 2 and
+                  (.requiredAssets | type == "array")' \
+                 "$receipt" > /dev/null &&
                grep -Fq "$RELEASE_TAG" "$index_page" &&
-               node scripts/verify-release-promotion-receipt.mjs \
-                 verify \
-                 --receipt "$receipt" \
-                 --tag "$RELEASE_TAG" \
-                 --source-commit "$EXPECTED_SOURCE_COMMIT" \
-                 --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
-                 --promotion-id "$promotion_id" \
-                 --latest "$manifest" \
-                 --index "$index_page"; then
+               rm -rf "$assets_dir" &&
+               mkdir "$assets_dir"; then
               assets_available=true
               while IFS= read -r asset; do
-                status=$(
-                  curl --head --silent --show-error \
-                    --output /dev/null \
-                    --write-out '%{http_code}' \
-                    "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$promotion_id"
-                )
-                if [ "$status" != "200" ]; then
+                if ! [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
                   assets_available=false
                   break
                 fi
-              done < <(jq -r '.requiredAssets[]' "$receipt")
-              if [ "$assets_available" = "true" ]; then
+                asset_path="$assets_dir/$asset"
+                if ! curl --fail --location --silent --show-error \
+                    --header 'Cache-Control: no-cache' \
+                    --output "$asset_path" \
+                    "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$promotion_id"; then
+                  assets_available=false
+                  break
+                fi
+              done < <(jq -r '.requiredAssets[].name' "$receipt")
+              if [ "$assets_available" = "true" ] &&
+                 node scripts/verify-release-promotion-receipt.mjs \
+                   verify \
+                   --receipt "$receipt" \
+                   --assets-dir "$assets_dir" \
+                   --tag "$RELEASE_TAG" \
+                   --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                   --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                   --promotion-id "$promotion_id" \
+                   --latest "$manifest" \
+                   --index "$index_page"; then
                 promoted=true
                 break
               fi
@@ -369,11 +380,11 @@ jobs:
       - name: Publish with atomic identity recheck and rollback
         run: |
           set -Eeuo pipefail
-          published=false
           verify_cloudflare_promotion() {
             receipt=$(mktemp)
             manifest=$(mktemp)
             index_page=$(mktemp)
+            assets_dir=$(mktemp -d)
             for attempt in $(seq 1 60); do
               if curl --fail --silent --show-error \
                    --header 'Cache-Control: no-cache' \
@@ -387,35 +398,46 @@ jobs:
                    --header 'Cache-Control: no-cache' \
                    "https://dl.catgo-ucsd.org/promotion-receipts/$PROMOTION_ID.json?promotion=$PROMOTION_ID" \
                    --output "$receipt" &&
-                 node scripts/verify-release-promotion-receipt.mjs \
-                   verify \
-                   --receipt "$receipt" \
-                   --tag "$RELEASE_TAG" \
-                   --source-commit "$EXPECTED_SOURCE_COMMIT" \
-                   --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
-                   --promotion-id "$PROMOTION_ID" \
-                   --latest "$manifest" \
-                   --index "$index_page"; then
+                 jq -e \
+                   '.schemaVersion == 2 and
+                    (.requiredAssets | type == "array")' \
+                   "$receipt" > /dev/null &&
+                 rm -rf "$assets_dir" &&
+                 mkdir "$assets_dir"; then
                 assets_available=true
                 while IFS= read -r asset; do
-                  status=$(
-                    curl --head --silent --show-error \
-                      --output /dev/null \
-                      --write-out '%{http_code}' \
-                      "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$PROMOTION_ID"
-                  )
-                  if [ "$status" != "200" ]; then
+                  if ! [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
                     assets_available=false
                     break
                   fi
-                done < <(jq -r '.requiredAssets[]' "$receipt")
-                if [ "$assets_available" = "true" ]; then
+                  asset_path="$assets_dir/$asset"
+                  if ! curl --fail --location --silent --show-error \
+                      --header 'Cache-Control: no-cache' \
+                      --output "$asset_path" \
+                      "https://dl.catgo-ucsd.org/$RELEASE_TAG/$asset?promotion=$PROMOTION_ID"; then
+                    assets_available=false
+                    break
+                  fi
+                done < <(jq -r '.requiredAssets[].name' "$receipt")
+                if [ "$assets_available" = "true" ] &&
+                   node scripts/verify-release-promotion-receipt.mjs \
+                     verify \
+                     --receipt "$receipt" \
+                     --assets-dir "$assets_dir" \
+                     --tag "$RELEASE_TAG" \
+                     --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                     --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                     --promotion-id "$PROMOTION_ID" \
+                     --latest "$manifest" \
+                     --index "$index_page"; then
+                  rm -rf "$assets_dir"
                   rm -f "$receipt" "$manifest" "$index_page"
                   return 0
                 fi
               fi
               sleep 5
             done
+            rm -rf "$assets_dir"
             rm -f "$receipt" "$manifest" "$index_page"
             return 1
           }
@@ -500,19 +522,32 @@ jobs:
             trap - ERR
             set +e
             compensation_failed=false
-            if [ "$published" = "true" ]; then
-              echo "::warning::Publication postflight failed; restoring draft state."
-              if ! gh release edit "$RELEASE_TAG" \
+            github_draft_confirmed=false
+            release_state=$(mktemp)
+            for attempt in $(seq 1 20); do
+              if gh api \
+                   "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                   > "$release_state"; then
+                if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
+                  github_draft_confirmed=true
+                  break
+                fi
+                echo "::warning::Restoring $RELEASE_TAG to draft state."
+                gh release edit "$RELEASE_TAG" \
                   --repo "$REPOSITORY" \
-                  --draft=true; then
-                echo "::error::Failed to restore $RELEASE_TAG to draft."
+                  --draft=true || true
+              fi
+              sleep 3
+            done
+            if [ "$github_draft_confirmed" != "true" ]; then
+              echo "::error::Could not confirm GitHub draft state; preserving Cloudflare visibility to avoid a split release."
+              compensation_failed=true
+            else
+              echo "::warning::Restoring the previous Cloudflare root."
+              if ! dispatch_cloudflare_rollback; then
+                echo "::error::Failed to restore the previous Cloudflare root."
                 compensation_failed=true
               fi
-            fi
-            echo "::warning::Restoring the previous Cloudflare root."
-            if ! dispatch_cloudflare_rollback; then
-              echo "::error::Failed to restore the previous Cloudflare root."
-              compensation_failed=true
             fi
             if [ "$compensation_failed" = "true" ]; then
               echo "::error::Release compensation was incomplete."
@@ -556,7 +591,6 @@ jobs:
             --repo "$REPOSITORY" \
             --draft=false \
             --latest
-          published=true
 
           post_json=$(mktemp)
           gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$post_json"
@@ -574,3 +608,134 @@ jobs:
           verify_cloudflare_promotion ||
             fail "Cloudflare promotion failed critical-section postflight."
           trap - ERR
+
+  compensate-finalization-failure:
+    name: Compensate failed release finalization
+    needs: [validate, promote-cloudflare, publish]
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      needs.publish.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    permissions:
+      actions: write
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
+      EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Restore a draft release and its previous Cloudflare root
+        run: |
+          set -euo pipefail
+          promotion_title="R2 promote $RELEASE_TAG [$PROMOTION_ID]"
+          promotion_run_id=
+          for attempt in $(seq 1 60); do
+            promotion_run_id=$(
+              gh run list \
+                --repo "$REPOSITORY" \
+                --workflow r2-release-mirror.yml \
+                --event workflow_dispatch \
+                --limit 100 \
+                --json databaseId,displayTitle \
+                --jq ".[] |
+                  select(.displayTitle == \"$promotion_title\") |
+                  .databaseId" |
+                head -n 1
+            )
+            [ -n "$promotion_run_id" ] && break
+            sleep 2
+          done
+          if [ -z "$promotion_run_id" ]; then
+            echo "No R2 promotion run was dispatched; no public root to restore."
+            exit 0
+          fi
+
+          # The promotion job may have lost its API response while the
+          # dispatched workflow continued. Resolve the durable remote result.
+          gh run watch "$promotion_run_id" \
+            --repo "$REPOSITORY" \
+            --interval 15 || true
+          promotion_result=$(mktemp)
+          gh run view "$promotion_run_id" \
+            --repo "$REPOSITORY" \
+            --json status,conclusion,headBranch \
+            > "$promotion_result"
+          if ! jq -e \
+              --arg branch "$DEFAULT_BRANCH" \
+              '.status == "completed" and
+               .conclusion == "success" and
+               .headBranch == $branch' \
+              "$promotion_result" > /dev/null; then
+            echo "R2 promotion did not succeed; its own compensation owns any partial mutation."
+            exit 0
+          fi
+
+          release_state=$(mktemp)
+          github_draft_confirmed=false
+          for attempt in $(seq 1 20); do
+            if gh api \
+                 "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                 > "$release_state"; then
+              if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
+                github_draft_confirmed=true
+                break
+              fi
+              gh release edit "$RELEASE_TAG" \
+                --repo "$REPOSITORY" \
+                --draft=true || true
+            fi
+            sleep 3
+          done
+          if [ "$github_draft_confirmed" != "true" ]; then
+            echo "::error::Could not confirm GitHub draft state; refusing to create a split release by rolling back only Cloudflare."
+            exit 1
+          fi
+
+          rollback_title="R2 rollback $RELEASE_TAG [$PROMOTION_ID]"
+          gh workflow run r2-release-mirror.yml \
+            --repo "$REPOSITORY" \
+            --ref "$DEFAULT_BRANCH" \
+            -f "tag=$RELEASE_TAG" \
+            -f "rollback_root=true" \
+            -f "expected_source_commit=$EXPECTED_SOURCE_COMMIT" \
+            -f "expected_asset_snapshot=$EXPECTED_ASSET_SNAPSHOT" \
+            -f "promotion_id=$PROMOTION_ID"
+          rollback_run_id=
+          for attempt in $(seq 1 60); do
+            rollback_run_id=$(
+              gh run list \
+                --repo "$REPOSITORY" \
+                --workflow r2-release-mirror.yml \
+                --event workflow_dispatch \
+                --limit 100 \
+                --json databaseId,displayTitle \
+                --jq ".[] |
+                  select(.displayTitle == \"$rollback_title\") |
+                  .databaseId" |
+                head -n 1
+            )
+            [ -n "$rollback_run_id" ] && break
+            sleep 2
+          done
+          [ -n "$rollback_run_id" ]
+          gh run watch "$rollback_run_id" \
+            --repo "$REPOSITORY" \
+            --exit-status \
+            --interval 15
+          rollback_result=$(mktemp)
+          gh run view "$rollback_run_id" \
+            --repo "$REPOSITORY" \
+            --json status,conclusion,headBranch \
+            > "$rollback_result"
+          jq -e \
+            --arg branch "$DEFAULT_BRANCH" \
+            '.status == "completed" and
+             .conclusion == "success" and
+             .headBranch == $branch' \
+            "$rollback_result" > /dev/null
