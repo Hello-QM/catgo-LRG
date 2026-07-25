@@ -27,15 +27,167 @@ ATOMIC_SYMBOL = {
 }
 
 
+def _parse_orientation_blocks(lines, orientation):
+    geometries = []
+    for i, line in enumerate(lines):
+        if orientation not in line:
+            continue
+
+        atoms = []
+        j = i + 5
+        while j < len(lines) and "-----" not in lines[j]:
+            parts = lines[j].split()
+            if len(parts) >= 6:
+                anum = int(parts[1])
+                x, y, z = float(parts[3]), float(parts[4]), float(parts[5])
+                sym = ATOMIC_SYMBOL.get(anum, f"X{anum}")
+                atoms.append((sym, x, y, z))
+            j += 1
+        if atoms:
+            geometries.append(atoms)
+
+    return geometries
+
+
+def _parse_checkpoint_geometry(content):
+    match = re.search(
+        r"Redundant internal coordinates[^\r\n]*\r?\n"
+        r"(.*?)Recover connectivity data from disk\.",
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return None
+
+    atoms = []
+    for line in match.group(1).splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        element_match = re.match(r"^([A-Za-z]{1,2})", parts[0]) if parts else None
+        if not element_match or len(parts) < 5:
+            continue
+        try:
+            x, y, z = map(float, parts[2:5])
+        except ValueError:
+            continue
+        atoms.append((element_match.group(1), x, y, z))
+
+    return atoms or None
+
+
+def _parse_scf_energies(content):
+    return [
+        float(energy.replace("D", "E").replace("d", "E"))
+        for energy in re.findall(
+            r"SCF Done:\s*E\(.+?\)\s*=\s*"
+            r"([-+]?\d+(?:\.\d+)?(?:[DEde][-+]?\d+)?)",
+            content,
+        )
+    ]
+
+
+def _parse_irc_records(content, orientation):
+    marker_matches = list(
+        re.finditer(
+            r"Point Number:\s*(\d+)\s+Path Number:\s*(\d+)",
+            content,
+        )
+    )
+    if not marker_matches:
+        return None
+
+    checkpoint_geometry = _parse_checkpoint_geometry(content)
+    checkpoint_energy_match = re.search(
+        r"Energy From Chk\s*=\s*"
+        r"([-+]?\d+(?:\.\d+)?(?:[DEde][-+]?\d+)?)",
+        content,
+    )
+    checkpoint_energy = (
+        float(
+            checkpoint_energy_match.group(1).replace("D", "E").replace("d", "E")
+        )
+        if checkpoint_energy_match
+        else None
+    )
+    irc_start = content.rfind(
+        "IRC-IRC-IRC-",
+        0,
+        marker_matches[0].start(),
+    )
+
+    records = []
+    for idx, marker in enumerate(marker_matches):
+        interval_start = (
+            max(0, irc_start)
+            if idx == 0
+            else marker_matches[idx - 1].end()
+        )
+        interval = content[interval_start:marker.start()]
+        point = int(marker.group(1))
+        path = int(marker.group(2))
+        geometries = _parse_orientation_blocks(interval.splitlines(), orientation)
+        energies = _parse_scf_energies(interval)
+        geometry = geometries[-1] if geometries else None
+        energy = energies[-1] if energies else None
+        if point == 0:
+            geometry = geometry or checkpoint_geometry
+            energy = checkpoint_energy if energy is None else energy
+        if geometry is None or energy is None or path not in (1, 2):
+            return None
+
+        records.append(
+            {
+                "point": point,
+                "path": path,
+                "geometry": geometry,
+                "energy": energy,
+            }
+        )
+
+    return records
+
+
+def _parse_irc(content, lines):
+    orientation = (
+        "Input orientation:"
+        if any("Input orientation:" in line for line in lines)
+        else "Standard orientation:"
+    )
+    records = _parse_irc_records(content, orientation)
+    if not records:
+        return None
+
+    # Gaussian writes Path 1 from TS outward, then Path 2 from TS outward.
+    # Reverse Path 2 so the exported trajectory runs endpoint -> TS -> endpoint.
+    ordered = (
+        list(reversed([record for record in records if record["path"] == 2]))
+        + [record for record in records if record["path"] == 1]
+    )
+    energies = [record["energy"] for record in ordered]
+    geometries = [record["geometry"] for record in ordered]
+    return energies, geometries
+
+
 def parse_gaussian(filename):
+    lines = []
+    is_irc = False
     with open(filename) as f:
-        lines = f.readlines()
+        for line in f:
+            lines.append(line)
+            if not is_irc and "IRC-IRC-IRC-" in line:
+                is_irc = True
+
+    if is_irc:
+        irc_data = _parse_irc("".join(lines), lines)
+        if irc_data:
+            energies, geometries = irc_data
+            return energies, [], [], (None, None), geometries
 
     energies = []
     max_forces = []
     rms_forces = []
     force_thresholds = (None, None)
     geometries = []  # list of list-of-(symbol, x, y, z)
+    has_standard_orientation = any("Standard orientation:" in line for line in lines)
 
     i = 0
     while i < len(lines):
@@ -62,7 +214,12 @@ def parse_gaussian(filename):
                     force_thresholds = (float(m.group(2)), force_thresholds[1])
 
         # --- geometry (prefer Standard orientation, fallback to Input orientation) ---
-        if "Standard orientation:" in line or "Input orientation:" in line:
+        is_geometry_orientation = (
+            "Standard orientation:" in line
+            if has_standard_orientation
+            else "Input orientation:" in line
+        )
+        if is_geometry_orientation:
             # skip header lines (dashes, columns, dashes)
             j = i + 5  # first atom line
             atoms = []
