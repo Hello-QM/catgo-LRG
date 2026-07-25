@@ -366,6 +366,19 @@ test('rejects a partial release even when updater metadata itself is valid', () 
   )
 })
 
+test('rejects stale installers that could shadow the current download', () => {
+  const current = fixture()
+  try {
+    const stale = 'CatGo_1.4.5_x64-setup.exe'
+    writeFileSync(resolve(current.assets, stale), 'stale installer\n')
+    const result = verify(current)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /unexpected release installer.*v1\.4\.6.*1\.4\.5/i)
+  } finally {
+    rmSync(current.root, { recursive: true, force: true })
+  }
+})
+
 test('rejects updater metadata missing a required desktop updater platform', () => {
   withFixture(
     {

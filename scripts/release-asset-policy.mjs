@@ -1,4 +1,11 @@
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/
+const USER_FACING_RELEASE_ASSET = [
+  /^CatGo_\d+\.\d+\.\d+_(?:x64|aarch64)(?:_[A-Za-z0-9-]+)?(?:-setup)?\.(?:exe|msi|dmg)$/i,
+  /^CatGo_\d+\.\d+\.\d+_(?:amd64|aarch64)\.(?:deb|AppImage)$/i,
+  /^CatGo-\d+\.\d+\.\d+-\d+\.(?:x86_64|aarch64)\.rpm$/i,
+  /^CatGo-v\d+\.\d+\.\d+-android-universal\.apk$/i,
+  /^catgo-\d+\.\d+\.\d+\.vsix$/i,
+]
 
 function versionForTag(tag) {
   const match = RELEASE_TAG.exec(tag)
@@ -64,11 +71,28 @@ export function requiredUpdaterPlatforms(tag) {
 
 export function verifyRequiredReleaseAssets(assetNames, tag) {
   const assets = assetNames instanceof Set ? assetNames : new Set(assetNames)
-  for (const requirement of requiredReleaseAssets(tag)) {
+  const requirements = requiredReleaseAssets(tag)
+  for (const requirement of requirements) {
     if (!assets.has(requirement.name)) {
       throw new Error(
         `Release is missing required release asset for ${requirement.label}: ` +
           requirement.name,
+      )
+    }
+  }
+
+  const version = versionForTag(tag)
+  const allowedUserFacingAssets = new Set([
+    ...requirements.map((requirement) => requirement.name),
+    `CatGo_${version}_amd64.AppImage`,
+  ])
+  for (const asset of assets) {
+    if (
+      USER_FACING_RELEASE_ASSET.some((pattern) => pattern.test(asset)) &&
+      !allowedUserFacingAssets.has(asset)
+    ) {
+      throw new Error(
+        `Unexpected release installer for ${tag}: ${asset}`,
       )
     }
   }
