@@ -191,8 +191,13 @@ function parseRangeHeader(value, size) {
 function responseRange(object) {
   if (
     !object.range
+    || !Number.isSafeInteger(object.size)
     || !Number.isSafeInteger(object.range.offset)
     || !Number.isSafeInteger(object.range.length)
+    || object.size < 0
+    || object.range.offset < 0
+    || object.range.length <= 0
+    || object.range.length > object.size - object.range.offset
   ) {
     return null
   }
@@ -326,6 +331,17 @@ async function serveGet(request, bucket, key) {
 
   const partial = options.range !== undefined
   const range = partial ? responseRange(object) : null
+  if (partial && range === null) {
+    try {
+      await object.body.cancel()
+    } catch {
+      // The response is already rejected; cancellation is best effort.
+    }
+    return textResponse(
+      '下载范围元数据无效 / Invalid download range metadata',
+      502,
+    )
+  }
   return new Response(object.body, {
     status: partial ? 206 : 200,
     headers: buildHeaders(object, key, range),
