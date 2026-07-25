@@ -111,17 +111,39 @@ test('user docs require acknowledgement, citation, and commercial permission', (
     assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')), file)
     assert.match(text, /COMMERCIAL_LICENSE\.md/, file)
     assert.doesNotMatch(text, /AGPL-3\.0-or-later|AGPL v3/, file)
+    assert.match(
+      text,
+      new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      file,
+    )
   }
-  assert.match(
-    read('readme.md'),
-    new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-  )
-  assert.match(read('readme.zh.md'), /必须.*致谢.*引用/)
+  const englishReadme = read('readme.md')
+  assert.match(englishReadme, /must .*citation/i)
+  assert.match(englishReadme, /prior written permission/i)
+  const pypiReadme = read('server/README-pypi.md')
+  assert.match(pypiReadme, /Every such public output must also cite/i)
+  assert.match(pypiReadme, /prior written permission/i)
+  const chineseReadme = read('readme.zh.md')
+  assert.match(chineseReadme, /必须.*致谢.*引用/)
+  assert.match(chineseReadme, /必须事先取得书面许可/)
 })
 
 test('contribution guides disclose the relicensing authority requirement', () => {
-  assert.match(read('contributing.md'), /right to license and enforce/i)
-  assert.match(read('contributing.md'), /not.*relicense third-party/i)
-  assert.match(read('contributing.zh.md'), /许可和维权/)
-  assert.match(read('contributing.zh.md'), /第三方/)
+  const english = read('contributing.md')
+  assert.match(english, /must have the right to submit/i)
+  assert.match(english, /third-party code must retain its original notices/i)
+  assert.match(english, /not.*relicense third-party/i)
+  assert.match(english, /does not by itself prove copyright assignment/i)
+  assert.match(english, /may require a separate\s+contributor agreement/i)
+  assert.match(english, /right to license and enforce/i)
+  assert.match(english, /must not weaken or contradict.*noncommercial terms/i)
+
+  const chinese = read('contributing.zh.md')
+  assert.match(chinese, /贡献者必须有权/)
+  assert.match(chinese, /第三方代码必须保留原有声明/)
+  assert.match(chinese, /并不会.*重新许可.*第三方代码/)
+  assert.match(chinese, /接受.*本身并不证明著作权已经转让/)
+  assert.match(chinese, /可在接受贡献前要求单独的贡献者协议/)
+  assert.match(chinese, /许可和维权/)
+  assert.match(chinese, /不得削弱或抵触.*非商业条款/)
 })

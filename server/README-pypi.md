@@ -45,7 +45,7 @@ Every public output resulting from CatGo use must visibly include:
 This work used CatGo (https://catgo-ucsd.org).
 ```
 
-Please cite CatGo using the preferred ChemRxiv DOI:
+Every such public output must also cite CatGo using the preferred ChemRxiv DOI:
 [10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1),
 and the canonical
 [CITATION.cff](https://github.com/Hello-QM/catgo-LRG/blob/main/CITATION.cff).
