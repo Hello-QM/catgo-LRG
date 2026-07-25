@@ -36,6 +36,7 @@
     "CITATION.cff",
     "THIRD_PARTY_NOTICES.md",
     "third_party/licenses",
+    "third_party/provenance",
     "README.md"
   ],
   "scripts": {

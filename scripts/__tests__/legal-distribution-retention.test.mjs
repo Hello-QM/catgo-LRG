@@ -18,6 +18,7 @@ import * as legalSync from '../sync-legal-bundle.mjs'
 import {
   activeRunScriptsFromWorkflow,
   assertActiveWorkflowRun,
+  verifyStagedLegalBundles,
 } from '../verify-legal-distributions.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -49,6 +50,21 @@ function runNode(script, args = []) {
   })
 }
 
+test('canonical legal sources cover every provenance ledger referenced by the notice', () => {
+  const notice = readFileSync(resolve(ROOT, 'THIRD_PARTY_NOTICES.md'), 'utf8')
+  const referenced = [
+    ...new Set(
+      [...notice.matchAll(/third_party\/provenance\/[A-Za-z0-9._/-]+\.(?:json|md)/g)]
+        .map((match) => match[0]),
+    ),
+  ].sort()
+  const bundled = legalSync.legalBundleSources()
+    .filter((path) => path.startsWith('third_party/provenance/'))
+    .sort()
+
+  assert.deepEqual(bundled, referenced)
+})
+
 test('canonical sync stages the complete redistribution bundle byte-for-byte', () => {
   const output = mkdtempSync(join(tmpdir(), 'catgo-legal-bundle-'))
   try {
@@ -67,6 +83,20 @@ test('canonical sync stages the complete redistribution bundle byte-for-byte', (
   } finally {
     rmSync(output, { recursive: true, force: true })
   }
+})
+
+test('release verification compares staged and package-local bundles to canonical sources', () => {
+  assert.equal(
+    typeof legalSync.DEFAULT_TARGETS,
+    'object',
+    'sync module must expose every canonical staging target',
+  )
+  assert.equal(
+    typeof verifyStagedLegalBundles,
+    'function',
+    'release verifier must expose staged-byte verification',
+  )
+  assert.doesNotThrow(() => verifyStagedLegalBundles())
 })
 
 test('canonical package sync stages notice-linked licenses and provenance byte-for-byte', () => {

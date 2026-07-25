@@ -419,7 +419,7 @@ does not supply rights for any future reintroduction.
   `7ba0614b1fa51116f49dbbc669940e7af7df716a`
 - Upstream repository license declaration: GPL-2.0
 - Provenance ledger:
-  `third_party/provenance/catrender-bond-order-removal.md`
+  [`third_party/provenance/catrender-bond-order-removal.md`](third_party/provenance/catrender-bond-order-removal.md)
 
 The implementation and its embedded port plan were
 removed from the current release tree. The ledger records the immutable

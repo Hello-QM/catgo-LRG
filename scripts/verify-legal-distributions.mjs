@@ -8,7 +8,9 @@ import yaml from 'js-yaml'
 
 import {
   ACKNOWLEDGEMENT,
+  DEFAULT_TARGETS,
   legalBundleSources,
+  PACKAGE_TARGETS,
   ROOT,
 } from './sync-legal-bundle.mjs'
 
@@ -177,6 +179,35 @@ function verifySources() {
   for (const source of legalBundleSources()) read(source)
 }
 
+export function verifyStagedLegalBundles() {
+  const sources = legalBundleSources()
+  for (const target of DEFAULT_TARGETS) {
+    for (const source of sources) {
+      assert.deepEqual(
+        readFileSync(resolve(ROOT, target, source)),
+        readFileSync(resolve(ROOT, source)),
+        `${target}/${source}: staged legal source differs from canonical source`,
+      )
+    }
+    assert.equal(
+      readFileSync(resolve(ROOT, target, 'ACKNOWLEDGEMENT.txt'), 'utf8'),
+      `${ACKNOWLEDGEMENT}\n`,
+      `${target}/ACKNOWLEDGEMENT.txt: staged acknowledgement is stale`,
+    )
+  }
+
+  for (const { root, licenseName } of PACKAGE_TARGETS) {
+    for (const source of sources) {
+      const destination = source === 'license' ? licenseName : source
+      assert.deepEqual(
+        readFileSync(resolve(root, destination)),
+        readFileSync(resolve(ROOT, source)),
+        `${root}/${destination}: package-local legal source differs from canonical source`,
+      )
+    }
+  }
+}
+
 function verifyDiscovery() {
   const discovered = discoverDistributionWorkflows()
   const owned = new Set([
@@ -324,6 +355,7 @@ function verifyHpcAndDocker() {
 
 function main() {
   verifySources()
+  verifyStagedLegalBundles()
   verifyDiscovery()
   verifyBuildEntryPoints()
   verifyTauriAndMobile()

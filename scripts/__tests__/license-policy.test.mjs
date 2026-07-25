@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+
+import { legalBundleSources } from '../sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
@@ -298,15 +310,15 @@ test('package-local license copies are byte-identical', () => {
 })
 
 test('package-local redistribution bundles are byte-identical and acknowledged', () => {
-  for (const directory of [
-    'extensions/rust-wasm',
-    'extensions/vscode',
-    'server',
+  for (const [directory, licenseName] of [
+    ['extensions/rust-wasm', 'license'],
+    ['extensions/vscode', 'license'],
+    ['server', 'LICENSE'],
   ]) {
-    for (const file of ['CITATION.cff', 'THIRD_PARTY_NOTICES.md']) {
-      const local = `${directory}/${file}`
+    for (const source of legalBundleSources()) {
+      const local = `${directory}/${source === 'license' ? licenseName : source}`
       assert.ok(existsSync(resolve(ROOT, local)), local)
-      assert.equal(read(local), read(file), local)
+      assert.deepEqual(readFileSync(resolve(ROOT, local)), readFileSync(resolve(ROOT, source)), local)
     }
   }
   assert.match(read('extensions/rust-wasm/README.md'), new RegExp(
@@ -387,40 +399,129 @@ test('every package-local notice resolves its complete byte-identical license bu
   }
 })
 
-test('published npm archive listings contain the redistribution bundle', () => {
-  for (const [directory, required] of [
-    [
-      '.',
-      [
-        'license',
-        'CITATION.cff',
-        'THIRD_PARTY_NOTICES.md',
-        'readme.md',
-        ...thirdPartyLicenseTargets('THIRD_PARTY_NOTICES.md'),
-      ],
-    ],
-    [
-      'extensions/rust-wasm',
-      [
-        'license',
-        'CITATION.cff',
-        'THIRD_PARTY_NOTICES.md',
-        'README.md',
-        ...thirdPartyLicenseTargets('extensions/rust-wasm/THIRD_PARTY_NOTICES.md'),
-      ],
-    ],
-  ]) {
-    const output = execFileSync(
-      'npm',
-      ['pack', '--dry-run', '--json', '--ignore-scripts'],
-      {
-        cwd: resolve(ROOT, directory),
-        encoding: 'utf8',
-        env: { ...process.env, npm_config_loglevel: 'silent' },
-      },
+test('actual npm archives contain exactly the canonical redistribution sources', () => {
+  const archiveDir = mkdtempSync(resolve(tmpdir(), 'catgo-npm-legal-'))
+  const expected = legalBundleSources().toSorted()
+  try {
+    for (const directory of ['.', 'extensions/rust-wasm']) {
+      const output = execFileSync(
+        'npm',
+        ['pack', '--json', '--ignore-scripts', '--pack-destination', archiveDir],
+        {
+          cwd: resolve(ROOT, directory),
+          encoding: 'utf8',
+          env: { ...process.env, npm_config_loglevel: 'silent' },
+        },
+      )
+      const archive = resolve(archiveDir, JSON.parse(output)[0].filename)
+      const paths = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' })
+        .trim()
+        .split('\n')
+        .map((path) => path.replace(/^package\//, ''))
+      const packagedLegal = paths
+        .filter((path) =>
+          ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md'].includes(path) ||
+          path.startsWith('third_party/licenses/') ||
+          path.startsWith('third_party/provenance/'),
+        )
+        .toSorted()
+
+      assert.deepEqual(packagedLegal, expected, directory)
+    }
+  } finally {
+    rmSync(archiveDir, { recursive: true, force: true })
+  }
+})
+
+test('actual wheel and sdist contain exactly the canonical redistribution sources', () => {
+  const archiveDir = mkdtempSync(resolve(tmpdir(), 'catgo-python-legal-'))
+  const expected = legalBundleSources().toSorted()
+  const selectLegal = (paths) =>
+    paths
+      .filter((path) =>
+        ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md'].includes(path) ||
+        path.startsWith('third_party/licenses/') ||
+        path.startsWith('third_party/provenance/'),
+      )
+      .toSorted()
+
+  try {
+    execFileSync(
+      'uv',
+      ['build', '--wheel', '--sdist', '--out-dir', archiveDir],
+      { cwd: resolve(ROOT, 'server'), stdio: 'pipe' },
     )
-    const paths = JSON.parse(output)[0].files.map(({ path }) => path)
-    for (const file of required) assert.ok(paths.includes(file), `${directory}: ${file}`)
+    const archives = readdirSync(archiveDir)
+    const wheel = resolve(archiveDir, archives.find((name) => name.endsWith('.whl')))
+    const sdist = resolve(archiveDir, archives.find((name) => name.endsWith('.tar.gz')))
+
+    const wheelPaths = execFileSync('unzip', ['-Z1', wheel], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .map((path) => {
+        if (/^[^/]+\.dist-info\/licenses\/LICENSE$/.test(path)) return 'license'
+        return path.replace(/^catgo\//, '')
+      })
+    assert.deepEqual(selectLegal(wheelPaths), expected, 'wheel')
+
+    const sdistPaths = execFileSync('tar', ['-tzf', sdist], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .map((path) => path.replace(/^[^/]+\//, ''))
+      .map((path) => path === 'LICENSE' ? 'license' : path)
+    assert.deepEqual(selectLegal(sdistPaths), expected, 'sdist')
+  } finally {
+    rmSync(archiveDir, { recursive: true, force: true })
+  }
+})
+
+test('actual VSIX contains exactly the canonical redistribution sources', () => {
+  const fixtureRoot = mkdtempSync(resolve(tmpdir(), 'catgo-vsix-legal-'))
+  const extensionRoot = resolve(fixtureRoot, 'extension')
+  const archive = resolve(fixtureRoot, 'catgo.vsix')
+  try {
+    mkdirSync(extensionRoot)
+    for (const path of [
+      '.vscodeignore',
+      'CITATION.cff',
+      'THIRD_PARTY_NOTICES.md',
+      'icon.png',
+      'license',
+      'package.json',
+      'readme.md',
+      'third_party',
+    ]) {
+      cpSync(
+        resolve(ROOT, 'extensions/vscode', path),
+        resolve(extensionRoot, path),
+        { recursive: true },
+      )
+    }
+    mkdirSync(resolve(extensionRoot, 'dist'))
+    writeFileSync(resolve(extensionRoot, 'dist/extension.cjs'), 'module.exports = {}\n')
+
+    execFileSync(
+      'vsce',
+      ['package', '--no-dependencies', '--out', archive],
+      { cwd: extensionRoot, stdio: 'pipe' },
+    )
+    const packagedLegal = execFileSync('unzip', ['-Z1', archive], {
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')
+      .map((path) => path.replace(/^extension\//, ''))
+      .map((path) => path === 'license.txt' ? 'license' : path)
+      .filter((path) =>
+        ['license', 'CITATION.cff', 'THIRD_PARTY_NOTICES.md'].includes(path) ||
+        path.startsWith('third_party/licenses/') ||
+        path.startsWith('third_party/provenance/'),
+      )
+      .toSorted()
+
+    assert.deepEqual(packagedLegal, legalBundleSources().toSorted())
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
   }
 })
 
