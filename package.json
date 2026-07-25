@@ -243,6 +243,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "desktop:dev": "node scripts/predev.mjs && vite --config vite.desktop.config.ts",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "verify:wasm": "node scripts/verify-wasm-artifacts.mjs",
     "desktop:build": "pnpm build:wasm && vite build --config vite.desktop.config.ts",
     "deploy:build": "pnpm build:wasm && VITE_STATIC_ONLY=true vite build --config vite.desktop.config.ts",
     "build:connect": "pnpm build:wasm && vite build --config vite.desktop.config.ts",

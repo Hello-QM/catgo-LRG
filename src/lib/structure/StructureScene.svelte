@@ -12,7 +12,7 @@
   import { T, useThrelte, useTask } from '@threlte/core'
   import * as extras from '@threlte/extras'
   import type { ComponentProps } from 'svelte'
-  import { type Snippet, untrack } from 'svelte'
+  import { onDestroy, type Snippet, untrack } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import type { Camera, Scene, InstancedMesh as ThreeInstancedMesh } from 'three'
   import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
@@ -27,9 +27,27 @@
   import PencilModeOverlay from './PencilModeOverlay.svelte'
   import AtomImpostors from './AtomImpostors.svelte'
   import SlabPreview from './SlabPreview.svelte'
+  import { build_display_radii } from './gpu/radius-lut'
+  import WebGLReplicaLayer from './gpu/WebGLReplicaLayer.svelte'
+  import {
+    combined_packet_render_eligible,
+  } from './gpu/combined-packet-render-eligible'
+  import { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
+  import { SharedAtomColorTexture } from './gpu/webgl2/shared-atom-color-texture'
+  import type {
+    BaseBondGraph,
+    BaseTopology,
+    RenderPacket,
+  } from './scene/render-packet'
+  import {
+    manager_topology_attribute_key,
+    type ManagerTopologyAttributeKey,
+  } from './scene/render-packet-builder'
+  import { mark_render_surface } from './scene/render-surface'
   import {
     build_cutting_visibility_map,
     compute_show_bulk_atoms,
+    should_show_bonds,
     get_lattice as get_lattice_pure,
     compute_structure_size,
     compute_atom_span_radius,
@@ -68,6 +86,32 @@
     type ImageSiteEntry,
     type ImageSiteKey,
   } from './pbc-image-atoms'
+  import {
+    create_current_trajectory_source_request_guard,
+    prepared_frame_key_for_shared_topology_source,
+    prepare_exact_trajectory_frame,
+    request_trajectory_frame_source_safely,
+    select_current_trajectory_frame_source,
+    trajectory_prepared_frame_key,
+    type TrajectoryFrameSource,
+  } from './trajectory-frame-preparer'
+  import {
+    create_prepared_frame_pipeline,
+    is_prepared_frame_budget_refusal,
+    prepared_frame_window_key,
+    prepared_frame_with_replicas,
+    same_prepared_frame_key,
+    same_prepared_frame_schedule,
+    type PreparedFrameKey,
+    type PreparedFrameOutcome,
+    type PreparedFrameSchedule,
+  } from './trajectory-prepared-frame'
+  import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
+  import {
+    create_trajectory_presentation_committer,
+    type PacketSyncEvidence,
+    type PreparedPresentationIdentity,
+  } from './trajectory-presentation-commit'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
     AtomManager,
@@ -96,6 +140,7 @@
   import {
     LARGE_STRUCTURE_THRESHOLD,
     create_gpu_picker,
+    create_replica_picker,
     setup_hover_detection as setup_hover_detection_impl,
     find_hit_atom_from_event as find_hit_atom_impl,
     is_atom_pickable as is_atom_pickable_external,
@@ -107,7 +152,6 @@
     create_bond_state,
     compute_bond_connectivity,
     invalidate_bonds_for_recompute,
-    compute_bond_connectivity_for_frame,
     clear_trajectory_bond_frame_cache,
     build_bond_pairs,
     build_trajectory_bond_pairs,
@@ -184,6 +228,17 @@
 
   // --- GPU Picker for O(1) hover/click detection ---
   const picker = create_gpu_picker()
+  const shared_position_texture = new SharedPositionTexture()
+  const shared_atom_color_texture = new SharedAtomColorTexture()
+  onDestroy(() => shared_position_texture.dispose())
+  onDestroy(() => shared_atom_color_texture.dispose())
+
+  // Visual T5 — packet-path unified picking: hover AND click resolve through
+  // the WebGL2 replica integer-ID pass while a render packet is active (the
+  // invisible CPU hitbox meshes below are gated off in that mode). Lazily
+  // constructed; disposed with the scene.
+  const replica_picker = create_replica_picker(shared_position_texture)
+  $effect(() => () => replica_picker.dispose())
 
   // Check if an atom is pickable (not hidden by cutting plane)
   function is_atom_pickable(site_idx: number): boolean {
@@ -240,10 +295,60 @@
     get_bond_manager: () => bond_manager,
     get_partner_drawn_lookup: () => partner_drawn_lookup,
     get_slot_to_filtered_idx: () => slot_to_filtered_idx,
+    // Visual T5 — packet-path unified picking. When the managers consume a
+    // render packet, hover + click route through the WebGL2 replica ID pass;
+    // every replica pick folds to ONE base selection flag (visual-shared-base
+    // semantics), and bond picks carry the base bond GRAPH index.
+    get_render_packet: () =>
+      combined_packet_renderer_owned ? manager_render_packet : null,
+    on_packet_atom_click: handle_packet_atom_click,
+    on_packet_bond_click: handle_packet_bond_click,
+    set_hovered_bond_idx: (idx) => {
+      if (idx === null || idx < 0 || idx >= filtered_bond_pairs.length) {
+        if (hovered_bond_key !== null) hovered_bond_key = null
+        return
+      }
+      const bond = filtered_bond_pairs[idx]
+      if (!is_bond_pickable(bond)) {
+        if (hovered_bond_key !== null) hovered_bond_key = null
+        return
+      }
+      hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+    },
+  }
+
+  // Packet-path atom click — same mode routing as the Threlte interaction
+  // mesh handler, keyed by BASE site index (one selection flag per base atom
+  // no matter which replica cell was clicked).
+  function handle_packet_atom_click(site_idx: number, event: MouseEvent) {
+    if (!is_atom_pickable(site_idx)) return
+    const position = position_by_site_idx.get(site_idx) ?? ([0, 0, 0] as Vec3)
+    if (bond_mode_active && on_bond_atom_click) {
+      on_bond_atom_click(site_idx)
+      return
+    }
+    if (pencil_mode_active && on_pencil_atom_click) {
+      // Browsers dispatch `click` as a PointerEvent; the DOM lib types it
+      // as MouseEvent, so narrow explicitly for the pencil callback.
+      on_pencil_atom_click(site_idx, position, event as PointerEvent)
+      return
+    }
+    if (measure_mode_active && on_continuous_measure_click) {
+      on_continuous_measure_click(site_idx)
+      return
+    }
+    toggle_selection(site_idx, event)
+  }
+
+  // Packet-path bond click — the replica ID pass already resolved the base
+  // bond graph index to a `filtered_bond_pairs` index.
+  function handle_packet_bond_click(bond_idx: number, event: MouseEvent) {
+    if (bond_drag_active || external_dragging) return
+    select_bond_by_filtered_idx(bond_idx, event)
   }
 
   function setup_hover_detection() {
-    return setup_hover_detection_impl(gpu_picker_deps, picker)
+    return setup_hover_detection_impl(gpu_picker_deps, picker, replica_picker)
   }
 
   // --- Atom interaction mesh: invisible InstancedMesh with custom raycast ---
@@ -276,6 +381,7 @@
   // system is disabled or the structure has no sites.
   const EMPTY_POSITIONS = new Float32Array(0)
   const EMPTY_COLORS = new Float32Array(0)
+  const EMPTY_RADII = new Float32Array(0)
 
   // Hex → linear RGB conversion (matches Bond.svelte's color pipeline).
   // Cached so repeated lookups of the same hex string avoid re-parsing.
@@ -316,6 +422,7 @@
   // are approximate anyway. Rebuilds on drag-end when external_dragging becomes false.
   $effect(() => {
     if (!atom_interaction_mesh) return
+    if (packet_picking_active) return // Visual T5: GPU ID pass owns picking
     if (external_dragging || is_rotating_atoms) return // Skip during drag
     const data = atom_data
     const overrides = realtime_position_overrides
@@ -598,6 +705,18 @@
     // numbers are unchanged), so every consumer below only re-fires per frame
     // when the cell actually varies. null = use the (frozen) structure lattice.
     trajectory_frame_lattice = null as number[][] | null,
+    trajectory_frame_count = 0,
+    get_trajectory_frame_source = null as
+      | ((frame_idx: number) => TrajectoryFrameSource | null)
+      | null,
+    request_trajectory_frame_source = null as
+      | ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+      | null,
+    on_trajectory_frame_presented,
+    on_trajectory_buffer_state,
+    // Upstream base-frame packet. Non-null only while a trajectory owns the
+    // visual atom/bond replica path (including 1×1×1).
+    render_packet = null as RenderPacket | null,
     // Per-frame bond connectivity from the async trajectory bond cache. When
     // null (cache miss), we fall back to `bond_state.bond_connectivity`
     // (frame-0 static).
@@ -644,17 +763,8 @@
     // Without the parent binding, this default keeps StructureScene self-
     // contained for any test harness that mounts it directly.
     atom_manager = $bindable<AtomManager>(new AtomManager()),
-    // WebGPU large-system overlay bridge: a getter the parent can call to read
-    // the AUTHORITATIVE per-displayed-atom current-frame position array the
-    // WebGL atoms/bonds are drawn at — `atom_positions_buffer` (topology base
-    // overlaid with the manager's per-frame positions via site_ids_buffer,
-    // indexed by displayed site index, 3 × n_displayed). The overlay consumes
-    // this instead of re-deriving from base-only trajectory data, so the two
-    // views match atom-for-atom (incl. supercell base-block / replica-static
-    // behaviour). Bound out as a function so the parent always reads the LIVE
-    // $derived value, not a stale snapshot.
-    get_displayed_frame_positions = $bindable<(() => Float32Array) | null>(null),
     deleted_bond_keys = new Set<string>(),
+
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
     bond_first_atom = null as number | null,
     on_bond_atom_click,
@@ -895,6 +1005,25 @@
     // Variable-cell trajectory fast-path: displayed frame's lattice matrix
     // (rows = a,b,c). Identity-stable across frames when the cell is fixed.
     trajectory_frame_lattice?: number[][] | null
+    trajectory_frame_count?: number
+    get_trajectory_frame_source?: ((
+      frame_idx: number,
+    ) => TrajectoryFrameSource | null) | null
+    request_trajectory_frame_source?: ((
+      frame_idx: number,
+    ) => Promise<TrajectoryFrameSource | null>) | null
+    on_trajectory_frame_presented?: (
+      frame_idx: number,
+      positions_version: number,
+    ) => void
+    on_trajectory_buffer_state?: (state: {
+      frame_idx: number
+      ready_ahead: number
+      preparing: boolean
+      error: string | null
+    }) => void
+    /** Base scientific frame + visual replica ownership from Structure.svelte. */
+    render_packet?: RenderPacket | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
     /** WebGPU large-system overlay active. When true the WebGL scene is fully
      *  covered by the overlay and `autoRender` is off, so this scene must do
@@ -941,9 +1070,6 @@
     atom_fast_ops?: AtomFastOps | null
     /** Plan v3 Phase 1: atom_manager $bindable for parent-driven position writes. */
     atom_manager?: AtomManager
-    /** WebGPU overlay bridge: getter returning the live per-displayed-atom
-     *  current-frame position array (3 × n_displayed) the WebGL view renders. */
-    get_displayed_frame_positions?: (() => Float32Array) | null
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -1020,6 +1146,92 @@
     // Vibration mode animation
     vibration_data?: { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null
   } = $props()
+
+  const trajectory_presentation_committer =
+    create_trajectory_presentation_committer({
+      record_presented: (
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ) => trajectory_render_diagnostics.record_presented(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ),
+      record_renderer_installed: (
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ) => trajectory_render_diagnostics.record_renderer_installed(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ),
+      acknowledge: (frame_idx, positions_version) =>
+        on_trajectory_frame_presented?.(frame_idx, positions_version),
+    })
+
+  const prepared_pipeline = create_prepared_frame_pipeline({
+    max_frames: 8,
+    max_bytes: 96 * 1024 * 1024,
+    max_in_flight: 1,
+  })
+  const current_source_request_guard =
+    create_current_trajectory_source_request_guard()
+  onDestroy(() => {
+    current_source_request_guard.invalidate()
+    prepared_pipeline.clear()
+    trajectory_presentation_committer.clear()
+  })
+  type PendingPreparedPresentation = {
+    presentation: PreparedPresentationIdentity
+    structure: AnyStructure
+    rules_version: string
+    topology_version: number
+    published_at_ms: number
+  }
+  let pending_prepared_presentation = $state.raw<
+    PendingPreparedPresentation | null
+  >(null)
+  let prepared_render_packet = $state.raw<RenderPacket | null>(null)
+  let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
+  let prepared_frame_forces = $state.raw<Float32Array | null>(null)
+  let prepared_error = $state<string | null>(null)
+  let prepared_graph_version = 0
+  let presented_trajectory_positions = $derived(
+    prepared_render_packet?.frame.positions ?? null,
+  )
+  let presented_trajectory_lattice = $derived.by((): number[][] | null => {
+    const lattice = prepared_render_packet?.frame.lattice
+    if (!lattice) return null
+    return [
+      [lattice[0], lattice[1], lattice[2]],
+      [lattice[3], lattice[4], lattice[5]],
+      [lattice[6], lattice[7], lattice[8]],
+    ]
+  })
+
+  $effect(() => {
+    if (
+      trajectory_frame_positions === null ||
+      typeof PerformanceObserver === `undefined`
+    ) return
+    const observer = new PerformanceObserver((list) => {
+      for (const _entry of list.getEntries()) {
+        trajectory_render_diagnostics.record_long_task()
+      }
+    })
+    try {
+      observer.observe({ entryTypes: [`longtask`] })
+    } catch {
+      return
+    }
+    return () => observer.disconnect()
+  })
 
   // Reduced-motion: honor the explicit user setting OR the OS-level
   // `prefers-reduced-motion: reduce` media query. Gates every continuous rAF
@@ -1122,6 +1334,42 @@
         __camera: threlte.camera.current,
         __render_still_source: read_render_still_source,
       })
+    }
+  })
+
+  // Visual T6: raster capture must target the ACTIVE canvas. Mark this WebGL
+  // canvas with its backend and whether it is the visible renderer — the
+  // WebGPU overlay suspends it while covering it. The overlay canvas carries
+  // its own static marks (LargeSystemOverlay.svelte), and the two marks flip
+  // in the same synchronous flush as the Bonds-T6 atomic renderer swap
+  // (`webgl_suspended` derives from `large_system_mode`). Backend labeling is
+  // a capture concern only — never semantic-structure routing.
+  $effect(() => {
+    const canvas = threlte.renderer?.domElement
+    if (!canvas) return
+    const is_webgl2 = threlte.renderer.capabilities?.isWebGL2 !== false
+    mark_render_surface(canvas, is_webgl2 ? `webgl2` : `legacy`, !webgl_suspended)
+  })
+
+  // Preserve the last complete CPU snapshot across a WebGL context cycle.
+  // Three.js recreates the draw consumers; the shared textures are marked for
+  // exactly one upload and the on-demand picker is rebuilt on its next use.
+  $effect(() => {
+    const renderer = threlte.renderer
+    const canvas = renderer?.domElement
+    if (!renderer || !canvas) return
+    const handle_context_lost = (event: Event) => event.preventDefault()
+    const handle_context_restored = () => {
+      replica_picker.dispose()
+      shared_position_texture.restore()
+      shared_atom_color_texture.restore()
+      threlte.invalidate()
+    }
+    canvas.addEventListener(`webglcontextlost`, handle_context_lost)
+    canvas.addEventListener(`webglcontextrestored`, handle_context_restored)
+    return () => {
+      canvas.removeEventListener(`webglcontextlost`, handle_context_lost)
+      canvas.removeEventListener(`webglcontextrestored`, handle_context_restored)
     }
   })
 
@@ -1961,7 +2209,7 @@
     return compute_charge_label_entries(
       structure, visible_charge_labels, show_charge_labels,
       num_original_sites, image_to_original_map, realtime_position_overrides,
-      trajectory_frame_positions,
+      presented_trajectory_positions,
       atom_manager,
     )
   })
@@ -2456,6 +2704,492 @@
     ...(bonding_options as Record<string, unknown>),
     scale: bond_scale,
   })
+
+  let latest_prepared_request_key: PreparedFrameKey | null = null
+  let latest_prepared_schedule: PreparedFrameSchedule | null = null
+  let asynchronously_loaded_prepared_source = $state.raw<{
+    owner: object
+    frame_idx: number
+    source: TrajectoryFrameSource
+  } | null>(null)
+
+  function exact_rules_version(
+    strategy: BondingStrategy,
+    options: Record<string, number>,
+    pbc: [boolean, boolean, boolean] | null,
+    rules: readonly import('./index').BondDistanceRule[],
+  ): string {
+    const sorted_options = Object.fromEntries(
+      Object.entries(options).sort(([left], [right]) => left.localeCompare(right)),
+    )
+    const sorted_rules = [...rules]
+      .map((rule) => ({ ...rule }))
+      .sort((left, right) =>
+        `${left.element_1}|${left.element_2}|${left.min_dist}|${left.max_dist}`
+          .localeCompare(
+            `${right.element_1}|${right.element_2}|${right.min_dist}|${right.max_dist}`,
+          )
+      )
+    return JSON.stringify({ strategy, options: sorted_options, pbc, rules: sorted_rules })
+  }
+
+  function graph_connectivity(graph: BaseBondGraph) {
+    const connectivity = new Array<{
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }>(graph.pairs.length / 2)
+    for (let idx = 0; idx < connectivity.length; idx++) {
+      connectivity[idx] = {
+        site_idx_1: graph.pairs[idx * 2],
+        site_idx_2: graph.pairs[idx * 2 + 1],
+        strength: graph.strengths[idx],
+        jimage: [
+          graph.jimages[idx * 3],
+          graph.jimages[idx * 3 + 1],
+          graph.jimages[idx * 3 + 2],
+        ],
+      }
+    }
+    return connectivity
+  }
+
+  $effect(() => {
+    const raw_packet = render_packet
+    const raw_structure = bond_input
+    const raw_positions = trajectory_frame_positions
+    const raw_lattice = trajectory_frame_lattice
+    const raw_forces = trajectory_frame_forces
+    const frame_idx = trajectory_step_idx
+    const frame_count = trajectory_frame_count
+    const source_getter = get_trajectory_frame_source
+    const requester = request_trajectory_frame_source
+    const options = Object.fromEntries(
+      Object.entries(bonding_options_eff)
+        .filter((entry): entry is [string, number] => typeof entry[1] === `number`),
+    )
+    const crystal = raw_structure as Crystal | undefined
+    const raw_pbc = crystal?.lattice?.pbc
+    const pbc = Array.isArray(raw_pbc) && raw_pbc.length === 3
+      ? [!!raw_pbc[0], !!raw_pbc[1], !!raw_pbc[2]] as [
+        boolean,
+        boolean,
+        boolean,
+      ]
+      : null
+    const rules = bond_distance_rules ?? []
+    const bonds_visible = should_show_bonds(
+      show_bonds,
+      crystal?.lattice ?? null,
+    ) && !bonds_deferred
+    const prepared_features = {
+      strategy: bonding_strategy,
+      atom_count: raw_packet?.topology.atom_count ?? raw_structure?.sites?.length ?? 0,
+      show_bonds: bonds_visible,
+      topology_stable: true,
+      atomic_numbers_complete: true,
+      distance_rule_count: rules.length,
+      site_radius_override_count: site_radius_overrides?.size ?? 0,
+      manual_bond_count: manual_bonds.length,
+      deleted_bond_count: deleted_bond_keys?.size ?? 0,
+      hidden_bond_features:
+        (hidden_elements?.size ?? 0) > 0 ||
+        (hidden_sites?.size ?? 0) > 0 ||
+        (hidden_prop_vals?.size ?? 0) > 0,
+      hydrogen_bonds: show_hydrogen_bonds,
+      bond_orders: bond_order_perception,
+      clipping: clip_active,
+      polyhedra: show_polyhedra,
+      drag_overrides:
+        external_dragging || (realtime_position_overrides?.size ?? 0) > 0,
+    }
+    const feature_version = [
+      Number(prepared_features.show_bonds),
+      prepared_features.site_radius_override_count,
+      prepared_features.manual_bond_count,
+      prepared_features.deleted_bond_count,
+      Number(prepared_features.hidden_bond_features),
+      Number(prepared_features.hydrogen_bonds),
+      Number(prepared_features.bond_orders),
+      Number(prepared_features.clipping),
+      Number(prepared_features.polyhedra),
+      Number(prepared_features.drag_overrides),
+    ].join(`,`)
+    const rules_version = `${exact_rules_version(
+      bonding_strategy,
+      options,
+      pbc,
+      rules,
+    )}|features:${feature_version}`
+
+    if (
+      !raw_packet || !raw_structure?.sites || !raw_positions ||
+      frame_idx < 0
+    ) {
+      current_source_request_guard.invalidate()
+      latest_prepared_request_key = null
+      latest_prepared_schedule = null
+      prepared_pipeline.clear()
+      pending_prepared_presentation = null
+      trajectory_presentation_committer.clear()
+      prepared_render_packet = null
+      prepared_gpu_positions = null
+      prepared_frame_forces = null
+      prepared_error = null
+      return
+    }
+
+    const fallback_source: TrajectoryFrameSource = {
+      frame_idx,
+      positions: raw_positions,
+      forces: raw_forces,
+      lattice: raw_lattice,
+      positions_version: raw_packet.frame.positions_version,
+      topology_stable: true,
+    }
+    const report_prepared_failure = (
+      error: Error,
+      ready_ahead = 0,
+    ) => {
+      if (
+        render_packet?.frame.owner !== raw_packet.frame.owner ||
+        trajectory_step_idx !== frame_idx
+      ) return
+      prepared_error = error.message
+      on_trajectory_buffer_state?.({
+        frame_idx,
+        ready_ahead,
+        preparing: false,
+        error: error.message,
+      })
+    }
+    // Indexed frames load asynchronously. Until getter(frame_idx) is ready,
+    // raw_positions still belongs to the last displayed frame; relabeling it
+    // with frame_idx would publish a one-frame-shifted exact graph. Only
+    // non-indexed trajectories may use the synchronous displayed fallback.
+    const loaded_source = asynchronously_loaded_prepared_source
+    const getter = (
+      source_idx: number,
+    ): TrajectoryFrameSource | null =>
+      select_current_trajectory_frame_source({
+        owner: raw_packet.frame.owner,
+        frame_idx: source_idx,
+        positions_version: raw_packet.frame.positions_version,
+        live_source: source_getter?.(source_idx) ?? null,
+        loaded_source,
+      })
+    const current_source = getter?.(frame_idx) ??
+      (requester ? null : fallback_source)
+    if (!current_source) {
+      latest_prepared_request_key = null
+      latest_prepared_schedule = null
+      const current_source_request = current_source_request_guard.begin(
+        raw_packet.frame.owner,
+        frame_idx,
+      )
+      void request_trajectory_frame_source_safely(
+        requester,
+        frame_idx,
+        (error) => {
+          if (!current_source_request_guard.settle(current_source_request)) return
+          report_prepared_failure(error)
+        },
+      ).then((source) => {
+        if (!current_source_request_guard.settle(current_source_request)) return
+        if (
+          !source ||
+          render_packet?.frame.owner !== raw_packet.frame.owner ||
+          trajectory_step_idx !== frame_idx
+        ) return
+        asynchronously_loaded_prepared_source = {
+          owner: raw_packet.frame.owner,
+          frame_idx,
+          source,
+        }
+      })
+      return
+    }
+    current_source_request_guard.invalidate()
+    const full_key_for_source = (
+      source: TrajectoryFrameSource,
+    ): PreparedFrameKey => trajectory_prepared_frame_key({
+      packet: raw_packet,
+      source,
+      options,
+      pbc,
+      rules_version,
+    })
+    const current_key: PreparedFrameKey = {
+      ...full_key_for_source(current_source),
+      positions_version: current_source?.positions_version ??
+        raw_packet.frame.positions_version,
+    }
+    const key_for_source = (
+      source: TrajectoryFrameSource,
+    ): PreparedFrameKey =>
+      prepared_frame_key_for_shared_topology_source(
+        current_key,
+        current_source,
+        source,
+      ) ?? full_key_for_source(source)
+    trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)
+    latest_prepared_request_key = current_key
+    const schedule = {
+      key: current_key,
+      replicas: raw_packet.replicas,
+      frame_count,
+    }
+    if (
+      latest_prepared_schedule !== null &&
+      same_prepared_frame_schedule(latest_prepared_schedule, schedule)
+    ) return
+    latest_prepared_schedule = schedule
+    const generation = prepared_pipeline.begin_request(current_key, frame_count)
+    const estimated_bytes = Math.max(
+      (current_source?.positions ?? raw_positions).byteLength * 3,
+      raw_packet.topology.atom_count * 64,
+    )
+
+    const prepare_source = async (
+      source_idx: number,
+      known_source: TrajectoryFrameSource | null,
+    ) => {
+      const source = known_source ??
+        await requester?.(source_idx) ??
+        getter?.(source_idx) ??
+        null
+      if (!source) {
+        throw new Error(`Trajectory frame ${source_idx} is not decoded`)
+      }
+      return prepare_exact_trajectory_frame({
+        packet: raw_packet,
+        source,
+        structure: raw_structure,
+        strategy: bonding_strategy,
+        options,
+        pbc,
+        distance_rules: rules,
+        rules_version,
+        graph_version: ++prepared_graph_version,
+        features: {
+          ...prepared_features,
+          topology_stable: source.topology_stable,
+        },
+      })
+    }
+
+    if (import.meta.env.DEV) {
+      globalThis.__catgoTrajectoryExactReference = async () => {
+        latest_prepared_schedule = null
+        prepared_pipeline.clear(raw_packet.frame.owner)
+        while (prepared_pipeline.stats().in_flight > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        const graph_hash_by_frame: Record<number, string> = {}
+        const bond_count_by_frame: Record<number, number> = {}
+        const started = performance.now()
+        for (let reference_idx = 0; reference_idx < frame_count; reference_idx++) {
+          const reference_source = getter?.(reference_idx) ??
+            await requester?.(reference_idx) ??
+            null
+          if (!reference_source) {
+            throw new Error(
+              `Exact reference frame ${reference_idx} is not available`,
+            )
+          }
+          const prepared = await prepare_source(reference_idx, reference_source)
+          graph_hash_by_frame[reference_idx] = prepared.graph_hash
+          bond_count_by_frame[reference_idx] = prepared.graph.pairs.length / 2
+        }
+        return {
+          graph_hash_by_frame,
+          bond_count_by_frame,
+          elapsed_ms: performance.now() - started,
+        }
+      }
+    }
+
+    const buffer_keys: PreparedFrameKey[] = []
+    const buffer_total = Math.max(0, frame_count)
+    for (
+      let offset = 0;
+      offset < Math.min(8, buffer_total || 1);
+      offset++
+    ) {
+      const buffered_idx = buffer_total > 0
+        ? (frame_idx + offset) % buffer_total
+        : frame_idx
+      const buffered_source = buffered_idx === frame_idx
+        ? current_source
+        : getter?.(buffered_idx) ?? null
+      const buffered_key = buffered_idx === frame_idx
+        ? current_key
+        : prepared_frame_window_key(
+          current_key,
+          buffered_idx,
+          buffered_source ? key_for_source(buffered_source) : null,
+          current_source.topology_stable,
+        )
+      if (!buffered_key) break
+      buffer_keys.push(buffered_key)
+    }
+
+    const report_buffer = (preparing: boolean) => {
+      if (
+        !latest_prepared_request_key ||
+        !same_prepared_frame_key(current_key, latest_prepared_request_key)
+      ) return
+      on_trajectory_buffer_state?.({
+        frame_idx,
+        ready_ahead: prepared_pipeline.ready_count(buffer_keys),
+        preparing,
+        error: untrack(() => prepared_error),
+      })
+    }
+    const report_buffer_failure = (error: Error) => {
+      if (
+        !latest_prepared_request_key ||
+        !same_prepared_frame_key(current_key, latest_prepared_request_key)
+      ) return
+      prepared_error = error.message
+      report_buffer(false)
+    }
+    const report_prefetch_outcome = (
+      outcome: PreparedFrameOutcome,
+      already_reported_error: Error | null = null,
+    ) => {
+      if (
+        outcome.status === `failed` &&
+        !is_prepared_frame_budget_refusal(outcome.error) &&
+        outcome.error !== already_reported_error
+      ) {
+        report_buffer_failure(outcome.error)
+        return
+      }
+      report_buffer(false)
+    }
+
+    report_buffer(true)
+    void prepared_pipeline.request({
+      key: current_key,
+      priority: `current`,
+      estimated_bytes,
+      prepare: () => prepare_source(frame_idx, current_source),
+    }, generation).then((outcome) => {
+      if (
+        outcome.status === `ready` &&
+        latest_prepared_request_key &&
+        same_prepared_frame_key(outcome.value.key, latest_prepared_request_key)
+      ) {
+        const live_packet = render_packet
+        const prepared = prepared_frame_with_replicas(
+          outcome.value,
+          live_packet?.frame.owner === outcome.value.key.owner
+            ? live_packet.replicas
+            : raw_packet.replicas,
+        )
+        const published_at_ms = performance.now()
+        // One publication turn owns positions, lattice, graph, forces, and the
+        // worker-packed position texture together.
+        prepared_render_packet = prepared.packet
+        prepared_gpu_positions = prepared.gpu_positions_rgba
+        prepared_frame_forces = prepared.forces
+        prepared_error = null
+        const presentation: PreparedPresentationIdentity = {
+          prepared_packet: prepared.packet,
+          key: prepared.key,
+          graph_hash: prepared.graph_hash,
+          bond_count: prepared.graph.pairs.length / 2,
+        }
+        trajectory_presentation_committer.publish(presentation)
+        pending_prepared_presentation = {
+          presentation,
+          structure: raw_structure,
+          rules_version,
+          topology_version: raw_packet.topology.version,
+          published_at_ms,
+        }
+      } else if (outcome.status === `failed`) {
+        report_buffer_failure(outcome.error)
+        return
+      }
+      report_buffer(false)
+    })
+
+    if ((current_source?.topology_stable ?? true) && frame_count > 1) {
+      for (let offset = 1; offset < Math.min(8, frame_count); offset++) {
+        const prefetch_idx = (frame_idx + offset) % frame_count
+        const known = getter?.(prefetch_idx) ?? null
+        if (known && !known.topology_stable) continue
+        if (known) {
+          const key = key_for_source(known)
+          void prepared_pipeline.request({
+            key,
+            priority: `prefetch`,
+            estimated_bytes,
+            prepare: () => prepare_source(prefetch_idx, known),
+          }, generation).then((outcome) =>
+            report_prefetch_outcome(outcome)
+          )
+          continue
+        }
+
+        const provisional_key: PreparedFrameKey = {
+          ...current_key,
+          frame_idx: prefetch_idx,
+        }
+        let reported_decode_error: Error | null = null
+        void prepared_pipeline.request_deferred({
+          key: provisional_key,
+          priority: `prefetch`,
+          estimated_bytes,
+          admit: async () => {
+            const source = await request_trajectory_frame_source_safely(
+              requester,
+              prefetch_idx,
+              (error) => {
+                reported_decode_error = error
+                report_buffer_failure(error)
+              },
+            )
+            if (!source) {
+              throw reported_decode_error ??
+                new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
+            }
+            if (!source.topology_stable) {
+              throw new Error(
+                `Trajectory frame ${prefetch_idx} changed topology`,
+              )
+            }
+            const decoded_key = key_for_source(source)
+            if (!same_prepared_frame_key(decoded_key, provisional_key)) {
+              throw new Error(
+                `Trajectory frame ${prefetch_idx} decoded under an ` +
+                  `unexpected prepared-frame key`,
+              )
+            }
+            const lattice_bytes = source.lattice?.reduce(
+              (bytes, row) =>
+                bytes + row.length * Float64Array.BYTES_PER_ELEMENT,
+              0,
+            ) ?? 0
+            return {
+              key: decoded_key,
+              retained_source_bytes: source.positions.byteLength +
+                (source.forces?.byteLength ?? 0) +
+                (source.stable_site_ids?.byteLength ?? 0) +
+                lattice_bytes,
+              prepare: () => prepare_source(prefetch_idx, source),
+            }
+          },
+        }, generation).then((outcome) =>
+          report_prefetch_outcome(outcome, reported_decode_error)
+        )
+      }
+    }
+  })
+
   $effect.pre(() => {
     // Fixed-topology trajectory playback: the trajectory fast-path
     // (compute_bond_connectivity_for_frame + build_trajectory_bond_pairs in
@@ -2681,6 +3415,11 @@
   // against stale filtered pairs). The shadow sync needs no gate: its deps
   // (filtered_bond_pairs identity) don't change while the chain is frozen.
   let typed_direct_active = $state(false)
+  // Set from the later live-ownership reconciliation after every relevant
+  // mount/eligibility change. Kept above the typed-direct $effect.pre to avoid
+  // a production TDZ while allowing packet-owned playback to bypass this
+  // legacy BondManager mirror entirely.
+  let packet_renderer_active_for_typed_direct = $state(false)
   let __td_prev_conn:
     | Array<{
       site_idx_1: number
@@ -2769,7 +3508,7 @@
     const __resuming_bbp = __bbp_was_suspended
     __bbp_was_suspended = false
     if (import.meta.env?.DEV) __probe_bbp_fires++
-    const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
+    const __t0 = performance.now()
     // Read all deps up front so Svelte subscribes correctly.
     const conn_state = bond_state.bond_connectivity
     const lbs = bond_state.last_bond_structure
@@ -2778,11 +3517,11 @@
     const drag = external_dragging
     const sel = selected_sites
     const overrides_size = overrides?.size ?? 0
-    const traj_positions = trajectory_frame_positions
+    const traj_positions = presented_trajectory_positions
     // Variable-cell: identity changes only when the cell actually varies, and
     // always alongside a traj_positions identity change — so the memo guards
     // below need no extra lattice term.
-    const frame_lat = trajectory_frame_lattice
+    const frame_lat = presented_trajectory_lattice
 
     // Plan v3 Phase 3 trajectory fast-path: when a trajectory is active,
     // bypass the slow build_bond_pairs path and use position-indexed
@@ -2790,17 +3529,14 @@
     // the slow path, so bbp_meaningful drops to 0 during playback (the
     // Phase 3 success criterion).
     if (traj_positions != null) {
-      // Layer 1 stale-bond fix: refresh connectivity for the current frame.
-      // Cache hits return synchronously; cache misses on small structures
-      // run sync detection; large-structure misses dispatch async (latest-wins
-      // throttle) and return the previous frame's connectivity in the
-      // meantime. NEVER reassigns bond_state.bond_connectivity synchronously,
-      // so this does not cause an infinite re-fire of this $effect.pre.
-      const traj_conn = compute_bond_connectivity_for_frame(
-        bond_state, traj_positions, bond_input,
-        show_bonds, lattice, bonding_strategy, bonding_options,
-        frame_lat,
-      )
+      if (packet_renderer_active_for_typed_direct) {
+        if (__td_prev_conn !== null || typed_direct_active) exit_typed_direct()
+        return
+      }
+      // Connectivity and geometry were prepared together and committed in one
+      // publication turn above. Never ask the cadence-era controller for a
+      // previous frame's graph here.
+      const traj_conn = conn_state
       const __traj_tol_v = (() => {
         const raw = (bonding_options as Record<string, unknown> | undefined)?.tolerance
         return typeof raw === `number` && raw > 0 ? raw : undefined
@@ -2846,7 +3582,14 @@
           __td_prev_pos = traj_positions
           __td_ctx = { lat: td_lat, sites: td_sites, tol: __traj_tol_v }
           if (!typed_direct_active) typed_direct_active = true
+          const manager_replace_started_ms = performance.now()
           bond_manager.replace_auto_bonds(topo.pairs, topo.count, topo.jimages)
+          trajectory_render_diagnostics.record_bond_manager_replace(
+            performance.now() - manager_replace_started_ms,
+          )
+          trajectory_render_diagnostics.record_typed_direct_sync(
+            performance.now() - __t0,
+          )
           schedule_typed_direct_tail_sync()
           if (import.meta.env?.DEV) {
             const __dt = performance.now() - __t0
@@ -3475,6 +4218,11 @@
     }
     return result
   })
+  // Occupancy belongs to the static topology. Evaluate the O(N) predicate
+  // only when atom_data itself changes, never once per trajectory packet.
+  let atom_data_has_partial_occupancy = $derived(
+    atom_data.some((atom) => atom.has_partial_occupancy),
+  )
 
   // Mark GPU picker as dirty when atom data, bonds, or cutting visibility change.
   // Use bond_pairs.length (cheap $state) instead of filtered_bond_pairs.length
@@ -3491,11 +4239,17 @@
     // Stub-mode toggles change which half-bond instances are visible.
     const _m = incomplete_periodic_edge_mode
     const _s = incomplete_edge_length_scale
-    // Phase 7e — image-atom decorator scene also rebuilds with the picker.
-    const _ial = image_atom_layout
-    const _pdl = partner_drawn_lookup
-    const _stf = slot_to_filtered_idx
-    void _l; void _m; void _s; void _ial; void _pdl; void _stf
+    // The packet ID picker synchronizes directly from manager_render_packet
+    // at pick time. Do not force the O(B) legacy image-decorator layout while
+    // packet picking owns the scene; resume those dependencies when legacy
+    // picking becomes active again.
+    if (!packet_picking_active) {
+      const _ial = image_atom_layout
+      const _pdl = partner_drawn_lookup
+      const _stf = slot_to_filtered_idx
+      void _ial; void _pdl; void _stf
+    }
+    void _l; void _m; void _s
     picker.picker_dirty = true
   })
 
@@ -3546,7 +4300,7 @@
     // with stale (entry-frame) topology, overwriting the typed writes.
     const ruled_bonds = apply_bond_distance_rules(
       bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
-      _rules_len > 0 ? trajectory_frame_positions ?? null : null,
+      _rules_len > 0 ? presented_trajectory_positions ?? null : null,
     )
 
     const is_site_visible = (site_idx: number) => {
@@ -3711,12 +4465,12 @@
   // hits on those return null (degraded but harmless).
   let slot_to_filtered_idx = $derived.by((): Int32Array => {
     void bond_manager.version
-    // Typed-direct playback: filtered_bond_pairs is frozen and slots churn
-    // every frame — a per-frame 26k-entry map against stale pairs is pure
-    // waste. Decorator hits bounds-check the length (gpu-picker-integration
-    // L418), so the shared empty map degrades picks to null. The pause
-    // tail-sync drops the gate and this re-derives with fresh pairs.
-    if (typed_direct_active) return EMPTY_SLOT_MAP
+    // Exact packet playback: filtered_bond_pairs stays frozen while the packet
+    // graph can churn every frame. Never map a current packet graph index
+    // through that stale legacy list. The shared empty map degrades packet
+    // bond picks to null; ownership fallback installs the exact manager graph
+    // and drops both gates before legacy picking resumes.
+    if (typed_direct_active || packet_renderer_active_for_typed_direct) return EMPTY_SLOT_MAP
     const count = bond_manager.count
     const out = new Int32Array(count)
     out.fill(-1)
@@ -4490,6 +5244,10 @@
   // overlay is idempotent.
   let atom_positions_buffer = $derived.by(() => {
     if (import.meta.env?.DEV) __probe_apb_fires++
+    const packet_positions = presented_trajectory_positions
+    if (packet_renderer_active_for_typed_direct && packet_positions !== null) {
+      return packet_positions
+    }
     const mgr = atom_manager
     void mgr.version // subscribe to per-slot position writes
     const sites = structure?.sites
@@ -4502,7 +5260,7 @@
     // overlay below overwrites every slot — skip the ~N proxied sites[i].xyz
     // reads per frame.
     const buf = new Float32Array(sites.length * 3)
-    const overlay_covers_all = trajectory_frame_positions != null &&
+    const overlay_covers_all = presented_trajectory_positions != null &&
       mgr.count >= sites.length
     if (!overlay_covers_all) {
       for (let i = 0; i < sites.length; i++) {
@@ -4522,18 +5280,6 @@
       buf[sid * 3 + 2] = mgr.get_z(slot)
     }
     return buf
-  })
-
-  // WebGPU overlay bridge: expose `atom_positions_buffer` to the parent as a
-  // getter. The overlay calls this in its per-frame refresh to source the
-  // SAME resolved per-displayed-atom positions the WebGL bonds/atoms use —
-  // no independent re-derivation from base-only trajectory data. Reading the
-  // $derived inside the returned closure (not capturing a snapshot) means each
-  // call yields the live current-frame array. Assigned via $effect so the
-  // binding survives prop reassignment churn.
-  $effect(() => {
-    get_displayed_frame_positions = () => atom_positions_buffer
-    return () => { get_displayed_frame_positions = null }
   })
 
   // Flat row-major Float64Array(9) for BondManagerInstances. Rows are the
@@ -4557,7 +5303,7 @@
   // frame lattice identity changes — i.e. per frame ONLY when the cell truly
   // varies (the supplier keeps the reference stable for fixed cells).
   let bond_frame_lattice_matrix = $derived.by((): Float64Array | null => {
-    const m = trajectory_frame_lattice
+    const m = presented_trajectory_lattice
     if (!m || m.length !== 3) return null
     const out = new Float64Array(9)
     out[0] = m[0][0]; out[1] = m[0][1]; out[2] = m[0][2]
@@ -4593,6 +5339,249 @@
     }
     return out
   })
+
+  // ── Manager-ready trajectory packet ───────────────────────────────────────
+  // The upstream packet owns only scientific/base frame + replica state. The
+  // scene resolves the exact display attributes and the FINAL live bond graph
+  // after typed/object/filter/manual synchronization, then shares one packet
+  // object with both render managers.
+  let manager_display_radii = $derived.by(() => {
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) return EMPTY_RADII
+    // Track both object and SvelteMap-style override mutations.
+    const _element_override_keys = Object.keys(element_radius_overrides ?? {})
+    const _site_override_size = site_radius_overrides?.size ?? 0
+    void _element_override_keys
+    void _site_override_size
+    return build_display_radii(sites, {
+      atom_radius,
+      same_size_atoms,
+      element_radius_overrides,
+      site_radius_overrides,
+    })
+  })
+
+  let manager_graph_owner: BondManager | null = null
+  let manager_graph_source_version = -1
+  let manager_graph_snapshot_version = 0
+  let manager_graph_snapshot: BaseBondGraph | null = null
+  let manager_bond_graph = $derived.by((): BaseBondGraph => {
+    const manager = bond_manager
+    const source_version = manager.version
+    if (
+      manager_graph_snapshot !== null && manager_graph_owner === manager &&
+      manager_graph_source_version === source_version
+    ) return manager_graph_snapshot
+
+    const count = manager.count
+    const strengths = new Float32Array(count)
+    strengths.fill(1)
+    manager_graph_snapshot = {
+      version: ++manager_graph_snapshot_version,
+      // Copy ONLY the live prefixes. Never retain mutable capacity buffers or
+      // subarray views: the next BondManager write must not mutate this packet.
+      pairs: manager.pairs_buffer.slice(0, count * 2),
+      jimages: manager.jimages_buffer.slice(0, count * 3),
+      kinds: manager.kinds_buffer.slice(0, count),
+      strengths,
+    }
+    manager_graph_owner = manager
+    manager_graph_source_version = source_version
+    return manager_graph_snapshot
+  })
+
+  let manager_topology_attribute_key_cache:
+    | ManagerTopologyAttributeKey
+    | null = null
+  let manager_topology_graph: BaseBondGraph | null = null
+  let manager_topology_version = 0
+  let manager_topology_snapshot: BaseTopology | null = null
+  let manager_packet_topology = $derived.by((): BaseTopology | null => {
+    const upstream = (
+      trajectory_frame_positions != null
+        ? prepared_render_packet
+        : render_packet
+    )?.topology ?? null
+    if (upstream === null) return null
+    const colors = atom_colors_buffer
+    const radii = manager_display_radii
+    const packet_owned_graph = trajectory_frame_positions != null &&
+        prepared_render_packet?.topology === upstream &&
+        packet_render_features_eligible()
+      ? upstream.bond_graph ?? null
+      : null
+    const bond_graph = packet_owned_graph ?? manager_bond_graph
+    const next_attribute_key = manager_topology_attribute_key(
+      manager_topology_attribute_key_cache,
+      upstream,
+      colors,
+      radii,
+    )
+    const attributes_changed = manager_topology_snapshot === null ||
+      next_attribute_key !== manager_topology_attribute_key_cache
+    if (attributes_changed || manager_topology_graph !== bond_graph) {
+      if (attributes_changed) manager_topology_version++
+      manager_topology_snapshot = {
+        ...upstream,
+        version: manager_topology_version,
+        colors: atom_colors_buffer,
+        radii: manager_display_radii,
+        bond_graph,
+      }
+      manager_topology_attribute_key_cache = next_attribute_key
+      manager_topology_graph = bond_graph
+    }
+    return manager_topology_snapshot
+  })
+
+  let manager_render_packet = $derived.by((): RenderPacket | null => {
+    const upstream = trajectory_frame_positions != null
+      ? prepared_render_packet
+      : render_packet
+    const topology = manager_packet_topology
+    if (upstream === null || topology === null) return null
+    const atom_count = upstream.topology.atom_count
+    if (
+      topology.colors.length !== atom_count * 3 ||
+      topology.radii.length !== atom_count
+    ) return null
+    return {
+      topology,
+      // Preserve upstream identity/version ownership for per-frame geometry and
+      // factor-only replica changes.
+      frame: upstream.frame,
+      replicas: upstream.replicas,
+    }
+  })
+
+  function packet_render_features_eligible(): boolean {
+    const features = {
+      atom_opacity_overrides: merged_atom_opacity_overrides.size,
+      bond_opacity_overrides: bond_opacity_overrides.size,
+      cutting_active,
+      drag_overrides: realtime_position_overrides?.size ?? 0,
+      hidden_atoms: new_atom_hidden_site_ids?.size ?? 0,
+      partial_occupancy: atom_data_has_partial_occupancy,
+      multibond: bond_order_perception,
+    }
+    return USE_NEW_ATOM_SYSTEM &&
+      manual_bonds.length === 0 &&
+      _deleted_bond_keys.size === 0 &&
+      !show_polyhedra &&
+      !clip_active &&
+      !show_hydrogen_bonds &&
+      combined_packet_render_eligible(features)
+  }
+  let combined_packet_renderer_owned = $derived(
+    manager_render_packet !== null && packet_render_features_eligible(),
+  )
+  let combined_packet_renderer_actually_owned = $derived(
+    manager_render_packet !== null &&
+      combined_packet_renderer_owned &&
+      show_bulk_atoms && !webgl_suspended,
+  )
+  $effect(() => {
+    packet_renderer_active_for_typed_direct =
+      combined_packet_renderer_actually_owned
+  })
+  let combined_packet_bonds_visible = $derived(
+    should_show_bonds(show_bonds, lattice) && !bonds_deferred,
+  )
+  let manager_gpu_positions = $derived(
+    manager_render_packet?.frame === prepared_render_packet?.frame
+      ? prepared_gpu_positions
+      : null,
+  )
+
+  function install_direct_prepared_presentation(
+    presentation: PreparedPresentationIdentity,
+  ): void {
+    const pending = pending_prepared_presentation
+    if (pending?.presentation !== presentation) return
+    const graph = presentation.prepared_packet.topology.bond_graph
+    const manager_replace_started_ms = performance.now()
+    if (graph) {
+      bond_manager.replace_auto_bonds(
+        graph.pairs,
+        graph.pairs.length / 2,
+        graph.jimages,
+      )
+    } else {
+      bond_manager.replace_auto_bonds([], 0)
+    }
+    trajectory_render_diagnostics.record_bond_manager_replace(
+      performance.now() - manager_replace_started_ms,
+    )
+    bond_state.bond_connectivity = graph ? graph_connectivity(graph) : []
+    bond_state.last_bond_structure = pending.structure
+    bond_state.last_bond_strategy = pending.rules_version
+    bond_state.last_elem_fingerprint = `${pending.topology_version}`
+    const manager = atom_manager
+    manager.begin_positions_batch()
+    try {
+      for (
+        let slot = 0;
+        slot < manager.count &&
+        slot < presentation.prepared_packet.topology.atom_count;
+        slot++
+      ) {
+        const site_idx = manager.site_ids_buffer[slot]
+        const offset = site_idx * 3
+        manager.set_position(
+          slot,
+          presentation.prepared_packet.frame.positions[offset],
+          presentation.prepared_packet.frame.positions[offset + 1],
+          presentation.prepared_packet.frame.positions[offset + 2],
+        )
+      }
+    } finally {
+      manager.commit_positions_batch()
+    }
+  }
+
+  // Eligibility can change after publication, and the manager packet can fail
+  // its shape guard. Reconcile against the layer's real mount conditions so
+  // every exact prepared frame gets either renderer evidence or one complete
+  // legacy install before acknowledgement.
+  $effect(() => {
+    const pending = pending_prepared_presentation
+    const current_display_packet = manager_render_packet
+    const current_prepared_packet = prepared_render_packet
+    const latest_key = latest_prepared_request_key
+    const layer_owned = combined_packet_renderer_actually_owned
+    if (pending === null) return
+    untrack(() => {
+      trajectory_presentation_committer.reconcile(
+        pending.presentation,
+        current_display_packet,
+        current_prepared_packet,
+        latest_key,
+        layer_owned,
+        install_direct_prepared_presentation,
+      )
+    })
+  })
+
+  function handle_packet_synced(evidence: PacketSyncEvidence): void {
+    const pending = pending_prepared_presentation
+    const committed = trajectory_presentation_committer.renderer_synced(
+      evidence,
+      manager_render_packet,
+      prepared_render_packet,
+      latest_prepared_request_key,
+    )
+    if (committed && pending !== null) {
+      trajectory_render_diagnostics.record_prepared_to_renderer_sync(
+        performance.now() - pending.published_at_ms,
+      )
+    }
+  }
+
+  // Visual T5 — while the managers consume a render packet, picking is the
+  // WebGL2 replica integer-ID pass (gpu-picker-integration packet branch).
+  // The invisible CPU sphere/cylinder hitbox meshes are NOT mounted and
+  // their matrix rebuild effects are skipped in this mode.
+  let packet_picking_active = $derived(combined_packet_renderer_owned)
 
   // Build a set for fast selected_bonds lookup
   let selected_bond_keys = $derived.by(() => new Set(selected_bonds.map(b => b.key)))
@@ -4733,6 +5722,7 @@
   let __hitbox_trailing: ReturnType<typeof setTimeout> | null = null
   $effect(() => {
     if (!bond_hitbox_mesh) return
+    if (packet_picking_active) return // Visual T5: GPU ID pass owns picking
     const bonds = filtered_bond_pairs
     const layout = image_atom_layout
     const partner_drawn = partner_drawn_lookup
@@ -4989,20 +5979,13 @@
   // Each logical bond emits 2 hitbox instances (paired stubs / two halves);
   // decode `instanceId >>> 1` to the bond index. Hovering / clicking either
   // half resolves to the same bond.
-  function handle_bond_hitbox_click(event: any) {
-    if (bond_drag_active || external_dragging) return
-    const instance_id = event.instanceId
-    if (instance_id === undefined) return
-    // Phase 7f — per-instance map handles both cell-internal (`>>> 1`-style)
-    // and decorator hits. -1 entries (orphan decorator slots) are no-ops.
-    const map = bond_hitbox_instance_to_filtered_idx
-    const bond_idx = instance_id < map.length
-      ? map[instance_id]
-      : (instance_id >>> 1)
+  // Shared bond-selection body for the legacy hitbox click AND the Visual T5
+  // packet-path click (which arrives with the filtered index pre-resolved).
+  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
     if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
     const bond = filtered_bond_pairs[bond_idx]
     if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
-    event.stopPropagation()
+    event?.stopPropagation?.()
     const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
     const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
     const bond_info = {
@@ -5020,6 +6003,19 @@
         : [...selected_bonds, bond_info]
     }
     hovered_bond_key = null
+  }
+
+  function handle_bond_hitbox_click(event: any) {
+    if (bond_drag_active || external_dragging) return
+    const instance_id = event.instanceId
+    if (instance_id === undefined) return
+    // Phase 7f — per-instance map handles both cell-internal (`>>> 1`-style)
+    // and decorator hits. -1 entries (orphan decorator slots) are no-ops.
+    const map = bond_hitbox_instance_to_filtered_idx
+    const bond_idx = instance_id < map.length
+      ? map[instance_id]
+      : (instance_id >>> 1)
+    select_bond_by_filtered_idx(bond_idx, event)
   }
 
   function handle_bond_hitbox_pointer_enter(event: any) {
@@ -5043,71 +6039,76 @@
     if (!bond_drag_active) hovered_bond_key = null
   }
 
-  // Merged single-pass derivation: radius + position + unique atoms from atom_data.
-  // Uses plain Map (not SvelteMap) since these are rebuilt from scratch each time.
-  //
-  // Plan v3 follow-up: subscribe to atom_manager.version so position_map
-  // re-derives on per-frame trajectory writes. Without this, under Architecture
-  // P (post-Phase-4), atom_data is silenced (re-derives only at topology load)
-  // → position_map freezes at frame-0 positions → selection highlights drift
-  // off the rendered atoms (visually: highlight wireframe sticks to frame-0
-  // while the atom moves with the trajectory). Same fix shape as the I5
-  // charge-label position fix at compute_charge_label_entries.
-  //
-  // Position priority chain (mirrors charge label & build_trajectory_bond_pairs):
-  //   1. realtime_position_overrides.get(site_idx)   — drag wins
-  //   2. trajectory_frame_positions[site_idx*3..]    — live trajectory
-  //   3. atom_manager slot lookup                    — supercell-extra
-  //   4. atom.position from atom_data                — load-time fallback
-  let atom_derived_maps = $derived.by(() => {
-    // WebGPU overlay active: scene not painting → these maps (selection
-    // highlight / label positions) aren't rendered. Skip the per-frame rebuild
-    // (this derived reads trajectory_frame_positions directly, which the parent
-    // still bumps each frame). Read suspend reactively so toggle-OFF re-derives
-    // the full maps for the current frame. Default false ⇒ unchanged.
-    if (webgl_suspended) return { radius_map: new Map<number, number>(), position_map: new Map<number, Vec3>(), unique: [] as typeof atom_data }
-    // R8.7 PROBE — load-cascade timing.
-    const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
-    void atom_manager.version // subscribe to per-slot position writes
-    const traj = trajectory_frame_positions
-    const traj_max_site = traj ? Math.floor(traj.length / 3) : 0
+  // Radius/occupancy metadata changes with topology or visual settings, not
+  // with trajectory positions. Keep it separate from the live position map:
+  // rebuilding all three maps on every manager.version bump allocated 20k
+  // Vec3 arrays plus two Maps per frame even when no selection/edit overlay
+  // needed positions, creating the dominant playback GC pressure.
+  let atom_static_maps = $derived.by(() => {
     const radius_map = new Map<number, number>()
-    const position_map = new Map<number, Vec3>()
+    const base_position_map = new Map<number, Vec3>()
     const unique: typeof atom_data = []
 
     for (const atom of atom_data) {
       if (!radius_map.has(atom.site_idx)) {
         radius_map.set(atom.site_idx, atom.radius)
-        const sid = atom.site_idx
-        let pos = realtime_position_overrides?.get(sid)
-        if (pos === undefined && traj && sid < traj_max_site) {
-          const base = sid * 3
-          pos = [traj[base], traj[base + 1], traj[base + 2]]
-        }
-        if (pos === undefined) {
-          const slot = atom_manager.find_slot_by_site_id(sid)
-          if (slot >= 0) {
-            pos = [
-              atom_manager.get_x(slot),
-              atom_manager.get_y(slot),
-              atom_manager.get_z(slot),
-            ]
-          }
-        }
-        position_map.set(sid, pos ?? atom.position)
+        base_position_map.set(atom.site_idx, atom.position)
         if (!atom.has_partial_occupancy) unique.push(atom)
       }
     }
-
-    if (import.meta.env?.DEV) {
-      const __dt = performance.now() - __t0
-      if (__dt > 5) console.log(`[probe] atom_derived_maps: ${__dt.toFixed(1)}ms (${atom_data.length} atoms)`)
-    }
-    return { radius_map, position_map, unique }
+    return { radius_map, base_position_map, unique }
   })
 
-  let radius_by_site_idx = $derived(atom_derived_maps.radius_map)
-  let position_by_site_idx = $derived(atom_derived_maps.position_map)
+  const EMPTY_SITE_POSITION_MAP = new Map<number, Vec3>()
+  let live_atom_position_map_needed = $derived(
+    pencil_mode_active ||
+      bond_mode_active ||
+      selected_bonds.length > 0 ||
+      hovered_bond_key !== null ||
+      bond_first_atom !== null ||
+      (selected_sites?.length ?? 0) > 0 ||
+      (active_sites?.length ?? 0) > 0 ||
+      hovered_idx !== null,
+  )
+
+  // Live positions are only consumed by active interaction overlays. Normal
+  // playback renders directly from typed buffers, so keep a stable empty Map
+  // and do not subscribe to per-frame manager/trajectory updates while idle.
+  //
+  // Position priority chain (mirrors charge label & bond rendering):
+  //   1. realtime_position_overrides.get(site_idx)   — drag wins
+  //   2. trajectory_frame_positions[site_idx*3..]    — live trajectory
+  //   3. atom_manager slot lookup                    — supercell-extra
+  //   4. atom.position from atom_data                — load-time fallback
+  let position_by_site_idx = $derived.by(() => {
+    if (webgl_suspended) return EMPTY_SITE_POSITION_MAP
+    if (!live_atom_position_map_needed) return EMPTY_SITE_POSITION_MAP
+    void atom_manager.version
+    const traj = presented_trajectory_positions
+    const traj_max_site = traj ? Math.floor(traj.length / 3) : 0
+    const position_map = new Map<number, Vec3>()
+    for (const [sid, fallback] of atom_static_maps.base_position_map) {
+      let pos = realtime_position_overrides?.get(sid)
+      if (pos === undefined && traj && sid < traj_max_site) {
+        const base = sid * 3
+        pos = [traj[base], traj[base + 1], traj[base + 2]]
+      }
+      if (pos === undefined) {
+        const slot = atom_manager.find_slot_by_site_id(sid)
+        if (slot >= 0) {
+          pos = [
+            atom_manager.get_x(slot),
+            atom_manager.get_y(slot),
+            atom_manager.get_z(slot),
+          ]
+        }
+      }
+      position_map.set(sid, pos ?? fallback)
+    }
+    return position_map
+  })
+
+  let radius_by_site_idx = $derived(atom_static_maps.radius_map)
 
   // Radius for ALL sites (including hidden elements) - used for frozen atoms overlay
   let all_radii_by_site_idx = $derived.by(() => {
@@ -5141,7 +6142,7 @@
     if (!show_force_vectors || !structure?.sites) return []
     // Override forces from trajectory Float32Array (positions are already
     // correct in structure.sites since the unified single-path always updates structure)
-    const traj_forces = trajectory_frame_forces
+    const traj_forces = prepared_frame_forces
     if (traj_forces) {
       const override_sites = structure.sites.map((site, i) => ({
         ...site,
@@ -5176,7 +6177,7 @@
 
   // Unique instanced atoms: one entry per site_idx (full-occupancy only), for site labels.
   const SITE_LABEL_LIMIT = 2000
-  let unique_instanced_atoms = $derived(atom_derived_maps.unique)
+  let unique_instanced_atoms = $derived(atom_static_maps.unique)
   let site_labels_capped = $derived(unique_instanced_atoms.length > SITE_LABEL_LIMIT)
   let site_label_atoms = $derived(
     site_labels_capped ? unique_instanced_atoms.slice(0, SITE_LABEL_LIMIT) : unique_instanced_atoms
@@ -5821,6 +6822,27 @@
     <T.Group position={math.scale(rotation_target, -1)}>
       {#if show_bulk_atoms}
         {#if USE_NEW_ATOM_SYSTEM}
+          {#if manager_render_packet && combined_packet_renderer_owned && !webgl_suspended}
+            <WebGLReplicaLayer
+              packet={manager_render_packet}
+              gpu_positions_rgba={manager_gpu_positions}
+              position_resource={shared_position_texture}
+              color_resource={shared_atom_color_texture}
+              show_atoms={show_bulk_atoms}
+              show_bonds={combined_packet_bonds_visible}
+              bond_radius={bond_thickness}
+              {incomplete_edge_length_scale}
+              ambient_light={active_ambient_light}
+              directional_light={active_directional_light}
+              {light_dir}
+              {render_style}
+              {matcap_preset}
+              highlight_strength={active_highlight_strength}
+              opacity={1}
+              ghost_opacity={image_atom_opacity}
+              on_packet_synced={handle_packet_synced}
+            />
+          {/if}
           <!-- Phase X6b renderer. Mirrors AtomImpostors for cutting / drag /
                image-atom opacity / per-atom overrides. Remaining regressions
                (partial-occupancy wedges; selection highlight overlays) are
@@ -5842,6 +6864,10 @@
             {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}
+            render_packet={combined_packet_renderer_owned
+              ? manager_render_packet
+              : null}
+            packet_renderer_owned={combined_packet_renderer_owned}
           />
         {:else}
           <!-- Impostor-based atom rendering: billboard quads with ray-sphere fragment shader -->
@@ -5880,10 +6906,13 @@
           />
         {/if}
 
-        <!-- Invisible atom interaction mesh: Threlte event system handles click/selection -->
+        <!-- Invisible atom interaction mesh: Threlte event system handles click/selection.
+             Gated OFF while a render packet is active (Visual T5) — the WebGL2
+             replica integer-ID pass owns atom picking on that path. -->
         <!-- Uses actual SphereGeometry(0.5) for raycasting, matching old extras.Instance behavior -->
-        {#if atom_data.length > 0 && show_bulk_atoms}
+        {#if atom_data.length > 0 && show_bulk_atoms && !packet_picking_active}
           <T.InstancedMesh
+            name="catgo-atom-picking-hitbox"
             args={[atom_interaction_geometry, atom_interaction_material, INITIAL_MESH_CAPACITY]}
             bind:ref={atom_interaction_mesh}
             frustumCulled={false}
@@ -6017,14 +7046,22 @@
           {incomplete_periodic_edge_mode}
           {incomplete_edge_length_scale}
           {hide_incomplete_bonds}
-          {image_atom_layout}
-          {partner_drawn_lookup}
+          image_atom_layout={combined_packet_renderer_owned
+            ? empty_image_atom_layout()
+            : image_atom_layout}
+          partner_drawn_lookup={combined_packet_renderer_owned
+            ? null
+            : partner_drawn_lookup}
           multibond_enabled={bond_order_perception}
           {depth_cue_uniforms}
           {light_dir}
           highlight_strength={active_highlight_strength}
           gpu_transform_active={typed_direct_active}
           max_bond_length={MAX_BOND_LENGTH}
+          render_packet={combined_packet_renderer_owned
+            ? manager_render_packet
+            : null}
+          packet_renderer_owned={combined_packet_renderer_owned}
         />
       {/if}
 
@@ -6042,9 +7079,12 @@
         {/each}
       {/if}
 
-      <!-- Batched invisible hitbox for all bonds (single InstancedMesh) -->
-      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
+      <!-- Batched invisible hitbox for all bonds (single InstancedMesh).
+           Gated OFF while a render packet is active (Visual T5) — bond picks
+           route through the WebGL2 replica integer-ID pass instead. -->
+      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms && !packet_picking_active}
         <T.InstancedMesh
+          name="catgo-bond-picking-hitbox"
           args={[bond_hitbox_geometry, bond_hitbox_material, INITIAL_MESH_CAPACITY]}
           bind:ref={bond_hitbox_mesh}
           frustumCulled={false}
@@ -6052,6 +7092,8 @@
           onpointerenter={handle_bond_hitbox_pointer_enter}
           onpointerleave={handle_bond_hitbox_pointer_leave}
         />
+      {/if}
+      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
         <!-- Bond halo (fresnel silhouette glow) — unified visual language
              with the atom selection halo. Renders for hovered + selected
              bonds; deduped via bond_halo_entries. depthTest:true so atoms
@@ -6222,7 +7264,7 @@
              frozen frame-0 lattice. Single wireframe box — per-frame rebuild
              is negligible, and fixed-cell identity stability skips it. -->
         <Lattice
-          matrix={(trajectory_frame_lattice as [Vec3, Vec3, Vec3] | null) ?? lattice.matrix}
+          matrix={(presented_trajectory_lattice as [Vec3, Vec3, Vec3] | null) ?? lattice.matrix}
           {...lattice_props}
         />
       {/if}

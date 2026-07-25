@@ -15,10 +15,7 @@
     structure_to_poscar, structure_to_xyz,
     type StructureData,
   } from '$lib/structure/export/offline-serialize'
-  import { export_supercell_via_worker } from '$lib/structure/export/supercell-export-client'
-  import type {
-    CoreStructure, SupercellExportFormat, Vec3 as SupercellVec3,
-  } from '$lib/structure/export/supercell-export-core'
+  import { select_active_render_canvas } from '$lib/structure/scene/render-surface'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   // Lazy-load structure translations
@@ -56,9 +53,6 @@
     selected_indices = [],
     on_request_vacuum_box = undefined,
     trajectory_context,
-    gpu_supercell_active = false,
-    gpu_supercell_factors = [1, 1, 1],
-    gpu_supercell_base = undefined,
     ...rest
   }: {
     export_pane_open?: boolean
@@ -75,60 +69,13 @@
     selected_indices?: number[]
     on_request_vacuum_box?: () => void
     trajectory_context?: { total_frames: number; on_step: (idx: number) => void | Promise<void> }
-    // WebGPU large-system overlay: when a >1 supercell is requested with the
-    // overlay ON, `structure` here is the BASE cell (the GPU instances it). To
-    // export the REAL supercell we expand base × factors off-thread in a worker.
-    gpu_supercell_active?: boolean
-    gpu_supercell_factors?: SupercellVec3
-    // The actual BASE cell the GPU instances (= displayed_structure when active,
-    // i.e. after any primitive/conventional cell transform, no PBC images).
-    // Falls back to `structure` if not provided.
-    gpu_supercell_base?: AnyStructure
   } = $props()
 
-  // Busy indicator while the worker expands + serializes a large supercell.
-  let supercell_exporting = $state(false)
-  let supercell_export_error = $state<string | null>(null)
-
-  // Formats whose pure serializer is worker-safe (POSCAR + (ext)xyz). Others
-  // fall through to the normal synchronous path even when the overlay is on.
-  const WORKER_FORMATS: Record<string, SupercellExportFormat> = {
-    poscar: `poscar`,
-    xyz: `xyz`,
-    extxyz: `extxyz`,
-  }
-
-  // Synchronous gate: should this format's export go through the worker? True
-  // only when the overlay supercell is active AND the format has a worker-safe
-  // serializer. Lets callers keep their normal sync path untouched otherwise.
-  function should_route_to_supercell_worker(format: string): boolean {
-    return gpu_supercell_active && !!(gpu_supercell_base ?? structure) && !!WORKER_FORMATS[format]
-  }
-
-  // Expand base × factors and serialize the requested format off-thread, then
-  // download. Only invoked when should_route_to_supercell_worker(format) is true.
-  async function maybe_export_supercell(format: string): Promise<void> {
-    const base = gpu_supercell_base ?? structure
-    const worker_format = WORKER_FORMATS[format]
-    if (!base || !worker_format) return
-    supercell_export_error = null
-    supercell_exporting = true
-    try {
-      await export_supercell_via_worker(
-        base as unknown as CoreStructure,
-        gpu_supercell_factors,
-        worker_format,
-        {
-          on_error: (err) => { supercell_export_error = err },
-        },
-      )
-    } catch (err) {
-      supercell_export_error = err instanceof Error ? err.message : String(err)
-      console.error(`[ExportPane] Supercell worker export failed:`, err)
-    } finally {
-      supercell_exporting = false
-    }
-  }
+  // Visual T6: the bottom-right visual supercell control is VIEW-ONLY — a
+  // ReplicaLayout in the render packet. Scientific exports (POSCAR / XYZ /
+  // CIF / …) therefore ALWAYS serialize the base `structure`; there is no
+  // visual-dims expansion path here on any render backend. True scientific
+  // supercells come from the explicit Build/LatticePane operation.
 
   // Active section tab
   let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark' | 'catrender'>('structure')
@@ -332,17 +279,9 @@
     return () => observer.disconnect()
   })
 
-  // Structure export functions
+  // Structure export functions — always the base scientific structure.
   function export_structure(format: `json` | `xyz` | `cif` | `poscar` | `mol2` | `pdb`) {
     if (!structure) return
-    // When a GPU supercell is active AND the format has a worker-safe serializer
-    // (POSCAR / xyz), expand + serialize the REAL supercell off-thread instead
-    // of writing only the base cell. The check is synchronous so the normal
-    // (non-supercell) path below stays fully synchronous and unchanged.
-    if (should_route_to_supercell_worker(format)) {
-      void maybe_export_supercell(format)
-      return
-    }
     const fns = {
       json: exports.export_structure_as_json,
       xyz: exports.export_structure_as_xyz,
@@ -385,7 +324,6 @@
   // Quick offline export — no backend needed
   function quick_export_poscar() {
     if (!structure) return
-    if (should_route_to_supercell_worker(`poscar`)) { void maybe_export_supercell(`poscar`); return }
     try {
       const text = structure_to_poscar(structure as unknown as StructureData)
       const name = (structure as any)?.formula || (structure as any)?.id || `structure`
@@ -397,7 +335,6 @@
 
   function quick_export_xyz() {
     if (!structure) return
-    if (should_route_to_supercell_worker(`xyz`)) { void maybe_export_supercell(`xyz`); return }
     try {
       const text = structure_to_xyz(structure as unknown as StructureData)
       const name = (structure as any)?.formula || (structure as any)?.id || `structure`
@@ -444,18 +381,6 @@
   {#if active_section === 'structure'}
     <!-- Structure text formats -->
     <div class="section-content">
-      {#if gpu_supercell_active}
-        <div class="supercell-export-notice">
-          {#if supercell_exporting}
-            <span class="spinner"></span> Expanding {gpu_supercell_factors.join('×')} supercell in a worker…
-          {:else}
-            POSCAR / XYZ export expands the full {gpu_supercell_factors.join('×')} supercell off-thread.
-          {/if}
-        </div>
-      {/if}
-      {#if supercell_export_error}
-        <p class="error">{supercell_export_error}</p>
-      {/if}
       <label class="section-label">{t('structure.text_formats')}</label>
       <div class="export-buttons">
         {#each text_export_formats as { label, format }}
@@ -492,7 +417,9 @@
             <option value="pdf">PDF</option>
           </select>
           <button disabled={!has_canvas} onclick={() => {
-            const canvas = wrapper?.querySelector('canvas') as HTMLCanvasElement
+            // Visual T6: capture the ACTIVE render canvas (WebGPU overlay vs
+            // kept-warm WebGL), never blindly the first <canvas>.
+            const canvas = select_active_render_canvas(wrapper)
             if (canvas) export_canvas_as_image(canvas, structure, image_format, png_dpi, scene, camera, crop_region)
           }}>⬇</button>
           {#if image_format === 'svg' || image_format === 'pdf'}
@@ -561,7 +488,7 @@
             <button
               disabled={!has_canvas || seq_exporting || parsed_frames.length === 0}
               onclick={async () => {
-                const canvas = wrapper?.querySelector('canvas') as HTMLCanvasElement
+                const canvas = select_active_render_canvas(wrapper)
                 if (!canvas || !trajectory_context || parsed_frames.length === 0) return
                 seq_exporting = true
                 seq_progress = 0
@@ -862,15 +789,4 @@
     border: 1px solid var(--warning-color, #f59e0b);
     color: var(--warning-color, #f59e0b);
   }
-  .supercell-export-notice {
-    display: flex; align-items: center; gap: 6px; font-size: 0.78em;
-    padding: 5px 8px; margin-bottom: 0.6em; border-radius: 4px;
-    background: rgba(59, 130, 246, 0.12); color: var(--accent-color, #3b82f6);
-  }
-  .spinner {
-    width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
-    border: 2px solid currentColor; border-top-color: transparent;
-    animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

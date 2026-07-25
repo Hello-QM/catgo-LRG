@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AnyStructure } from '$lib'
 import type { FrameLoader, TrajectoryType } from '$lib/trajectory'
 import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
+import { create_frame_request_loader } from '$lib/trajectory/frame-loading'
 import { scale_structure_geometry, validate_uniform_topology } from '$lib/trajectory/operations'
 
 function structure(elements = [`C`, `H`]): AnyStructure {
@@ -81,6 +82,7 @@ describe(`trajectory pane isolation`, () => {
 
   it(`forks streaming loaders`, () => {
     let forks = 0
+    const frame_source_data = new ArrayBuffer(8)
     const loader: FrameLoader = {
       fork: () => {
         forks++
@@ -91,14 +93,20 @@ describe(`trajectory pane isolation`, () => {
       load_frame: async () => null,
       extract_plot_metadata: async () => [],
     }
-    const source = { frames: [{ structure: structure(), step: 0 }], frame_loader: loader } as TrajectoryType & { frame_loader: FrameLoader }
+    const source = {
+      frames: [{ structure: structure(), step: 0 }],
+      frame_loader: loader,
+      frame_source_data,
+    } as TrajectoryType & { frame_loader: FrameLoader; frame_source_data: ArrayBuffer }
     const a = clone_trajectory_for_pane(source) as typeof source
     const b = clone_trajectory_for_pane(source) as typeof source
     expect(forks).toBe(2)
     expect(a.frame_loader).not.toBe(b.frame_loader)
+    expect(a.frame_source_data).toBe(frame_source_data)
+    expect(b.frame_source_data).toBe(frame_source_data)
   })
 
-  it(`keeps streamed transformation pipelines pane-local`, async () => {
+  it(`keeps streamed operation ledgers pane-local and out of forked loaders`, async () => {
     const loader: FrameLoader = {
       fork: () => ({ ...loader }),
       get_total_frames: async () => 1,
@@ -110,16 +118,122 @@ describe(`trajectory pane isolation`, () => {
       frames: [{ structure: structure(), step: 0 }],
       frame_loader: loader,
     } as TrajectoryType & { frame_loader: FrameLoader }
-    const scaled = clone_trajectory_for_pane(source) as typeof source & {
-      pane_transformations: { kind: `scale_geometry`; factor: number }[]
-    }
+    const scaled = clone_trajectory_for_pane(source) as typeof source
     const untouched = clone_trajectory_for_pane(source) as typeof source
-    scaled.pane_transformations.push({ kind: `scale_geometry`, factor: 2 })
+    scaled.operation_ledger!.append({ kind: `all` }, { kind: `scale_geometry`, factor: 2 })
 
-    const scaled_frame = await scaled.frame_loader.load_frame(``, 0)
-    const untouched_frame = await untouched.frame_loader.load_frame(``, 0)
+    // Forked loaders serve immutable base frames — no transformation replay.
+    const raw = await scaled.frame_loader.load_frame(``, 0)
+    expect(raw?.structure.sites[1].xyz[0]).toBe(1)
+
+    // The pane's effective-frame resolver is the only transform path, and it
+    // is pane-local: the sibling pane resolves untransformed frames.
+    const scaled_frame = await scaled.effective_frames!.resolve(
+      0,
+      (idx) => scaled.frame_loader.load_frame(``, idx),
+    )
+    const untouched_frame = await untouched.effective_frames!.resolve(
+      0,
+      (idx) => untouched.frame_loader.load_frame(``, idx),
+    )
     expect(scaled_frame?.structure.sites[1].xyz[0]).toBeCloseTo(2)
     expect(untouched_frame?.structure.sites[1].xyz[0]).toBe(1)
+  })
+
+  it(`routes frame requests through the effective-frame resolver`, async () => {
+    const loader: FrameLoader = {
+      fork: () => ({ ...loader }),
+      get_total_frames: async () => 1,
+      build_frame_index: async () => [],
+      load_frame: async () => ({ structure: structure(), step: 0 }),
+      extract_plot_metadata: async () => [],
+    }
+    const source = {
+      frames: [{ structure: structure(), step: 0 }],
+      frame_loader: loader,
+      frame_source_data: ``,
+    } as TrajectoryType & { frame_loader: FrameLoader }
+    const pane = clone_trajectory_for_pane(source) as typeof source
+
+    // Legacy bridge: Trajectory.svelte still records streamed all-frame scale
+    // edits via pane_transformations.push — the pane must land it in the ledger.
+    pane.pane_transformations!.push({ kind: `scale_geometry`, factor: 2 })
+    expect(pane.operation_ledger!.entries).toHaveLength(1)
+
+    const result = await create_frame_request_loader().load(pane, 0, null, null)
+    expect(result.status).toBe(`loaded`)
+    if (result.status === `loaded`) {
+      expect(result.frame.structure.sites[1].xyz[0]).toBeCloseTo(2)
+    }
+  })
+
+  it(`clones the ledger for pane-from-pane duplication without sharing`, () => {
+    const source: TrajectoryType = {
+      frames: [{ structure: structure(), step: 0 }],
+    }
+    const a = clone_trajectory_for_pane(source)!
+    a.operation_ledger!.append({ kind: `all` }, { kind: `scale_geometry`, factor: 2 })
+
+    const b = clone_trajectory_for_pane(a)!
+    expect(b.operation_ledger).not.toBe(a.operation_ledger)
+    expect(b.effective_frames).not.toBe(a.effective_frames)
+    expect(b.operation_ledger!.entries).toHaveLength(1) // inherits the edit
+
+    b.operation_ledger!.append({ kind: `frame`, frame_idx: 0 }, {
+      kind: `scale_geometry`,
+      factor: 3,
+    })
+    expect(a.operation_ledger!.entries).toHaveLength(1) // append stays pane-local
+  })
+
+  it(`preserves in-memory ledger cursors across pane duplication`, () => {
+    const source = clone_trajectory_for_pane({
+      frames: [{ structure: structure(), step: 0 }],
+    })!
+    source.operation_ledger!.append(
+      { kind: `all` },
+      { kind: `scale_geometry`, factor: 2 },
+    )
+    source.frames[0].structure.sites[1].xyz[0] = 2
+    source.materialized_ledger_cursors = [source.operation_ledger!.entries.length]
+
+    const copy = clone_trajectory_for_pane(source)!
+
+    expect(copy.materialized_ledger_cursors).toEqual([1])
+    expect(copy.materialized_ledger_cursors).not.toBe(
+      source.materialized_ledger_cursors,
+    )
+    expect(copy.frames[0].structure.sites[1].xyz[0]).toBe(2)
+  })
+
+  it(`retains the previous frame when a ledger op fails on a streamed frame`, async () => {
+    const molecule = { sites: structure().sites } as AnyStructure // no lattice
+    const loader: FrameLoader = {
+      fork: () => ({ ...loader }),
+      get_total_frames: async () => 1,
+      build_frame_index: async () => [],
+      load_frame: async () => ({ structure: molecule, step: 0 }),
+      extract_plot_metadata: async () => [],
+    }
+    const source = {
+      frames: [{ structure: molecule, step: 0 }],
+      frame_loader: loader,
+      frame_source_data: ``,
+    } as TrajectoryType & { frame_loader: FrameLoader }
+    const pane = clone_trajectory_for_pane(source) as typeof source
+    pane.operation_ledger!.append({ kind: `all` }, {
+      kind: `supercell`,
+      matrix: [[2, 0, 0], [0, 1, 0], [0, 0, 1]],
+      reorient: false,
+    })
+
+    const previous = { structure: structure(), step: 0 }
+    const result = await create_frame_request_loader().load(pane, 0, previous, null)
+    expect(result.status).toBe(`failed`)
+    if (result.status === `failed`) {
+      expect(result.frame).toBe(previous) // last complete scene retained
+      expect(result.error.message).toMatch(/Supercell rejected/)
+    }
   })
 
   it(`rejects unsafe all-frame topology edits`, () => {

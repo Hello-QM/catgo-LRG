@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
-import { pack_params, unpack_jimage, PARAMS_BYTES, type BondComputeRun } from '$lib/structure/gpu/bond-compute'
+import { describe, expect, it } from 'vitest'
+import {
+  pack_jimage,
+  pack_params,
+  PARAMS_BYTES,
+  type BondComputeRun,
+  unpack_jimage,
+} from '$lib/structure/gpu/bond-compute'
+import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
 
 const make_run = (over: Partial<BondComputeRun> = {}): BondComputeRun => ({
   tolerance: 0.45,
@@ -89,19 +96,23 @@ describe(`pack_params`, () => {
   })
 })
 
-describe(`unpack_jimage`, () => {
-  it(`round-trips every (na,nb,nc) in {-1,0,1}^3`, () => {
-    for (let na = -1; na <= 1; na++) {
-      for (let nb = -1; nb <= 1; nb++) {
-        for (let nc = -1; nc <= 1; nc++) {
-          const packed = (na + 1) | ((nb + 1) << 2) | ((nc + 1) << 4)
-          expect(unpack_jimage(packed)).toEqual([na, nb, nc])
+describe(`signed jimage packing`, () => {
+  it(`round-trips representative values across the full signed Int8 range`, () => {
+    const values = [-128, -3, -1, 0, 1, 2, 127]
+    for (const na of values) {
+      for (const nb of values) {
+        for (const nc of values) {
+          expect(unpack_jimage(pack_jimage(na, nb, nc))).toEqual([na, nb, nc])
         }
       }
     }
   })
 
-  it(`[0,0,0] packs to 0b010101 = 21`, () => {
-    expect(unpack_jimage(21)).toEqual([0, 0, 0])
+  it(`[0,0,0] uses three biased 8-bit lanes in CPU and compute shader paths`, () => {
+    expect(pack_jimage(0, 0, 0)).toBe(128 | (128 << 8) | (128 << 16))
+    expect(BOND_COMPUTE_WGSL).toContain(`u32(na + 128)`)
+    expect(BOND_COMPUTE_WGSL).toContain(`u32(nb + 128) << 8u`)
+    expect(BOND_COMPUTE_WGSL).toContain(`u32(nc + 128) << 16u`)
+    expect(BOND_COMPUTE_WGSL).not.toContain(`u32(na+1)`)
   })
 })

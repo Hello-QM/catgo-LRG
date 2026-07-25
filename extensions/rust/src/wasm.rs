@@ -5360,6 +5360,156 @@ impl BondTable {
     }
 }
 
+fn owning_bond_table(bonds: &[crate::bonding::Bond]) -> BondTable {
+    let mut table = BondTable {
+        pairs: Vec::with_capacity(bonds.len() * 2),
+        images: Vec::with_capacity(bonds.len() * 3),
+        lengths: Vec::with_capacity(bonds.len()),
+        strengths: Vec::with_capacity(bonds.len()),
+    };
+    for bond in bonds {
+        table.pairs.push(bond.site_idx_1 as u32);
+        table.pairs.push(bond.site_idx_2 as u32);
+        table.images.push(bond.image[0] as i8);
+        table.images.push(bond.image[1] as i8);
+        table.images.push(bond.image[2] as i8);
+        table.lengths.push(bond.bond_length as f32);
+        table.strengths.push(bond.strength as f32);
+    }
+    table
+}
+
+fn set_js_error_number(error: &js_sys::Error, name: &str, value: f64) {
+    let _ = js_sys::Reflect::set(
+        error.as_ref(),
+        &JsValue::from_str(name),
+        &JsValue::from_f64(value),
+    );
+}
+
+fn trajectory_bond_session_error(
+    error: crate::trajectory_bond::TrajectoryBondSessionError,
+) -> JsValue {
+    use crate::trajectory_bond::TrajectoryBondSessionError;
+
+    let js_error = js_sys::Error::new(&error.to_string());
+    match error {
+        TrajectoryBondSessionError::PositionLengthMismatch {
+            session_id,
+            expected_atom_count,
+            expected_float_count,
+            actual_float_count,
+            frame_idx,
+        } => {
+            js_error.set_name("TrajectoryBondFrameLengthError");
+            set_js_error_number(&js_error, "session_id", session_id as f64);
+            set_js_error_number(
+                &js_error,
+                "expected_atom_count",
+                expected_atom_count as f64,
+            );
+            set_js_error_number(
+                &js_error,
+                "expected_float_count",
+                expected_float_count as f64,
+            );
+            set_js_error_number(
+                &js_error,
+                "actual_float_count",
+                actual_float_count as f64,
+            );
+            let frame_idx = frame_idx
+                .map(|idx| JsValue::from_f64(idx as f64))
+                .unwrap_or(JsValue::NULL);
+            let _ = js_sys::Reflect::set(
+                js_error.as_ref(),
+                &JsValue::from_str("frame_idx"),
+                &frame_idx,
+            );
+        }
+        TrajectoryBondSessionError::LatticeLengthMismatch {
+            session_id,
+            actual,
+        } => {
+            js_error.set_name("TrajectoryBondLatticeLengthError");
+            set_js_error_number(&js_error, "session_id", session_id as f64);
+            set_js_error_number(&js_error, "actual", actual as f64);
+        }
+        TrajectoryBondSessionError::UnknownAtomicNumber {
+            session_id,
+            site_idx,
+            atomic_number,
+        } => {
+            js_error.set_name("TrajectoryBondAtomicNumberError");
+            set_js_error_number(&js_error, "session_id", session_id as f64);
+            set_js_error_number(&js_error, "site_idx", site_idx as f64);
+            set_js_error_number(
+                &js_error,
+                "atomic_number",
+                atomic_number as f64,
+            );
+        }
+    }
+    js_error.into()
+}
+
+/// Mutable exact bond-detection session for trajectory frames sharing one topology.
+#[wasm_bindgen]
+pub struct WasmTrajectoryBondSession {
+    inner: crate::trajectory_bond::TrajectoryBondSession,
+}
+
+/// Create a persistent exact trajectory bond session.
+#[wasm_bindgen]
+pub fn create_trajectory_bond_session(
+    session_id: u32,
+    atomic_numbers: &[u8],
+    pbc: &[u8],
+    options_json: Option<String>,
+) -> Result<WasmTrajectoryBondSession, JsValue> {
+    let pbc = if pbc.len() == 3 {
+        [pbc[0] != 0, pbc[1] != 0, pbc[2] != 0]
+    } else {
+        [true, true, true]
+    };
+    let options = match options_json {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|error| js_sys::Error::new(&error.to_string()))?,
+        None => crate::bonding::AtomRadiiOptions::default(),
+    };
+    let inner = crate::trajectory_bond::TrajectoryBondSession::new(
+        session_id,
+        atomic_numbers,
+        pbc,
+        options,
+    )
+    .map_err(trajectory_bond_session_error)?;
+    Ok(WasmTrajectoryBondSession { inner })
+}
+
+#[wasm_bindgen]
+impl WasmTrajectoryBondSession {
+    /// Compute one exact frame while retaining the session's reusable workspace.
+    pub fn compute_frame(
+        &mut self,
+        positions: &[f32],
+        lattice: &[f64],
+        frame_idx: u32,
+    ) -> Result<BondTable, JsValue> {
+        let bonds = self
+            .inner
+            .compute_frame(positions, lattice, Some(frame_idx))
+            .map_err(trajectory_bond_session_error)?;
+        Ok(owning_bond_table(bonds))
+    }
+
+    /// Return cumulative session diagnostics as a compact JSON object.
+    pub fn diagnostics_json(&self) -> String {
+        serde_json::to_string(&self.inner.stats())
+            .expect("trajectory bond session diagnostics always serialize")
+    }
+}
+
 /// Detect bonds (atom_radii strategy) from raw typed arrays — no JSON on
 /// either side of the boundary. Built for per-frame trajectory bonding where
 /// the serde round trip dominates.
@@ -5494,22 +5644,7 @@ pub fn detect_bonds_radii_typed(
 
     let bonds = crate::bonding::detect_bonds_atom_radii(&structure, &options);
 
-    let mut table = BondTable {
-        pairs: Vec::with_capacity(bonds.len() * 2),
-        images: Vec::with_capacity(bonds.len() * 3),
-        lengths: Vec::with_capacity(bonds.len()),
-        strengths: Vec::with_capacity(bonds.len()),
-    };
-    for bond in &bonds {
-        table.pairs.push(bond.site_idx_1 as u32);
-        table.pairs.push(bond.site_idx_2 as u32);
-        table.images.push(bond.image[0] as i8);
-        table.images.push(bond.image[1] as i8);
-        table.images.push(bond.image[2] as i8);
-        table.lengths.push(bond.bond_length as f32);
-        table.strengths.push(bond.strength as f32);
-    }
-    Ok(table)
+    Ok(owning_bond_table(&bonds))
 }
 
 /// Find adsorption sites on a surface structure using GASCAP-like algorithm.

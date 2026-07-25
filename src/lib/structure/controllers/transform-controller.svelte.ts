@@ -3,21 +3,25 @@
  *
  * Manages the structure transformation pipeline:
  * - Cell type transformation (original, conventional, primitive)
- * - Supercell generation (async WASM)
- * - PBC image atom expansion
+ * - PBC image atom expansion (display decoration only)
  * - Lattice alignment rotation
  * - displayed_structure and saveable_structure sync
  *
- * The pipeline is: structure -> cell_transformed -> supercell -> PBC images -> displayed
+ * The pipeline is: structure -> cell_transformed (base) -> PBC images -> displayed
+ *
+ * Visual T6: the viewer's bottom-right visual supercell control is VIEW-ONLY.
+ * It never materializes a scientific supercell here — replica dims travel
+ * exclusively as a `ReplicaLayout` inside the render packet (see
+ * scene/render-packet-builder.ts), and both `displayed_structure` and
+ * `saveable_structure` stay at the base effective frame. True scientific
+ * supercells are the explicit Build/LatticePane operation channel.
  *
  * Uses .svelte.ts suffix because internal state uses $state/$derived/$effect runes.
  */
 
-import type { AnyStructure, PymatgenStructure, Crystal } from '$lib/structure'
+import type { AnyStructure, Crystal, PymatgenStructure } from '$lib/structure'
 import type { Vec3 } from '$lib/math'
 import { get_periodic_repeat_sites, find_pbc_images_fast } from '$lib/structure'
-import { is_valid_supercell_input, parse_supercell_scaling } from '$lib/structure/supercell'
-import { create_supercell, is_ok } from '$lib/structure/ferrox-wasm'
 import { transform_cell } from '$lib/symmetry'
 import type { MoyoDataset } from '@spglib/moyo-wasm'
 
@@ -27,15 +31,16 @@ export interface TransformDeps {
   get_structure: () => AnyStructure | undefined
   get_symmetry_data: () => MoyoDataset | null
   get_cell_type: () => 'original' | 'conventional' | 'primitive'
-  get_supercell_scaling: () => string
   get_show_image_atoms: () => boolean
   get_periodic_repeats: () => Vec3
-  /** When true, the GPU overlay renders the supercell by INSTANCING the base
-   *  cell on the GPU, so the CPU must NOT expand it. The supercell + PBC-image
-   *  effects then short-circuit to the BASE (cell-transformed) structure — net
-   *  `displayed_structure` stays base-cell sized, no N× Site objects built.
-   *  Defaults to () => false (absent dep) ⇒ unchanged CPU expansion behaviour. */
-  get_gpu_supercell_active?: () => boolean
+  /** True while the render packet path owns visual replication (replicas AND
+   *  ghost images are GPU instancing concerns — see `visual_replication_active`
+   *  in ./transform-controller.ts). While true the CPU must NOT append PBC
+   *  image sites: `displayed_structure` stays the base cell. Read reactively
+   *  so flipping OFF resumes the legacy CPU image decoration. Defaults to
+   *  () => false (absent dep). Note this is a DISPLAY routing flag only — the
+   *  scientific structure stays at the base frame in either state. */
+  get_visual_replicas_active?: () => boolean
   set_displayed_structure: (s: AnyStructure | undefined) => void
   set_saveable_structure: (s: AnyStructure | undefined) => void
 }
@@ -59,103 +64,48 @@ export function create_transform_controller(deps: TransformDeps) {
     }
   })
 
-  // ═══ Supercell ═══
-  let supercell_structure = $state<AnyStructure | undefined>(undefined)
-  let supercell_loading = $state(false)
-  let supercell_run_id = 0
-
-  $effect(() => {
-    const base_structure = cell_transformed_structure
-    const supercell_scaling = deps.get_supercell_scaling()
-    // GPU-supercell gate: when the overlay instances the base cell on the GPU,
-    // the CPU must keep `supercell_structure` at the BASE cell (no WASM expand,
-    // no N× Site objects). Read reactively so flipping it OFF re-fires this
-    // effect and the CPU resumes building the real supercell.
-    const gpu_supercell_active = deps.get_gpu_supercell_active?.() ?? false
-
-    if (gpu_supercell_active) {
-      supercell_structure = base_structure
-      supercell_loading = false
-    } else if (!base_structure || !('lattice' in base_structure)) {
-      supercell_structure = base_structure
-      supercell_loading = false
-    } else if (['', '1x1x1', '1'].includes(supercell_scaling)) {
-      supercell_structure = base_structure
-      supercell_loading = false
-    } else if (!is_valid_supercell_input(supercell_scaling)) {
-      supercell_structure = base_structure
-      supercell_loading = false
-    } else {
-      const run_id = ++supercell_run_id
-      supercell_loading = true
-      const [nx, ny, nz] = parse_supercell_scaling(supercell_scaling)
-
-      create_supercell(base_structure as Crystal, nx, ny, nz)
-        .then((result) => {
-          if (run_id !== supercell_run_id) return
-          if (is_ok(result)) {
-            const sc = result.ok as PymatgenStructure
-            const orig_n = base_structure.sites.length
-            if (orig_n > 0) {
-              for (let i = 0; i < sc.sites.length; i++) {
-                sc.sites[i].properties = { ...sc.sites[i].properties, orig_unit_cell_idx: i % orig_n }
-              }
-            }
-            supercell_structure = sc
-          } else {
-            console.error('Failed to create supercell:', result.error)
-            supercell_structure = base_structure
-          }
-        })
-        .catch((error) => {
-          if (run_id !== supercell_run_id) return
-          console.error('Failed to create supercell:', error)
-          supercell_structure = base_structure
-        })
-        .finally(() => {
-          if (run_id === supercell_run_id) supercell_loading = false
-        })
-    }
-  })
-
-  // ═══ PBC Image Atoms ═══
+  // ═══ PBC Image Atoms (display decoration only) ═══
   let pbc_gen = 0
 
   $effect(() => {
     const show_image_atoms = deps.get_show_image_atoms()
     const repeats = deps.get_periodic_repeats()
-    const ss = supercell_structure
-    // GPU-supercell gate: the overlay instances the base cell (+ later phases its
-    // PBC partners) entirely on the GPU, so the CPU must NOT append image atoms.
-    // `displayed_structure` stays the base cell (= ss, which the supercell effect
-    // above pinned to base). Read reactively so flipping OFF resumes CPU images.
-    const gpu_supercell_active = deps.get_gpu_supercell_active?.() ?? false
+    const base: AnyStructure | undefined = cell_transformed_structure
+    // Packet gate: while the render packet owns visual replication, ghost
+    // images are GPU instancing concerns (`boundary_policy: ghost-images`),
+    // so the CPU must NOT append image sites. `displayed_structure` stays
+    // the base cell. Read reactively so flipping OFF resumes CPU images.
+    const visual_replicas_active = deps.get_visual_replicas_active?.() ?? false
 
-    if (gpu_supercell_active) {
-      deps.set_displayed_structure(ss)
-    } else if (show_image_atoms && ss && 'lattice' in ss && ss.lattice) {
+    if (visual_replicas_active) {
+      deps.set_displayed_structure(base)
+    } else if (show_image_atoms && base && 'lattice' in base && base.lattice) {
+      // Guard above proves a real lattice — safe periodic narrowing.
+      const periodic = base as PymatgenStructure
       const has_repeats = repeats[0] > 0 || repeats[1] > 0 || repeats[2] > 0
       if (has_repeats) {
-        deps.set_displayed_structure(get_periodic_repeat_sites(ss, repeats))
+        deps.set_displayed_structure(get_periodic_repeat_sites(periodic, repeats))
       } else {
         const gen = ++pbc_gen
         // Show structure immediately while WASM computes images
-        deps.set_displayed_structure(ss)
-        find_pbc_images_fast(ss).then((result) => {
+        deps.set_displayed_structure(periodic)
+        find_pbc_images_fast(periodic).then((result) => {
           if (gen === pbc_gen) {
             deps.set_displayed_structure(result)
           }
         })
       }
     } else {
-      deps.set_displayed_structure(ss)
+      deps.set_displayed_structure(base)
     }
   })
 
   // ═══ Saveable Structure Sync ═══
+  // The scientific structure is ALWAYS the base effective frame — visual
+  // replica dims and PBC image decoration never reach it.
   $effect(() => {
     const structure = deps.get_structure()
-    deps.set_saveable_structure(supercell_structure ?? structure)
+    deps.set_saveable_structure(cell_transformed_structure ?? structure)
   })
 
   // ═══ Lattice Alignment ═══
@@ -200,12 +150,15 @@ export function create_transform_controller(deps: TransformDeps) {
   // ═══ Public Interface ═══
 
   return {
-    /** The BASE (cell-type-transformed) structure, BEFORE any supercell expansion
-     *  or PBC-image append. This is what the GPU overlay instances when
-     *  `get_gpu_supercell_active` is true. */
+    /** The BASE (cell-type-transformed) structure, BEFORE any PBC-image
+     *  append. This is what the render packet / GPU overlay instances when
+     *  `get_visual_replicas_active` is true. */
     get base_structure() { return cell_transformed_structure },
-    get supercell_structure() { return supercell_structure },
-    get supercell_loading() { return supercell_loading },
+    /** Back-compat alias — visual replication is view-only (Visual T6), so
+     *  the "supercell" structure IS the base effective frame. */
+    get supercell_structure() { return cell_transformed_structure },
+    /** Always false — no CPU/WASM supercell materialization remains. */
+    get supercell_loading() { return false },
 
     get lattice_alignment_rotation() { return lattice_alignment_rotation },
     set lattice_alignment_rotation(v: Vec3) { lattice_alignment_rotation = v },

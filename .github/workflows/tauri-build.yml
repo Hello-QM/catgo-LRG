@@ -15,6 +15,10 @@ on:
 env:
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
 
 jobs:
   build:
@@ -132,6 +136,18 @@ jobs:
           mkdir -p ../src-tauri/binaries
           cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}.exe
 
+      # Nightly (with rust-src) builds the THREADED ferrox WASM artifact —
+      # std is rebuilt with atomics via -Z build-std. Installed before stable
+      # so stable stays the default toolchain for the Tauri build itself.
+      # Pinned (not floating @nightly) via CATGO_WASM_NIGHTLY_TOOLCHAIN — see
+      # env at the top of this file.
+      - name: Install Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -145,27 +161,26 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
+      # Single canonical entry point for ALL wasm builds (design §8.3):
+      # scripts/build-wasm.mjs builds ferrox TWICE with explicit feature sets
+      # (wasm-scalar → pkg-scalar/+pkg/, wasm-threaded → pkg-threaded/) plus
+      # chgdiff + catrender. Never invoke wasm-pack directly here — the old
+      # `--features wasm` call (no --no-default-features) compiled default
+      # Rayon without a thread pool, which deadlocks in the browser.
       - name: Build WASM extensions
         run: |
           if ! command -v wasm-pack &> /dev/null; then
             curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           fi
           export PATH=$PATH:$HOME/.cargo/bin
-
-          cd extensions/rust
-          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
-
-          cd ../chgdiff-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
-
-          cd ../catrender-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+          pnpm build:wasm
 
       - name: Generate documentation chunks
         run: pnpm run build:doc-chunks
 
       - name: Verify generated build assets
         run: |
+          node scripts/verify-wasm-artifacts.mjs
           ls -la extensions/rust-wasm/pkg/ferrox_bg.wasm
           ls -la src/lib/electronic/chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm
           ls -la src/lib/chat/docs-chunks.json

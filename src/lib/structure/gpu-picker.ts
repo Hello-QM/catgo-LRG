@@ -39,6 +39,90 @@ function color_to_index(r: number, g: number, b: number): number {
 
 const PICK_SIZE = 1 // 1x1 pixel readback
 
+/**
+ * Structural subset of `WebGLRenderer` needed for a 1×1 pick readback.
+ * Both the legacy `GPUPicker` and the packet-path `ReplicaPickScene`
+ * (gpu/webgl2/replica-id-picker.ts) render through this one helper, so tests
+ * can inject a WebGL-free fake that only implements these members.
+ */
+export type PickPixelRenderer = {
+  domElement: { width: number; height: number }
+  getRenderTarget(): unknown
+  setRenderTarget(target: unknown): void
+  getClearColor(target: Color): Color
+  getClearAlpha(): number
+  setClearColor(color: Color | number, alpha?: number): void
+  clear(): void
+  render(scene: Scene, camera: Camera): void
+  readRenderTargetPixels(
+    target: WebGLRenderTarget,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    buffer: Uint8Array,
+  ): void
+}
+
+/**
+ * Shared 1×1 GPU-pick readback: clear the pick target, render `scene` through
+ * a view-offset clone of `cam` covering exactly the pixel under the cursor,
+ * and read the RGBA bytes into `out_pixel`. `on_camera` runs after the view
+ * offset is applied — callers that ray-cast in the fragment shader use it to
+ * capture the OFFSET projection (e.g. the replica bond pick pass).
+ */
+export function render_pick_pixel(
+  renderer: PickPixelRenderer,
+  cam: Camera,
+  scene: Scene,
+  render_target: WebGLRenderTarget,
+  ndc_x: number,
+  ndc_y: number,
+  out_pixel: Uint8Array,
+  clear_alpha = 1,
+  on_camera?: (pick_cam: PerspectiveCamera | OrthographicCamera) => void,
+): void {
+  // Create a 1x1 camera that looks at just the pixel under the cursor
+  const pick_cam = cam.clone() as PerspectiveCamera | OrthographicCamera
+
+  const full_width = renderer.domElement.width
+  const full_height = renderer.domElement.height
+
+  // Pixel coordinates from NDC
+  const px = ((ndc_x + 1) / 2) * full_width
+  const py = ((1 - ndc_y) / 2) * full_height
+
+  // Save renderer state
+  const prev_rt = renderer.getRenderTarget()
+  const prev_clear = renderer.getClearColor(new Color())
+  const prev_alpha = renderer.getClearAlpha()
+
+  renderer.setRenderTarget(render_target)
+  renderer.setClearColor(0x000000, clear_alpha)
+  renderer.clear()
+
+  // Use setViewOffset to render only the 1x1 pixel region
+  if (`setViewOffset` in pick_cam) {
+    ;(pick_cam as PerspectiveCamera).setViewOffset(
+      full_width,
+      full_height,
+      px,
+      py,
+      PICK_SIZE,
+      PICK_SIZE,
+    )
+  }
+  on_camera?.(pick_cam)
+
+  renderer.render(scene, pick_cam)
+
+  renderer.readRenderTargetPixels(render_target, 0, 0, PICK_SIZE, PICK_SIZE, out_pixel)
+
+  // Restore state
+  renderer.setRenderTarget(prev_rt)
+  renderer.setClearColor(prev_clear, prev_alpha)
+}
+
 export class GPUPicker {
   private scene = new Scene()
   private render_target = new WebGLRenderTarget(PICK_SIZE, PICK_SIZE)
@@ -126,37 +210,16 @@ export class GPUPicker {
   }
 
   pick(ndc_x: number, ndc_y: number, cam: Camera, renderer: WebGLRenderer): PickResult {
-    // Create a 1x1 camera that looks at just the pixel under the cursor
-    const pick_cam = cam.clone() as PerspectiveCamera | OrthographicCamera
-
-    const full_width = renderer.domElement.width
-    const full_height = renderer.domElement.height
-
-    // Pixel coordinates from NDC
-    const px = ((ndc_x + 1) / 2) * full_width
-    const py = ((1 - ndc_y) / 2) * full_height
-
-    // Save renderer state
-    const prev_rt = renderer.getRenderTarget()
-    const prev_clear = renderer.getClearColor(new Color())
-    const prev_alpha = renderer.getClearAlpha()
-
-    renderer.setRenderTarget(this.render_target)
-    renderer.setClearColor(0x000000, 1)
-    renderer.clear()
-
-    // Use setViewOffset to render only the 1x1 pixel region
-    if (`setViewOffset` in pick_cam) {
-      ;(pick_cam as any).setViewOffset(full_width, full_height, px, py, PICK_SIZE, PICK_SIZE)
-    }
-
-    renderer.render(this.scene, pick_cam)
-
-    renderer.readRenderTargetPixels(this.render_target, 0, 0, PICK_SIZE, PICK_SIZE, this.pixel_buffer)
-
-    // Restore state
-    renderer.setRenderTarget(prev_rt)
-    renderer.setClearColor(prev_clear, prev_alpha)
+    render_pick_pixel(
+      renderer,
+      cam,
+      this.scene,
+      this.render_target,
+      ndc_x,
+      ndc_y,
+      this.pixel_buffer,
+      1,
+    )
 
     const [r, g, b] = this.pixel_buffer
     if (r === 0 && g === 0 && b === 0) return null // Background

@@ -21,3 +21,5 @@ from ferrox._ferrox import (
     trajectory,
     xrd,
 )
+
+StructureMatcher = structure.StructureMatcher

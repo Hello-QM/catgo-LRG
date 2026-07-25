@@ -1,5 +1,19 @@
 /** WGSL compute for atom_radii bond detection with minimum-image PBC.
- *  Bindings:
+ *
+ *  TWO shader modules share one Params layout + predicate (design §8.2):
+ *
+ *  - `BOND_COMPUTE_WGSL` — the large-N GRID shader. Candidate enumeration is a
+ *    uniform grid (cell-list), O(N). It contains NO all-pairs loop and no
+ *    runtime path switch: routing is decided CPU-side by `plan_bond_dispatch`
+ *    (bond-backend-policy.ts). A periodic thin cell (grid dim < 3) routes to
+ *    Rust WASM — a large system may never enter an all-pairs × 27-image shader.
+ *
+ *  - `BOND_COMPUTE_DIRECT_WGSL` — the small-N DIRECT shader: exact O(N²)
+ *    all-pairs 27-image search. Dispatched only for tiny systems
+ *    (≤ MAX_DIRECT_ATOMS), where the grid would cost more than it saves and
+ *    thin periodic cells still need exact treatment.
+ *
+ *  Shared bindings (the grid module adds 7/8/9):
  *   0: positions   storage<read>       array<f32>  (3N, xyz interleaved)
  *   1: radii       storage<read>       array<f32>  (N)
  *   2: params      uniform             Params
@@ -16,31 +30,41 @@
  *  detected bonds, never add. P.rule_count == 0 ⇒ no filtering (identical to no
  *  rules). The id stored in `rules` is an integer bit-cast to f32; the shader
  *  reads it back exactly via the small-int round-trip (u32(id_f32)).
- *  jimage_packed: (na+1) | ((nb+1)<<2) | ((nc+1)<<4), each in {0,1,2} for {-1,0,1}.
+ *  jimage_packed uses three biased u8 lanes: (na+128) | ((nb+128)<<8) |
+ *  ((nc+128)<<16). GPU detection emits {-1,0,1}, while the shared render format
+ *  preserves the full signed Int8 range accepted by BaseBondGraph.
  *  jimage convention matches bond-detect-reference.ts: offset applied to atom b/j,
  *  displacement = (pos_j - pos_i) + jimage·L. Precondition: max_bond_dist < half the
  *  shortest cell dimension (27-image search only).
  *
- *  CANDIDATE ENUMERATION — uniform grid (cell-list), O(N).
- *  Three compute entry points run in order in one submit:
- *    1. clear_grid : zero cell_count over n_cells.
- *    2. bin_atoms  : per atom → cell index → atomicAdd into cell_count; if the
- *                    slot < max_per_cell write the atom into cell_atoms, else flag
- *                    overflow (overflow[0] = 1).
+ *  GRID MODULE — three compute entry points run in order in one submit:
+ *    1. clear_grid : zero cell_count over n_cells + reset grid_meta.
+ *    2. bin_atoms  : per atom → cell index → atomicAdd into cell_count; record
+ *                    the observed occupancy via atomicMax into grid_meta[0]; if
+ *                    the slot < cell_stride write the atom into cell_atoms.
  *    3. detect_bonds : per atom i → its cell → loop the 27 neighbor cells → for
- *                      each atom j in that cell run the EXACT same predicate
- *                      (atom_radii + rules_keep) + jimage pack + i<j dedup as the
- *                      old all-pairs path. Only the candidate list changed.
+ *                      each atom j in that cell run the shared predicate
+ *                      (atom_radii + rules_keep) + jimage pack + i<j dedup.
  *  Cell size h = max_bond_dist, so all bonded neighbors are within the 27-cell
  *  shell. Periodic: bin in FRACTIONAL space (cell = floor(frac*n) mod n); a
  *  neighbor offset that wraps past [0,n) contributes a ±1 lattice image on that
- *  axis, folded into the same jimage used for the min-image distance. Non-periodic:
- *  bin over the atom AABB (origin P.aabb_min, scale P.inv_h); neighbor offsets that
- *  leave [0,n) are skipped (no wrap). When P.use_grid == 0 (periodic small cell,
- *  any dim < 3) detect_bonds takes the exact O(N²) all-pairs 27-image fallback so
- *  small unit cells stay correct. Grid sizing (dims, max_per_cell, AABB) is
- *  computed on the CPU in bond-grid.ts and passed through Params. */
-export const BOND_COMPUTE_WGSL = /* wgsl */ `
+ *  axis, folded into the same jimage used for the min-image distance.
+ *  Non-periodic: bin over the atom AABB (origin P.aabb_min, scale P.inv_h);
+ *  neighbor offsets that leave [0,n) are skipped (no wrap).
+ *
+ *  LOSSLESS OVERFLOW (design §8.2): a cell that exceeds P.cell_stride drops the
+ *  extras BUT grid_meta[0] still records the true max occupancy, and out_count
+ *  keeps the true (unclamped) pair count — so the CPU can always detect an
+ *  incomplete run (occupancy > stride, or raw count > capacity), grow the
+ *  sizing to the next power of two, and RERUN. An incomplete candidate is
+ *  never published. cell_stride is a UNIFORM precisely so that growth needs no
+ *  shader rebuild. Grid sizing (dims, AABB) is computed on the CPU in
+ *  bond-grid.ts and passed through Params. */
+
+/** Params struct + shared bindings 0-6 + the shared min-image/predicate/emit
+ *  helpers. Prepended to BOTH shader modules so the predicate can never
+ *  diverge between the grid and direct paths. */
+const BOND_COMPUTE_COMMON_WGSL = /* wgsl */ `
 struct Params {
   n_atoms: u32,
   capacity: u32,
@@ -53,9 +77,11 @@ struct Params {
   lattice: mat3x3<f32>, // columns a,b,c (caller uploads transposed)
   // ── Uniform-grid (cell-list) params (computed CPU-side in bond-grid.ts) ──
   grid_dims: vec3<u32>, // cells along each axis (frac axes / AABB axes)
-  use_grid: u32,        // 1 ⇒ grid candidate search; 0 ⇒ O(N²) all-pairs fallback
+  _routing: u32,        // CPU routing diagnostic (plan_bond_dispatch decides the
+                        // path on the CPU; no shader ever branches on this)
   aabb_min: vec3<f32>,  // non-periodic binning origin ([0,0,0] when periodic)
-  max_per_cell: u32,    // fixed per-cell capacity (cell_atoms stride)
+  cell_stride: u32,     // per-cell capacity (cell_atoms stride) — a UNIFORM so
+                        // overflow retries can grow it without a shader rebuild
   inv_h: f32,           // 1 / max_bond_dist (non-periodic cell scale)
   _pad2: u32,
   _pad3: u32,
@@ -69,12 +95,6 @@ struct Params {
 @group(0) @binding(4) var<storage, read_write> out_count: atomic<u32>;
 @group(0) @binding(5) var<storage, read> elem_ids: array<u32>;
 @group(0) @binding(6) var<storage, read> rules: array<f32>;
-// Grid storage: cell_count is the per-cell atom tally (atomic, sized n_cells);
-// cell_atoms holds up to max_per_cell atom indices per cell (sized n_cells*max);
-// overflow[0] is set to 1 if any cell exceeds max_per_cell (dropped extras).
-@group(0) @binding(7) var<storage, read_write> cell_count: array<atomic<u32>>;
-@group(0) @binding(8) var<storage, read_write> cell_atoms: array<u32>;
-@group(0) @binding(9) var<storage, read_write> overflow: array<atomic<u32>>;
 
 fn pos(i: u32) -> vec3<f32> {
   return vec3<f32>(positions[i*3u], positions[i*3u+1u], positions[i*3u+2u]);
@@ -101,8 +121,62 @@ fn rules_keep(ea: u32, eb: u32, d: f32) -> bool {
 }
 
 fn pack_jimage(na: i32, nb: i32, nc: i32) -> u32 {
-  return u32(na+1) | (u32(nb+1) << 2u) | (u32(nc+1) << 4u);
+  return u32(na + 128) | (u32(nb + 128) << 8u) | (u32(nc + 128) << 16u);
 }
+
+// Shared min-image + predicate + emit for a candidate ordered pair (i<j). Runs
+// the SAME exact 27-image minimum-image search, atom_radii predicate, rules_keep
+// post-filter, and jimage pack on both paths — only the candidate enumeration
+// differs. out_count is atomically incremented BEFORE the capacity check, so
+// its final value is the true raw pair count even when the buffer overflows —
+// the caller detects raw > capacity, grows, and reruns (never clamps).
+fn try_emit(i: u32, j: u32, pi: vec3<f32>, ri: f32) {
+  let dvec = pos(j) - pi;
+  var best_d2 = 1e30;
+  var bi: i32 = 0; var bj: i32 = 0; var bk: i32 = 0;
+  if (P.periodic == 1u) {
+    for (var na: i32 = -1; na <= 1; na = na + 1) {
+      for (var nb: i32 = -1; nb <= 1; nb = nb + 1) {
+        for (var nc: i32 = -1; nc <= 1; nc = nc + 1) {
+          let shift = f32(na)*P.lattice[0] + f32(nb)*P.lattice[1] + f32(nc)*P.lattice[2];
+          let e = dvec + shift;
+          let d2 = dot(e, e);
+          if (d2 < best_d2) { best_d2 = d2; bi = na; bj = nb; bk = nc; }
+        }
+      }
+    }
+  } else {
+    best_d2 = dot(dvec, dvec);
+  }
+  let d = sqrt(best_d2);
+  if (d < P.min_dist || d > P.max_bond_dist) { return; }
+  if (d <= ri + radii[j] + P.tolerance) {
+    // Per-element-pair rule post-filter (matches visibility.ts). Applied only
+    // AFTER the atom_radii test passes; can only remove a detected bond.
+    if (!rules_keep(elem_ids[i], elem_ids[j], d)) { return; }
+    let slot = atomicAdd(&out_count, 1u);
+    if (slot < P.capacity) {
+      out_pairs[slot*3u + 0u] = i;
+      out_pairs[slot*3u + 1u] = j;
+      out_pairs[slot*3u + 2u] = pack_jimage(bi, bj, bk);
+    }
+  }
+}
+`
+
+/** Large-N GRID shader: uniform-grid candidate enumeration ONLY. Contains no
+ *  all-pairs loop — thin-cell / over-budget systems are routed away on the CPU
+ *  (plan_bond_dispatch) and must never reach this module as a fallback. */
+export const BOND_COMPUTE_WGSL: string = BOND_COMPUTE_COMMON_WGSL + /* wgsl */ `
+// Grid storage: cell_count is the per-cell atom tally (atomic, sized n_cells);
+// cell_atoms holds up to cell_stride atom indices per cell (sized
+// n_cells*stride); grid_meta[0] records the MAX OBSERVED per-cell occupancy
+// (atomicMax'd by bin_atoms). The CPU compares it against cell_stride after the
+// run: occupancy > stride ⇒ atoms were dropped ⇒ the candidate is incomplete
+// and must be rerun with a grown stride — never published.
+@group(0) @binding(7) var<storage, read_write> cell_count: array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> cell_atoms: array<u32>;
+@group(0) @binding(9) var<storage, read_write> grid_meta: array<atomic<u32>>;
 
 // Total grid cell count = product of the three dims (>=1 each, CPU-validated).
 fn n_cells() -> u32 {
@@ -160,8 +234,8 @@ fn clear_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
   let c = gid.x;
   if (c >= n_cells()) { return; }
   atomicStore(&cell_count[c], 0u);
-  // Reset the single overflow flag once (cheapest to fold into cell 0's clear).
-  if (c == 0u) { atomicStore(&overflow[0], 0u); }
+  // Reset the occupancy record once (cheapest to fold into cell 0's clear).
+  if (c == 0u) { atomicStore(&grid_meta[0], 0u); }
 }
 
 // ── Pass 2: bin each atom into its cell. ──────────────────────────────────────
@@ -172,55 +246,15 @@ fn bin_atoms(@builtin(global_invocation_id) gid: vec3<u32>) {
   let cc = atom_cell(pos(i));
   let cell = cell_linear(cc.x, cc.y, cc.z);
   let slot = atomicAdd(&cell_count[cell], 1u);
-  if (slot < P.max_per_cell) {
-    cell_atoms[cell * P.max_per_cell + slot] = i;
-  } else {
-    // Cell overran its fixed capacity — extras are dropped; flag so the caller
-    // can grow max_per_cell and rerun.
-    atomicStore(&overflow[0], 1u);
+  // ALWAYS record the observed occupancy — even past the stride — so the CPU
+  // can grow to nextPow2(occupancy) in ONE rerun instead of doubling blindly.
+  atomicMax(&grid_meta[0], slot + 1u);
+  if (slot < P.cell_stride) {
+    cell_atoms[cell * P.cell_stride + slot] = i;
   }
 }
 
-// Shared min-image + predicate + emit for a candidate ordered pair (i<j). Runs
-// the SAME exact 27-image minimum-image search, atom_radii predicate, rules_keep
-// post-filter, and jimage pack as the original all-pairs path — only the choice
-// of candidate j differs. The grid wrap is handled implicitly: the full 27-image
-// search picks the closest lattice image, so a neighbor reached through a wrapped
-// cell gets the correct +/-1 jimage automatically (consistent with the reference).
-fn try_emit(i: u32, j: u32, pi: vec3<f32>, ri: f32) {
-  let dvec = pos(j) - pi;
-  var best_d2 = 1e30;
-  var bi: i32 = 0; var bj: i32 = 0; var bk: i32 = 0;
-  if (P.periodic == 1u) {
-    for (var na: i32 = -1; na <= 1; na = na + 1) {
-      for (var nb: i32 = -1; nb <= 1; nb = nb + 1) {
-        for (var nc: i32 = -1; nc <= 1; nc = nc + 1) {
-          let shift = f32(na)*P.lattice[0] + f32(nb)*P.lattice[1] + f32(nc)*P.lattice[2];
-          let e = dvec + shift;
-          let d2 = dot(e, e);
-          if (d2 < best_d2) { best_d2 = d2; bi = na; bj = nb; bk = nc; }
-        }
-      }
-    }
-  } else {
-    best_d2 = dot(dvec, dvec);
-  }
-  let d = sqrt(best_d2);
-  if (d < P.min_dist || d > P.max_bond_dist) { return; }
-  if (d <= ri + radii[j] + P.tolerance) {
-    // Per-element-pair rule post-filter (matches visibility.ts). Applied only
-    // AFTER the atom_radii test passes; can only remove a detected bond.
-    if (!rules_keep(elem_ids[i], elem_ids[j], d)) { return; }
-    let slot = atomicAdd(&out_count, 1u);
-    if (slot < P.capacity) {
-      out_pairs[slot*3u + 0u] = i;
-      out_pairs[slot*3u + 1u] = j;
-      out_pairs[slot*3u + 2u] = pack_jimage(bi, bj, bk);
-    }
-  }
-}
-
-// ── Pass 3: detect bonds. Grid candidate search, or O(N²) fallback. ───────────
+// ── Pass 3: detect bonds via the 27-neighbor-cell candidate search. ───────────
 @compute @workgroup_size(64)
 fn detect_bonds(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
@@ -228,18 +262,9 @@ fn detect_bonds(@builtin(global_invocation_id) gid: vec3<u32>) {
   let pi = pos(i);
   let ri = radii[i];
 
-  if (P.use_grid == 0u) {
-    // Exact O(N²) all-pairs 27-image fallback (periodic small cell). Unchanged
-    // predicate; preserves correctness for cells too small for the 27-cell shell.
-    for (var j: u32 = i + 1u; j < P.n_atoms; j = j + 1u) {
-      try_emit(i, j, pi, ri);
-    }
-    return;
-  }
-
-  // Grid path: visit the 27 neighbor cells of atom i's cell. For each atom j in
-  // those cells, enforce the i<j dedup (each unordered pair is emitted once),
-  // then run the shared min-image predicate (which handles PBC images / jimage
+  // Visit the 27 neighbor cells of atom i's cell. For each atom j in those
+  // cells, enforce the i<j dedup (each unordered pair is emitted once), then
+  // run the shared min-image predicate (which handles PBC images / jimage
   // exactly, the same as the reference). The grid only narrows WHICH j we test.
   let cc = atom_cell(pi);
   let nx = i32(P.grid_dims.x);
@@ -262,15 +287,33 @@ fn detect_bonds(@builtin(global_invocation_id) gid: vec3<u32>) {
           if (cx < 0 || cx >= nx || cy < 0 || cy >= ny || cz < 0 || cz >= nz) { continue; }
         }
         let cell = cell_linear(u32(cx), u32(cy), u32(cz));
-        let count = min(atomicLoad(&cell_count[cell]), P.max_per_cell);
+        let count = min(atomicLoad(&cell_count[cell]), P.cell_stride);
         for (var s: u32 = 0u; s < count; s = s + 1u) {
-          let j = cell_atoms[cell * P.max_per_cell + s];
+          let j = cell_atoms[cell * P.cell_stride + s];
           // i<j dedup: each unordered pair handled once. (Self i==j excluded.)
           if (j <= i) { continue; }
           try_emit(i, j, pi, ri);
         }
       }
     }
+  }
+}
+`
+
+/** Small-N DIRECT shader: exact O(N²) all-pairs 27-image search. Dispatched
+ *  ONLY when plan_bond_dispatch returns kind 'direct' (atom_count ≤
+ *  MAX_DIRECT_ATOMS) — a large system is never routed here. Declares only
+ *  bindings 0-6; the grid buffers are never touched. */
+export const BOND_COMPUTE_DIRECT_WGSL: string = BOND_COMPUTE_COMMON_WGSL +
+  /* wgsl */ `
+@compute @workgroup_size(64)
+fn detect_bonds(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= P.n_atoms) { return; }
+  let pi = pos(i);
+  let ri = radii[i];
+  for (var j: u32 = i + 1u; j < P.n_atoms; j = j + 1u) {
+    try_emit(i, j, pi, ri);
   }
 }
 `

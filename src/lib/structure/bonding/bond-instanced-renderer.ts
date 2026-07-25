@@ -149,6 +149,9 @@ export class BondInstancedRenderer {
 	#color_end_attr: THREE.InstancedBufferAttribute | null = null;
 
 	#opacity_attr: THREE.InstancedBufferAttribute | null = null;
+	/** +1 = open tip cap, -1 = open base cap, 0 = keep both caps. */
+	#seam_cap_buf: Int8Array;
+	#seam_cap_attr: THREE.InstancedBufferAttribute;
 
 	// GPU-transform playback path (see sync_gpu_topology): static per-instance
 	// topology attributes consumed by the vertex shader's texture-fetch branch.
@@ -164,6 +167,14 @@ export class BondInstancedRenderer {
 
 	#last_synced_version = -1;
 	#last_synced_count = 0;
+
+	// Replica-layer bypass (gpu/WebGLReplicaLayer.svelte). While suspended,
+	// sync() / force_full_resync() / sync_gpu_topology() early-return WITHOUT
+	// clearing dirty state or advancing #last_synced_version, so the resume
+	// flush (the caller's force_full_resync / sync_gpu_topology after
+	// set_suspended(false)) sees everything that changed. The mesh is hidden
+	// by the caller while suspended.
+	#suspended = false;
 
 	#tmp_matrix = new THREE.Matrix4();
 	#v_dir = new THREE.Vector3();
@@ -203,6 +214,13 @@ export class BondInstancedRenderer {
 		this.#bond_radius = bond_radius;
 	}
 
+	/** Replica-layer bypass: while suspended, all sync work is skipped and
+	 *  dirty state accumulates. Caller must `force_full_resync()` (or
+	 *  `sync_gpu_topology()` on the GPU path) after releasing suspension. */
+	set_suspended(suspended: boolean): void {
+		this.#suspended = suspended;
+	}
+
 	constructor(
 		mesh: THREE.InstancedMesh,
 		manager: BondManager,
@@ -228,9 +246,17 @@ export class BondInstancedRenderer {
 		attr.setUsage(THREE.DynamicDrawUsage);
 		this.#kind_attr = attr;
 		mesh.geometry.setAttribute('bond_kind', attr);
+
+		this.#seam_cap_buf = new Int8Array(cap);
+		this.#seam_cap_attr = new THREE.InstancedBufferAttribute(
+			this.#seam_cap_buf, 1, false,
+		);
+		this.#seam_cap_attr.setUsage(THREE.DynamicDrawUsage);
+		mesh.geometry.setAttribute('instance_seam_cap', this.#seam_cap_attr);
 	}
 
 	sync(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 		if (manager.version === this.#last_synced_version) return;
 
@@ -325,6 +351,9 @@ export class BondInstancedRenderer {
 			pairs, kinds, jimages, positions, lattice, stub,
 			atom_colors, opacity,
 		);
+		if (total_instances > 0) {
+			this.#seam_cap_attr.addUpdateRange(0, total_instances);
+		}
 
 		mesh.count = total_instances;
 		matrix_attr.needsUpdate = true;
@@ -332,6 +361,7 @@ export class BondInstancedRenderer {
 		if (this.#color_start_attr !== null) this.#color_start_attr.needsUpdate = true;
 		if (this.#color_end_attr !== null) this.#color_end_attr.needsUpdate = true;
 		if (this.#opacity_attr !== null) this.#opacity_attr.needsUpdate = true;
+		this.#seam_cap_attr.needsUpdate = true;
 
 		manager.clear_dirty();
 		this.#last_synced_version = manager.version;
@@ -339,6 +369,7 @@ export class BondInstancedRenderer {
 	}
 
 	force_full_resync(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 
 		this.#ensure_color_attrs();
@@ -389,6 +420,9 @@ export class BondInstancedRenderer {
 			pairs, kinds, jimages, positions, lattice, stub,
 			atom_colors, opacity,
 		);
+		if (total_instances > 0) {
+			this.#seam_cap_attr.addUpdateRange(0, total_instances);
+		}
 
 		mesh.count = total_instances;
 		matrix_attr.needsUpdate = true;
@@ -396,6 +430,7 @@ export class BondInstancedRenderer {
 		if (this.#color_start_attr !== null) this.#color_start_attr.needsUpdate = true;
 		if (this.#color_end_attr !== null) this.#color_end_attr.needsUpdate = true;
 		if (this.#opacity_attr !== null) this.#opacity_attr.needsUpdate = true;
+		this.#seam_cap_attr.needsUpdate = true;
 
 		manager.clear_dirty();
 		// Sync state with what we just wrote so a subsequent `sync()` in the
@@ -434,6 +469,7 @@ export class BondInstancedRenderer {
 	 * memcpy-level loop (~6 numeric stores per instance).
 	 */
 	sync_gpu_topology(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 
 		if (import.meta.env?.DEV && this.#multibond_enabled) {
@@ -619,6 +655,7 @@ export class BondInstancedRenderer {
 
 	dispose(): void {
 		this.#mesh.geometry.deleteAttribute('bond_kind');
+		this.#mesh.geometry.deleteAttribute('instance_seam_cap');
 		if (this.#color_start_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_start');
 		if (this.#color_end_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_end');
 		if (this.#opacity_attr !== null) this.#mesh.geometry.deleteAttribute('instance_opacity');
@@ -708,6 +745,10 @@ export class BondInstancedRenderer {
 		const base = slot * stride;
 		const a = pairs[slot * 2];
 		const b = pairs[slot * 2 + 1];
+		// Default every reserved instance to a closed cylinder. Full bonds
+		// below open only the two caps that meet at their shared midpoint;
+		// periodic/incomplete stubs keep their exposed caps.
+		for (let s = 0; s < stride; s++) this.#seam_cap_buf[base + s] = 0;
 
 		// Render-time safety net: if a bond endpoint index exceeds the current
 		// position-buffer's atom count, the upstream cache hasn't caught up to
@@ -916,6 +957,12 @@ export class BondInstancedRenderer {
 
 		// Kind / color / opacity, mirrored across every live half-instance.
 		const live = is_periodic ? 2 : nb * 2;
+		if (!is_periodic) {
+			for (let line = 0; line < nb; line++) {
+				this.#seam_cap_buf[base + line * 2] = 1;
+				this.#seam_cap_buf[base + line * 2 + 1] = -1;
+			}
+		}
 		const kind = kinds[slot];
 		for (let s = 0; s < live; s++) this.#kind_buf[base + s] = kind;
 
@@ -1024,6 +1071,8 @@ export class BondInstancedRenderer {
 				if (hide_incomplete && !is_partner_drawn) {
 					this.#mesh.setMatrixAt(dec_idx, ZERO_MATRIX);
 					this.#mesh.setMatrixAt(dec_idx + 1, ZERO_MATRIX);
+					this.#seam_cap_buf[dec_idx] = 0;
+					this.#seam_cap_buf[dec_idx + 1] = 0;
 					dec_idx += 2;
 					continue;
 				}
@@ -1074,6 +1123,8 @@ export class BondInstancedRenderer {
 	): void {
 		const a = pairs[slot * 2];
 		const b = pairs[slot * 2 + 1];
+		this.#seam_cap_buf[dec_idx] = 0;
+		this.#seam_cap_buf[dec_idx + 1] = 0;
 
 		const ji = slot * 3;
 		const bond_dx = jimages[ji];
@@ -1161,6 +1212,8 @@ export class BondInstancedRenderer {
 			);
 			this.#tmp_matrix.compose(this.#v_half_mid_b, this.#q_rot, this.#v_scale);
 			this.#mesh.setMatrixAt(dec_idx + 1, this.#tmp_matrix);
+			this.#seam_cap_buf[dec_idx] = 1;
+			this.#seam_cap_buf[dec_idx + 1] = -1;
 		} else {
 			// Phase 7d incomplete-edge stub: render only the anchor's half,
 			// scaled by `stub_scale`. The other half collapses to a

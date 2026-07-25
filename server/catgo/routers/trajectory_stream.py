@@ -25,11 +25,13 @@ import logging
 import hashlib
 import os
 import re
+import struct
 import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -136,6 +138,7 @@ def _build_xyz_index(p: Path) -> _XYZIndex:
     """Single binary pass building per-frame byte offsets (no content kept)."""
     offsets: list[int] = []
     n_atoms = 0
+    elements: list[str] = []
     with p.open("rb") as fh:
         while True:
             frame_start = fh.tell()
@@ -153,19 +156,26 @@ def _build_xyz_index(p: Path) -> _XYZIndex:
                 continue
 
             # Valid frame header — record its start, then skip comment + atoms.
-            if not n_atoms:
+            first_frame = not n_atoms
+            if first_frame:
                 n_atoms = num
             complete = fh.readline() != b""  # comment line
             for _ in range(num):
-                if not fh.readline():
+                atom_line = fh.readline()
+                if not atom_line:
                     complete = False
                     break
+                if first_frame:
+                    parts = atom_line.split(maxsplit=1)
+                    elements.append(
+                        parts[0].decode("utf-8", "replace") if parts else "X"
+                    )
             if not complete:
                 break  # truncated final frame — drop it
             offsets.append(frame_start)
 
     file_size = p.stat().st_size
-    return _TrajIndex("xyz", offsets, file_size, n_atoms)
+    return _TrajIndex("xyz", offsets, file_size, n_atoms, elements=elements)
 
 
 # Frame-boundary marker for a LAMMPS dump (`*.lammpstrj`). Each frame begins
@@ -201,10 +211,14 @@ def _build_traj_index(p: Path) -> _TrajIndex:
     traj = Trajectory(str(p), mode="r")
     try:
         total = len(traj)
-        n_atoms = len(traj[0]) if total else 0
+        first = traj[0] if total else None
+        n_atoms = len(first) if first is not None else 0
+        elements = list(first.get_chemical_symbols()) if first is not None else []
     finally:
         traj.close()
-    return _TrajIndex("traj", [], p.stat().st_size, n_atoms, total=total)
+    return _TrajIndex(
+        "traj", [], p.stat().st_size, n_atoms, total=total, elements=elements
+    )
 
 
 def _parse_xdatcar_header(lines: list[str], start: int) -> tuple[list[list[float]], list[str], int] | None:
@@ -557,6 +571,95 @@ def trajectory_frames(
     frames = [_read_frame(p, idx, n) for n in range(start, end)]
     logger.info("Streamed frames [%d, %d) of %s", start, end, p.name)
     return FramesResponse(frames=frames)
+
+
+_POSITION_PACKET_MAGIC = b"CGTP"
+_POSITION_PACKET_VERSION = 1
+_POSITION_PACKET_HEADER = struct.Struct("<4sIII")
+_POSITION_FRAME_HEADER = struct.Struct("<II9d")
+_POSITION_FLAG_LATTICE = 1
+_POSITION_FLAG_TOPOLOGY_CHANGED = 2
+
+
+@router.get("/positions")
+def trajectory_positions(
+    path: str = Query(...),
+    start: int = Query(0, ge=0),
+    count: int = Query(1, ge=1, le=64),
+) -> Response:
+    """Return contiguous float32 coordinates for smooth streamed playback.
+
+    JSON expands 20k×3 coordinates into nested objects in both Python and
+    JavaScript. This packet keeps a fixed header plus raw float32 positions per
+    frame. A topology-change bit tells the client to request the full JSON
+    frame only for the uncommon variable-composition case.
+    """
+    import numpy as np
+
+    p, idx = _get_index(path)
+    total = idx.total_frames
+    if start >= total:
+        raise HTTPException(
+            status_code=416, detail=f"start {start} >= total_frames {total}"
+        )
+    end = min(start + count, total)
+    frames = [_read_frame(p, idx, n) for n in range(start, end)]
+    payload = bytearray(
+        _POSITION_PACKET_HEADER.pack(
+            _POSITION_PACKET_MAGIC,
+            _POSITION_PACKET_VERSION,
+            len(frames),
+            idx.n_atoms,
+        )
+    )
+    topology = idx.elements or (frames[0].get("elements", []) if frames else [])
+    zero_lattice = (0.0,) * 9
+    for frame in frames:
+        positions = np.asarray(frame.get("positions", []), dtype="<f4")
+        if positions.size != idx.n_atoms * 3:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"frame {frame.get('frame_number')} has "
+                    f"{positions.size // 3} atoms; expected {idx.n_atoms}"
+                ),
+            )
+        positions = positions.reshape(idx.n_atoms, 3)
+        elements = frame.get("elements", [])
+        topology_changed = (
+            len(elements) != len(topology)
+            or any(a != b for a, b in zip(elements, topology))
+        )
+        lattice = frame.get("lattice")
+        has_lattice = (
+            isinstance(lattice, list)
+            and len(lattice) == 3
+            and all(isinstance(row, list) and len(row) == 3 for row in lattice)
+        )
+        flags = (
+            (_POSITION_FLAG_LATTICE if has_lattice else 0)
+            | (_POSITION_FLAG_TOPOLOGY_CHANGED if topology_changed else 0)
+        )
+        lattice_flat = (
+            tuple(float(value) for row in lattice for value in row)
+            if has_lattice
+            else zero_lattice
+        )
+        payload.extend(
+            _POSITION_FRAME_HEADER.pack(
+                int(frame.get("frame_number", 0)),
+                flags,
+                *lattice_flat,
+            )
+        )
+        payload.extend(positions.tobytes(order="C"))
+
+    logger.info("Streamed position packet [%d, %d) of %s", start, end, p.name)
+    return Response(
+        content=bytes(payload),
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/metadata", response_model=MetadataResponse)

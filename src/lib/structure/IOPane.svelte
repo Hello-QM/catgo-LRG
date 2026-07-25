@@ -29,9 +29,6 @@
     crop_mode_active = $bindable(false),
     crop_region = $bindable<CropRegion | null>(null),
     trajectory_context,
-    gpu_supercell_active = false,
-    gpu_supercell_factors = [1, 1, 1],
-    gpu_supercell_base = undefined,
     children,
   }: {
     show?: boolean
@@ -49,9 +46,6 @@
     crop_mode_active?: boolean
     crop_region?: CropRegion | null
     trajectory_context?: { total_frames: number; on_step: (idx: number) => void | Promise<void> }
-    gpu_supercell_active?: boolean
-    gpu_supercell_factors?: [number, number, number]
-    gpu_supercell_base?: AnyStructure
     children?: Snippet
   } = $props()
 
@@ -123,9 +117,6 @@
           bind:crop_mode_active
           bind:crop_region
           {trajectory_context}
-          {gpu_supercell_active}
-          {gpu_supercell_factors}
-          {gpu_supercell_base}
         />
       {/if}
     {/if}
