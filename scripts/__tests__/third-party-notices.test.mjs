@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
+const gitFiles = () =>
+  execFileSync('git', ['ls-files', '-z'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean)
 
 const confirmedMitNotices = [
   ['third_party/licenses/MatterViz-MIT.txt', 'Copyright (c) 2021 Janosh Riebesell'],
@@ -66,11 +73,78 @@ test('bundled fonts retain copyright notices and the complete OFL text', () => {
   assert.match(ofl, /This license becomes null and void/)
 })
 
+test('the bundled MediaPipe model retains its verified model-card license mapping', () => {
+  const modelPath = resolve(ROOT, 'static/models/hand_landmarker.task')
+  const digest = createHash('sha256')
+    .update(readFileSync(modelPath))
+    .digest('hex')
+  assert.equal(
+    digest,
+    'fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1',
+  )
+
+  const text = read('THIRD_PARTY_NOTICES.md')
+  assert.match(
+    text,
+    /developers\.google\.com\/edge\/mediapipe\/solutions\/vision\/hand_landmarker/,
+  )
+  assert.match(
+    text,
+    /storage\.googleapis\.com\/mediapipe-assets\/Model%20Card%20Hand%20Tracking%20%28Lite_Full%29%20with%20Fairness%20Oct%202021\.pdf/,
+  )
+  assert.match(text, /License: Apache-2\.0/)
+  assert.match(
+    text,
+    /\[Apache-2\.0 full text\]\(third_party\/licenses\/uff-relax-Apache-2\.0\.txt\)/,
+  )
+
+  const apache = read('third_party/licenses/uff-relax-Apache-2.0.txt')
+  assert.match(apache, /Apache License\s+Version 2\.0, January 2004/)
+  assert.match(apache, /END OF TERMS AND CONDITIONS/)
+})
+
+test('the unlicensed KMC source is absent from reproducible source release surfaces', () => {
+  const tree = execFileSync(
+    'git',
+    ['ls-tree', 'HEAD', 'server/ext/KMC'],
+    { cwd: ROOT, encoding: 'utf8' },
+  )
+  assert.equal(tree, '')
+  assert.equal(existsSync(resolve(ROOT, 'server/ext/KMC')), false)
+  assert.equal(existsSync(resolve(ROOT, '.gitmodules')), false)
+
+  const archive = execFileSync('git', ['archive', '--format=tar', 'HEAD'], {
+    cwd: ROOT,
+    maxBuffer: 256 * 1024 * 1024,
+  })
+  const archiveEntries = execFileSync('tar', ['-tf', '-'], {
+    input: archive,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  })
+  assert.doesNotMatch(archiveEntries, /(?:^|\n)server\/ext\/KMC(?:\/|\n|$)/)
+
+  for (const workflow of gitFiles().filter((path) =>
+    path.startsWith('.github/workflows/')
+  )) {
+    assert.doesNotMatch(
+      read(workflow),
+      /^\s*submodules:\s*(?:true|recursive)\s*$/m,
+      workflow,
+    )
+  }
+  for (const releaseConfig of [
+    'server/catgo_server.spec',
+    'server/pyproject.toml',
+  ]) {
+    assert.doesNotMatch(read(releaseConfig), /server\/ext\/KMC/, releaseConfig)
+  }
+})
+
 test('unresolved code and asset mappings remain explicit review gates', () => {
   const text = read('THIRD_PARTY_NOTICES.md')
   for (const item of [
     'server/ext/KMC',
-    'static/models/hand_landmarker.task',
     'extensions/catrender-wasm/src/perceive.rs',
     'src-tauri/icons/',
     'server/catgo/vendor/pormake/database/',

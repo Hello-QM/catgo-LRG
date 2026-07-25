@@ -215,6 +215,27 @@ license records for Geist, Cascadia Code, Fira Code, JetBrains Mono, and
 Source Code Pro. Geist also retains its source-specific text at
 `src/lib/fonts/Geist-OFL.txt`.
 
+### MediaPipe Hand Landmarker model bundle
+
+- Scope: `static/models/hand_landmarker.task`
+- Official Google model guide:
+  https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker
+- Official bundle URL linked as "Latest" by that guide:
+  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+- Official model card linked by that guide:
+  https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20%28Lite_Full%29%20with%20Fairness%20Oct%202021.pdf
+- License: Apache-2.0
+- [Apache-2.0 full text](third_party/licenses/uff-relax-Apache-2.0.txt)
+- Audited SHA-256:
+  `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1`
+
+The official guide says the Hand Landmarker task bundle contains the palm
+detection and hand-landmark models, links the bundle above as its full,
+float16 "Latest" model, and links the model card above for model information.
+That model card identifies the license as Apache License, Version 2.0. On
+2026-07-25 the official "Latest" download was byte-identical to CatGo's
+bundled file at the recorded SHA-256.
+
 ## Confirmed source references with mapping still incomplete
 
 These records identify an upstream and its published license, but CatGo does
@@ -262,32 +283,20 @@ third-party inventory as complete. Recording a source URL or a repository's
 general license would not by itself resolve model, dataset, artwork, or copied
 code rights.
 
-### KMC Git submodule
+### Historical KMC Git submodule reference
 
-- Path: `server/ext/KMC`
+- Historical path: `server/ext/KMC`
 - Source: https://github.com/leshenzhang/KMC
-- Pinned Git object:
+- Historical pinned Git object:
   `7ebf5913bdaabdf78f248fcc7e71327e9f1f96ab`
 
-No license file or license declaration was found in the pinned upstream
-repository. No license ID is assigned here. Maintainers must obtain and retain
-the applicable terms or remove the submodule from distributions that need a
-redistribution grant.
-
-### MediaPipe hand-landmarker model
-
-- Path: `static/models/hand_landmarker.task`
-- Source URL recorded in the immediately preceding CatGo code:
-  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
-- Audited SHA-256:
-  `fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1`
-- Related project: https://github.com/google-ai-edge/mediapipe
-
-CatGo history records downloading the model for offline use, but it does not
-retain a model card, versioned source revision, copyright notice, or
-model-specific redistribution terms. The MediaPipe code repository's general
-Apache-2.0 license is not assumed to cover this weight file. This requires
-maintainer/counsel mapping.
+No license file or license declaration was found in the historical pinned
+upstream repository. No license ID is assigned here, and reuse of that source
+still requires maintainer/counsel mapping. The audited Git tree contains no
+`server/ext/KMC` entry. CatGo also removes the stale `.gitmodules` entry and
+tests that KMC is absent from Git source archives, CI submodule checkout, and
+the Python release configurations. The unresolved historical license therefore
+does not supply rights for any future reintroduction.
 
 ### Open Babel-derived CatRender perception code
 
