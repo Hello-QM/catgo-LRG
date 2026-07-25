@@ -174,6 +174,8 @@ test('independently compensates every failed finalization path after validation'
   const run = cleanup.steps.map((step) => step.run ?? '').join('\n')
   assert.match(run, /promotion_title=/)
   assert.match(run, /gh run view "\$promotion_run_id"/)
+  assert.match(run, /promotion-receipts\/\$PROMOTION_ID\.json/)
+  assert.match(run, /write-out '%\{http_code\}'/)
   assert.match(
     run,
     /gh api[\s\\]*"repos\/\$REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/,

@@ -213,7 +213,7 @@ jobs:
     name: Promote verified release to Cloudflare
     needs: [validate]
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 130
     permissions:
       actions: write
       contents: read
@@ -617,7 +617,7 @@ jobs:
       needs.validate.result == 'success' &&
       needs.publish.result != 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 200
     permissions:
       actions: write
       contents: write
@@ -666,14 +666,32 @@ jobs:
             --repo "$REPOSITORY" \
             --json status,conclusion,headBranch \
             > "$promotion_result"
-          if ! jq -e \
+          promotion_succeeded=false
+          if jq -e \
               --arg branch "$DEFAULT_BRANCH" \
               '.status == "completed" and
                .conclusion == "success" and
                .headBranch == $branch' \
               "$promotion_result" > /dev/null; then
-            echo "R2 promotion did not succeed; its own compensation owns any partial mutation."
-            exit 0
+            promotion_succeeded=true
+          fi
+          if [ "$promotion_succeeded" != "true" ]; then
+            receipt_status=$(
+              curl --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                "https://dl.catgo-ucsd.org/promotion-receipts/$PROMOTION_ID.json?compensation=$PROMOTION_ID"
+            )
+            if [ "$receipt_status" = "404" ]; then
+              echo "R2 promotion did not commit a receipt; its in-workflow compensation owns any partial mutation."
+              exit 0
+            fi
+            if [ "$receipt_status" != "200" ]; then
+              echo "::error::Could not determine whether the failed R2 promotion committed public state."
+              exit 1
+            fi
+            echo "::warning::Failed R2 run committed a receipt; retrying its idempotent rollback."
           fi
 
           release_state=$(mktemp)
