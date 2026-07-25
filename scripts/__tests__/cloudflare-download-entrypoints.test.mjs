@@ -17,6 +17,13 @@ const ENTRYPOINTS = [
   'src/lib/api/config.ts',
   'src/lib/update/auto-update.svelte.ts',
 ]
+const PUBLIC_DOWNLOAD_DOCS = [
+  'readme.md',
+  'readme.zh.md',
+  'docs/guide/installation.md',
+  'docs/zh/guide/installation.md',
+  'extensions/vscode/readme.md',
+]
 
 test('defines one source of truth for public download destinations', () => {
   assert.ok(existsSync(LINKS_PATH), 'src/lib/download-links.ts exists')
@@ -68,4 +75,21 @@ test('the update banner exposes bounded release notes', () => {
   assert.match(banner, /<details class="ub-notes">/)
   assert.match(banner, /max-height:/)
   assert.match(banner, /overflow:\s*auto/)
+})
+
+test('public acquisition docs use the Cloudflare hub for current downloads', () => {
+  for (const path of PUBLIC_DOWNLOAD_DOCS) {
+    const content = source(path)
+    assert.match(content, /https:\/\/dl\.catgo-ucsd\.org\//, path)
+    assert.doesNotMatch(
+      content,
+      /https:\/\/github\.com\/Hello-QM\/catgo-LRG\/releases\/latest/i,
+      path,
+    )
+    assert.doesNotMatch(
+      content,
+      /(?:Download Desktop|下载桌面版|GitHub Releases|CatGo desktop client)[^\n]{0,160}https:\/\/github\.com\/Hello-QM\/catgo-LRG\/releases/i,
+      path,
+    )
+  }
 })

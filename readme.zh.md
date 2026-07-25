@@ -9,7 +9,7 @@
   ·
   <a href="https://app.catgo-ucsd.org">在线体验</a>
   ·
-  <a href="https://github.com/Hello-QM/catgo-LRG/releases">下载桌面版</a>
+  <a href="https://dl.catgo-ucsd.org/">下载桌面版</a>
   ·
   <a href="https://docs.catgo-ucsd.org">教程与文档</a>
 </p>
@@ -105,7 +105,7 @@ CatGo 有三个适合日常使用的成熟入口：桌面版、Web 版和 VS Cod
 
 ### A. 桌面版：完整工作台
 
-1. 从 [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases) 下载 Windows、macOS 或 Linux 安装包。
+1. 从 [CatGo 下载中心](https://dl.catgo-ucsd.org/) 下载 Windows、macOS 或 Linux 安装包。
 2. 打开 CatGo，拖入结构/输出文件，或从数据库获取结构。
 3. 使用结构工具栏、Quick Build 或 CatBot 准备模型与流程。
 4. 需要远程计算时，在 HPC 面板连接课题组集群。
@@ -286,16 +286,16 @@ catgo --help
 
 ### 下载
 
-下表所有链接都指向**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest)。在发布页选择对应平台的文件（见 **文件** 列）。历史版本与校验和见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
+下表所有链接都指向专用 [CatGo 下载中心](https://dl.catgo-ucsd.org/)的**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://dl.catgo-ucsd.org/)。历史版本与发布记录见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
 
-> **中国大陆镜像：** 无法访问 GitHub 时，可从 [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 下载最新版安装包（与 GitHub Releases 完全相同的完整版）。备选方案：通过 PyPI 镜像安装浏览器版（功能子集，不含 CatBot 聊天与桌面集成）：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
+> **中国大陆直连：** [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 通过 Cloudflare 直接提供完整安装包，无需登录或访问 GitHub。备选方案：通过 PyPI 镜像安装浏览器版（功能子集，不含 CatBot 聊天与桌面集成）：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
 
 | 系统                       | 获取最新版                                                         | 发布页上的文件                                                   |
 | ------------------------ | ------------------------------------------------------------- | --------------------------------------------------------- |
-| **Windows**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
-| **macOS**（Apple Silicon） | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg`                                 |
-| **Linux**                | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm`      |
-| **Android**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk`                      |
+| **Windows**              | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-windows)          | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
+| **macOS**（Apple Silicon） | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-macos)            | `CatGo_<ver>_aarch64.dmg`                                 |
+| **Linux**                | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-linux)            | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm`      |
+| **Android**              | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-android)          | `CatGo-v<ver>-android-universal.apk`                      |
 | **iOS**                  | [TestFlight 公测](https://testflight.apple.com/join/FdHup5Hz)   | 或发布页的 `CatGo-v<ver>-ios-arm64.ipa`                        |
 | **VS Code**              | 在扩展市场搜索 **CatGo**                                             | 或发布页的 `catgo-<ver>.vsix`                                  |
 | **Web**（免安装）             | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)              | —                                                         |

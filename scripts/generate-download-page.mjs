@@ -121,12 +121,31 @@ function formatForAsset(name) {
 
 function platformForAsset(name, format) {
   if (!format) return null
-  if (format === 'EXE' || format === 'MSI') return 'windows'
-  if (format === 'DMG') return 'macos'
-  if (format === 'DEB' || format === 'RPM' || format === 'AppImage') {
-    return 'linux'
+  if (!/^CatGo(?:[_-]|$)/i.test(name)) return null
+  if (
+    (format === 'EXE' || format === 'MSI')
+    && /(?:^|[_-])(?:x64|x86_64)(?:[_-]|\.)/i.test(name)
+  ) {
+    return 'windows'
   }
-  if (format === 'APK') return 'android'
+  if (
+    format === 'DMG'
+    && /(?:^|[_-])(?:aarch64|arm64)(?:[_-]|\.)/i.test(name)
+  ) {
+    return 'macos'
+  }
+  if (format === 'DEB' || format === 'RPM' || format === 'AppImage') {
+    return /(?:^|[._-])(?:amd64|x86_64)(?:[._-])/i.test(name)
+      ? 'linux'
+      : null
+  }
+  if (
+    format === 'APK'
+    && /(?:^|[_-])android(?:[_-]|\.)/i.test(name)
+    && /(?:^|[_-])universal(?:[_-]|\.)/i.test(name)
+  ) {
+    return 'android'
+  }
   return null
 }
 
@@ -288,6 +307,9 @@ function renderPlatformCard(platform) {
           <div class="unavailable" role="status">
             构建暂未提供
             <span>Build not available yet</span>
+            <a class="other-jump" href="#other-downloads">
+              查看其他下载 · See other downloads
+            </a>
           </div>`
 
   return `
@@ -810,6 +832,15 @@ export function renderDownloadPage(model) {
       font-weight: 500;
     }
 
+    .other-jump {
+      display: inline-block;
+      margin-top: 12px;
+      color: var(--copper);
+      font-size: 12px;
+      font-weight: 720;
+      text-underline-offset: 3px;
+    }
+
     .other-section {
       padding: 68px 0 86px;
       background: var(--paper-deep);
@@ -1069,7 +1100,7 @@ export function renderDownloadPage(model) {
       </div>
     </section>
 
-    <section class="other-section">
+    <section class="other-section" id="other-downloads">
       <div class="shell">
         <div class="section-kicker">RELEASE LEDGER / 发布文件</div>
         <h2>其他下载 / Other downloads</h2>

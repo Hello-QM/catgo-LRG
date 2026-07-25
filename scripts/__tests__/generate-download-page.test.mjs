@@ -114,8 +114,33 @@ test('keeps missing platforms visible without emitting broken links', () => {
   assert.equal(model.platforms.ios.available, true)
   assert.match(html, /macOS[\s\S]*?构建暂未提供/)
   assert.match(html, /Linux[\s\S]*?Build not available yet/)
+  assert.match(html, /href="#other-downloads"/)
+  assert.match(html, /id="other-downloads"/)
   assert.doesNotMatch(html, /href=""/)
   assert.doesNotMatch(html, /href="undefined"/)
+})
+
+test('keeps unrelated or unsupported architecture binaries out of platform cards', () => {
+  const unexpected = [
+    { name: 'helper_x64.exe', size: 10 },
+    { name: 'CatGo_1.4.6_x64.dmg', size: 20 },
+    { name: 'CatGo-v1.4.6-android-arm64.apk', size: 30 },
+  ]
+  const model = buildReleaseModel({
+    assets: unexpected,
+    tag: 'v1.4.6',
+    baseUrl: BASE_URL,
+  })
+
+  assert.equal(model.platforms.windows.available, false)
+  assert.equal(model.platforms.macos.available, false)
+  assert.equal(model.platforms.android.available, false)
+  assert.deepEqual(
+    model.other.map((asset) => asset.name),
+    unexpected
+      .map((asset) => asset.name)
+      .sort((left, right) => left.localeCompare(right)),
+  )
 })
 
 test('escapes display text, encodes URL segments, and rejects unsafe inputs', () => {
