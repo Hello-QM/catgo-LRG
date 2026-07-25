@@ -47,6 +47,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release rights
         run: node scripts/verify-release-rights.mjs
@@ -56,6 +59,12 @@ jobs:
           RELEASE_VERSION_TAG: ${{ inputs.release_tag }}
           RELEASE_VERSION_REQUIRE_TAG: ${{ inputs.upload }}
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ inputs.upload }}
+        run: node scripts/verify-release-source.mjs
 
       - name: Select Xcode 26 (iOS 26 SDK)
         # App Store Connect now rejects uploads built with the iOS 18.5 SDK —

@@ -27,6 +27,7 @@ on:
       - 'scripts/sync-legal-bundle.mjs'
       - 'scripts/verify-legal-distributions.mjs'
       - 'scripts/verify-release-rights.mjs'
+      - 'scripts/verify-release-source.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'vite.desktop.config.ts'
@@ -55,6 +56,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release rights
         run: node scripts/verify-release-rights.mjs
@@ -64,6 +68,12 @@ jobs:
           RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
           RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-source.mjs
 
       - uses: pnpm/action-setup@v4
 

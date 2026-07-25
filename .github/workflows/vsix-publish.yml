@@ -31,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
           fetch-depth: 0
 
       - name: Verify release rights
@@ -41,6 +42,12 @@ jobs:
           RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
           RELEASE_VERSION_REQUIRE_TAG: ${{ github.event_name == 'push' || !inputs.dry_run }}
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        run: node scripts/verify-release-source.mjs
 
       - uses: pnpm/action-setup@v4
 

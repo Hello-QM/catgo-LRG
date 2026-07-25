@@ -55,6 +55,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          fetch-depth: 0
 
       - name: Verify release rights
         run: node scripts/verify-release-rights.mjs
@@ -64,6 +67,12 @@ jobs:
           RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           RELEASE_VERSION_REQUIRE_TAG: true
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: true
+        run: node scripts/verify-release-source.mjs
 
       - name: Stage canonical legal bundle
         run: node scripts/sync-legal-bundle.mjs

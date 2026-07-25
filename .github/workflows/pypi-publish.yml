@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release rights
         run: node scripts/verify-release-rights.mjs
@@ -45,6 +48,12 @@ jobs:
           RELEASE_VERSION_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
           RELEASE_VERSION_REQUIRE_TAG: ${{ github.event_name == 'release' || !inputs.dry_run }}
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ github.event_name == 'release' || !inputs.dry_run }}
+        run: node scripts/verify-release-source.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
