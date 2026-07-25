@@ -10,25 +10,14 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { legalBundleSources } from '../sync-legal-bundle.mjs'
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
 
 const REQUIRED_FILES = [
-  'license',
-  'CITATION.cff',
+  ...legalBundleSources(),
   'ACKNOWLEDGEMENT.txt',
-  'THIRD_PARTY_NOTICES.md',
-  'third_party/licenses/AtomCanvas-MIT.txt',
-  'third_party/licenses/BUNDLED-FONTS.txt',
-  'third_party/licenses/MatterViz-MIT.txt',
-  'third_party/licenses/OFL-1.1.txt',
-  'third_party/licenses/OVITO-MIT.txt',
-  'third_party/licenses/pretty-lattice-MIT.txt',
-  'third_party/licenses/sql.js-MIT.txt',
-  'third_party/licenses/xyz2svg-MIT.txt',
-  'third_party/licenses/xyzgraph-MIT.txt',
-  'third_party/licenses/xyzrender-MIT.txt',
-  'server/catgo/vendor/pormake/LICENSE',
 ]
 
 const DISTRIBUTION_CLASSES = [
