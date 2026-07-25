@@ -15,9 +15,11 @@ decisions.
   `7ba0614b1fa51116f49dbbc669940e7af7df716a`
 - Audit and removal executor: Codex (OpenAI)
 - Audit and removal date: 2026-07-25
-- Independent review status: not performed as part of the removal task;
-  reviewer identity and review date must be recorded only when that review
-  actually occurs.
+- Independent reviewer: Codex independent review agent (OpenAI)
+- Independent review date: 2026-07-25
+- Independent review result: technical removal approved after the integrated
+  commit and release guard were verified; legal and rights-holder decisions
+  remain separate gates.
 
 The Open Babel repository snapshot above declares GPL version 2 in `COPYING`.
 The declaration is recorded as a source fact, not as a conclusion about the
@@ -64,11 +66,13 @@ The release-tree treatment removed:
 - `CatRenderState.perceive_orders`;
 - the CatRender checkbox, reactive dependency, and render-payload key.
 
-Removal of the Rust implementation is committed at
-`7e9962c84fa7dffcbd7ff5f1cc926472f32bedb1`. Legacy JSON containing the
-retired style key remains parseable as an ignored unknown field. Supplied bond
-orders, including aromatic order 1.5, remain authoritative. The independent
-distance-only connectivity fallback and long-bond pruning remain available.
+Removal of the Rust implementation is integrated at
+`6b11d6b313c4dcce223bb180c36d5399d47827b9`; the original isolated-worktree
+commit was `7e9962c84fa7dffcbd7ff5f1cc926472f32bedb1`, with an identical patch.
+Legacy JSON containing the retired style key remains parseable as an ignored
+unknown field. Supplied bond orders, including aromatic order 1.5, remain
+authoritative. The independent distance-only connectivity fallback and
+long-bond pruning remain available.
 
 The main Structure/trajectory bond worker and the WebGL2/WebGPU production
 renderers were outside the removed call path and were not modified.
