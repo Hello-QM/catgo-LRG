@@ -501,7 +501,7 @@ test('actual VSIX contains exactly the canonical redistribution sources', () => 
     writeFileSync(resolve(extensionRoot, 'dist/extension.cjs'), 'module.exports = {}\n')
 
     execFileSync(
-      'vsce',
+      resolve(ROOT, 'node_modules/.bin/vsce'),
       ['package', '--no-dependencies', '--out', archive],
       { cwd: extensionRoot, stdio: 'pipe' },
     )

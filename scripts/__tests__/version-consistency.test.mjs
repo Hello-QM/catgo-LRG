@@ -261,7 +261,7 @@ test('the package script and main CI run every Node script test', () => {
   const packageJson = JSON.parse(source('package.json'))
   assert.equal(
     packageJson.scripts['test:node'],
-    'node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs',
+    'pnpm legal:sync && node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs',
   )
 
   const step = workflowStep('.github/workflows/test.yml', 'Run Node script tests')

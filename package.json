@@ -93,6 +93,7 @@
     "@types/three": "^0.181.0",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.0.6",
+    "@vscode/vsce": "^3.9.2",
     "@webgpu/types": "^0.1.70",
     "concurrently": "^9.2.1",
     "d3-time-format": "^4.1.0",
@@ -274,6 +275,6 @@
     "bundle:mac-arm": "pnpm backend:build:mac-arm && pnpm tauri:build:mac-arm",
     "vitest": "vitest",
     "test": "vitest run",
-    "test:node": "node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs"
+    "test:node": "pnpm legal:sync && node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs"
   }
 }

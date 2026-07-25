@@ -34,6 +34,11 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.11.16'
+
       # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
       # rebuilt with atomics via -Z build-std. Installed before stable so
       # stable stays the default toolchain for everything else. Pinned (not
@@ -55,6 +60,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Verify Node archive test tooling
+        run: |
+          uv --version
+          pnpm exec vsce --version
 
       - name: Generate SvelteKit tsconfig + ambient types
         run: pnpm exec svelte-kit sync
