@@ -103,20 +103,21 @@ function verify(tag, assets, sourceRoot) {
   )
 }
 
-test('v1.4.5 historical backfill validates app assets without an NCL archive', () => {
+test('v1.4.5 historical redistribution fails closed without documented clearance', () => {
   const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-historical-'))
   try {
     const sourceRoot = makeSourceRoot(fixture, 'historical')
     const assets = makeAssets(fixture, 'v1.4.5')
     const result = verify('v1.4.5', assets, sourceRoot)
-    assert.equal(result.status, 0, result.stderr || result.stdout)
-    assert.equal(JSON.parse(result.stdout).policy, 'historical-pre-1.4.6')
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /historical release redistribution.*disabled/i)
+    assert.match(result.stderr, /documented.*rights clearance/i)
   } finally {
     rmSync(fixture, { recursive: true, force: true })
   }
 })
 
-test('v1.4.5 historical backfill still requires valid updater and app assets', () => {
+test('v1.4.5 cannot bypass the historical rights block with invalid assets', () => {
   const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-r2-historical-bad-'))
   try {
     const sourceRoot = makeSourceRoot(fixture, 'historical')
@@ -124,7 +125,7 @@ test('v1.4.5 historical backfill still requires valid updater and app assets', (
     mkdirSync(assets)
     const result = verify('v1.4.5', assets, sourceRoot)
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /latest\.json|app asset/i)
+    assert.match(result.stderr, /historical release redistribution.*disabled/i)
   } finally {
     rmSync(fixture, { recursive: true, force: true })
   }

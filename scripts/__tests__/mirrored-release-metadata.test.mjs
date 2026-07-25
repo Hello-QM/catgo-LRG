@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,12 +12,48 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { syncLegalBundle } from '../sync-legal-bundle.mjs'
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-mirrored-release.mjs')
 const PUBLIC_BASE_URL = 'https://dl.catgo-ucsd.org'
+const SIDECAR_ASSETS = [
+  'catgo-server-linux-x64',
+  'catgo-server-darwin-arm64',
+  'catgo-server-win-x64.exe',
+]
+
+function addReleaseBundle(root, assets, sourceRoot) {
+  mkdirSync(resolve(sourceRoot, 'third_party/licenses'), { recursive: true })
+  writeFileSync(resolve(sourceRoot, 'license'), 'fixture license\n')
+  writeFileSync(resolve(sourceRoot, 'CITATION.cff'), 'fixture citation\n')
+  writeFileSync(
+    resolve(sourceRoot, 'THIRD_PARTY_NOTICES.md'),
+    '[dependency](third_party/licenses/dependency.txt)\n',
+  )
+  writeFileSync(
+    resolve(sourceRoot, 'third_party/licenses/dependency.txt'),
+    'fixture dependency license\n',
+  )
+  const staged = resolve(root, 'legal-bundle')
+  syncLegalBundle(staged, { sourceRoot })
+  const archive = spawnSync(
+    'tar',
+    ['czf', resolve(assets, 'catgo-legal-bundle.tar.gz'), '-C', staged, '.'],
+    { encoding: 'utf8' },
+  )
+  assert.equal(archive.status, 0, archive.stderr || archive.stdout)
+
+  for (const name of SIDECAR_ASSETS) {
+    const body = `sidecar:${name}\n`
+    const digest = createHash('sha256').update(body).digest('hex')
+    writeFileSync(resolve(assets, name), body)
+    writeFileSync(resolve(assets, `${name}.sha256`), `${digest}  ${name}\n`)
+  }
+}
 
 function fixture({
-  tag = 'v1.4.5',
+  tag = 'v1.4.6',
   version = tag.slice(1),
   signature = 'signature',
   urls = [
@@ -49,7 +86,7 @@ function fixture({
     resolve(assets, `CatGo_${version}_aarch64.app.tar.gz`),
     'updater\n',
   )
-  writeFileSync(resolve(assets, 'catgo-server-win-x64.exe'), 'sidecar\n')
+  addReleaseBundle(root, assets, sourceRoot)
   return { root, assets, sourceRoot, tag }
 }
 
@@ -91,7 +128,7 @@ test('accepts updater metadata whose version and Cloudflare asset paths match th
 test('rejects stale updater metadata version', () => {
   withFixture({ version: '1.4.4' }, (result) => {
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /latest\.json version.*1\.4\.4.*1\.4\.5/i)
+    assert.match(result.stderr, /latest\.json version.*1\.4\.4.*1\.4\.6/i)
   })
 })
 
@@ -99,12 +136,12 @@ test('rejects an updater URL under a stale release tag', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/v1.4.4/CatGo_1.4.5_x64-setup.exe`,
+        `${PUBLIC_BASE_URL}/v1.4.4/CatGo_1.4.6_x64-setup.exe`,
       ],
     },
     (result) => {
       assert.notEqual(result.status, 0)
-      assert.match(result.stderr, /updater URL.*v1\.4\.5/i)
+      assert.match(result.stderr, /updater URL.*v1\.4\.6/i)
     },
   )
 })
@@ -113,8 +150,8 @@ test('rejects mixed Cloudflare and GitHub updater URLs', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/v1.4.5/CatGo_1.4.5_x64-setup.exe`,
-        'https://github.com/Hello-QM/catgo-LRG/releases/download/v1.4.5/CatGo_1.4.5_aarch64.app.tar.gz',
+        `${PUBLIC_BASE_URL}/v1.4.6/CatGo_1.4.6_x64-setup.exe`,
+        'https://github.com/Hello-QM/catgo-LRG/releases/download/v1.4.6/CatGo_1.4.6_aarch64.app.tar.gz',
       ],
     },
     (result) => {
@@ -128,12 +165,12 @@ test('rejects a Cloudflare URL outside the exact release-tag path', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/releases/v1.4.5/CatGo_1.4.5_x64-setup.exe`,
+        `${PUBLIC_BASE_URL}/releases/v1.4.6/CatGo_1.4.6_x64-setup.exe`,
       ],
     },
     (result) => {
       assert.notEqual(result.status, 0)
-      assert.match(result.stderr, /updater URL.*v1\.4\.5/i)
+      assert.match(result.stderr, /updater URL.*v1\.4\.6/i)
     },
   )
 })
@@ -149,7 +186,7 @@ test('rejects an updater URL whose release asset is absent', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/v1.4.5/CatGo_1.4.5_amd64.AppImage`,
+        `${PUBLIC_BASE_URL}/v1.4.6/CatGo_1.4.6_amd64.AppImage`,
       ],
     },
     (result) => {
@@ -163,7 +200,7 @@ test('rejects a sidecar binary as a Tauri updater artifact', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/v1.4.5/catgo-server-win-x64.exe`,
+        `${PUBLIC_BASE_URL}/v1.4.6/catgo-server-win-x64.exe`,
       ],
     },
     (result) => {

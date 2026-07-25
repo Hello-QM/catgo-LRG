@@ -2,7 +2,7 @@
 # GitHub is often unreachable) can download CatGo and receive in-app updates.
 #
 # Layout in the bucket (latest app artifacts + retained versioned sidecars):
-#   <tag>/<asset>   e.g. v1.4.5/CatGo_1.4.5_x64-setup.exe
+#   <tag>/<asset>   e.g. v1.4.6/CatGo_1.4.6_x64-setup.exe
 #   latest.json     updater manifest with URLs rewritten to the mirror
 #   index.html      self-contained bilingual all-platform download page
 # Older installers, updater metadata, and legal bundles are pruned after a
@@ -40,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to mirror (e.g. v1.4.5); empty = latest release'
+        description: 'Cleared NCL release tag to mirror (e.g. v1.4.6); empty = latest release'
         required: false
         default: ''
 
@@ -209,16 +209,14 @@ jobs:
           target_source=$(mktemp -d)
           trap 'rm -rf "$target_source"' EXIT
           git archive "$tag" | tar -x -C "$target_source"
+          # Historical pre-NCL redistribution is disabled; manual dispatch
+          # provides no exemption. Eligible NCL tags must still clear their
+          # own rights ledger before any further validation or publication.
           node scripts/verify-release-rights.mjs --root "$target_source"
-          # v1.4.5 predates the citation surfaces enforced by the shared
-          # verifier. Keep that one historical backfill available; every later
-          # release must match the complete root-version inventory.
-          if [ "$tag" != "v1.4.5" ]; then
-            node scripts/verify-release-version.mjs \
-              --root "$target_source" \
-              --tag "$tag" \
-              --require-tag
-          fi
+          node scripts/verify-release-version.mjs \
+            --root "$target_source" \
+            --tag "$tag" \
+            --require-tag
           node scripts/verify-mirrored-release.mjs \
             --tag "$tag" \
             --assets-dir dist \

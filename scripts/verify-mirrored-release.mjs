@@ -357,15 +357,18 @@ export async function verifyMirroredRelease({
   sourceRoot,
   baseUrl = process.env.R2_PUBLIC_BASE_URL || DEFAULT_PUBLIC_BASE_URL,
 }) {
-  const ncl = requiresNoncommercialBundle(tag)
-  verifyAppAssets(assetsDir, tag, baseUrl)
-  if (ncl) {
-    await verifySidecarAssets(assetsDir)
-    verifyLegalArchive(assetsDir, sourceRoot)
+  if (!requiresNoncommercialBundle(tag)) {
+    throw new Error(
+      `Historical release redistribution is disabled for ${tag} until ` +
+        `documented redistribution rights clearance is available`,
+    )
   }
+  verifyAppAssets(assetsDir, tag, baseUrl)
+  await verifySidecarAssets(assetsDir)
+  verifyLegalArchive(assetsDir, sourceRoot)
   return {
     tag,
-    policy: ncl ? 'ncl-1.4.6-or-later' : 'historical-pre-1.4.6',
+    policy: 'ncl-1.4.6-or-later',
   }
 }
 

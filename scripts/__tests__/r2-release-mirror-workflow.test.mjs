@@ -65,11 +65,23 @@ test('rewrites updater metadata before validating target-tag release material', 
   )
   assert.match(validationBlock, /refs\/tags\/\$tag:refs\/tags\/\$tag/)
   assert.match(validationBlock, /git archive "\$tag"/)
+  const rightsGate = validationBlock.indexOf(
+    'node scripts/verify-release-rights.mjs',
+  )
+  const versionGate = validationBlock.indexOf(
+    'node scripts/verify-release-version.mjs',
+  )
+  const mirrorGate = validationBlock.indexOf(
+    'node scripts/verify-mirrored-release.mjs',
+  )
+  assert.ok(rightsGate >= 0, 'target release rights are checked')
+  assert.ok(versionGate > rightsGate, 'version validation follows rights clearance')
+  assert.ok(mirrorGate > versionGate, 'asset validation follows version validation')
   assert.match(
     validationBlock,
-    /if \[ "\$tag" != "v1\.4\.5" \]; then[\s\S]*node scripts\/verify-release-version\.mjs[\s\S]*--root "\$target_source"[\s\S]*--tag "\$tag"[\s\S]*--require-tag[\s\S]*fi/,
+    /node scripts\/verify-release-version\.mjs[\s\S]*--root "\$target_source"[\s\S]*--tag "\$tag"[\s\S]*--require-tag/,
   )
-  assert.doesNotMatch(validationBlock, /v1\.4\.\[0-5\]|v1\.4\.\*/)
+  assert.doesNotMatch(validationBlock, /v1\.4\.5|v1\.4\.\[0-5\]|v1\.4\.\*/)
   assert.match(
     validationBlock,
     /node scripts\/verify-mirrored-release\.mjs[\s\S]*--tag "\$tag"[\s\S]*--source-root "\$target_source"/,
