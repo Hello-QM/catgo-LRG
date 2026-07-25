@@ -65,6 +65,93 @@ const CLEAR_COLOR: GPUColor = { r: 0.02, g: 0.03, b: 0.05, a: 1 }
 
 const DEPTH_FORMAT: GPUTextureFormat = `depth24plus`
 
+/** Shared WGSL: the linear-RGB → sRGB transfer curve, byte-for-byte the same
+ *  piecewise function as `linearTosRGB` in the WebGL atom shader
+ *  (src/lib/structure/atoms/AtomManagerInstances.svelte).
+ *
+ *  Why every fragment shader here MUST end with it: the swapchain is configured
+ *  with `navigator.gpu.getPreferredCanvasFormat()`, which is a NON-sRGB format
+ *  (`bgra8unorm` on every current platform). WebGPU therefore performs no
+ *  automatic encode on write — whatever a shader returns is what the display
+ *  shows, bit for bit. Every colour reaching these shaders is LINEAR (atom
+ *  colours, cell edge, bond grey, depth-cue background), so without this the
+ *  overlay displays linear values as though they were sRGB. That crushes the
+ *  mid-tones toward black — grey #808080 lands on 41/255 instead of 128/255 —
+ *  which is what made the cell box and bonds nearly invisible and flattened
+ *  every sphere's shaded limb into the background. */
+const LINEAR_TO_SRGB_WGSL = `
+fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+`
+
+/** TS twin of LINEAR_TO_SRGB_WGSL, for colours that bypass a shader — i.e. the
+ *  render-pass `clearValue`, which the driver writes into the (non-sRGB) target
+ *  verbatim. */
+function linear_to_srgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(c, 0), 1 / 2.4) - 0.055
+}
+
+/** Atom shading uniform: 6 × vec4 = 96 bytes. Carries the SAME knobs the WebGL
+ *  atom shader takes as uniforms, so the two paths shade identically:
+ *    0: light_dir.xyz (view-space headlamp) | w = 1 when the camera is orthographic
+ *    1: ambient | directional | spec_strength | roughness
+ *    2: metalness | render_style (0 glossy, 1 matte, 2 toon) | outline | depth_cueing
+ *    3: depth_near | depth_far | pad | pad
+ *    4: depth_cue_bg.rgb (LINEAR — the shader encodes it) | pad
+ *    5: toon shadow_threshold | highlight_threshold | shadow_brightness | pad */
+const SHADING_BYTES = 96
+
+/** Neutral defaults, used until the overlay pushes the viewer's real settings.
+ *  Mirrors the `glossy` lighting profile + depth cueing off. */
+const DEFAULT_SHADING: LargeSystemShading = {
+  light_dir: [0, 0, 1],
+  is_ortho: false,
+  ambient: 0.6,
+  directional: 2.2,
+  spec_strength: 1,
+  roughness: 0.2,
+  metalness: 0,
+  render_style: 0,
+  outline: 0,
+  depth_cueing: 0,
+  depth_near: 0,
+  depth_far: 10,
+  depth_bg: [0, 0, 0],
+  toon_shadow_threshold: 0.3,
+  toon_highlight_threshold: 0.97,
+  toon_shadow_brightness: 0.5,
+}
+
+/** The atom-shading state the overlay mirrors from the WebGL viewer. Every field
+ *  is the resolved value the WebGL atom shader's matching uniform receives (see
+ *  StructureScene's `get_shading_state` bridge) — NOT a raw setting — so the two
+ *  renderers cannot drift. Colours are LINEAR RGB. */
+export type LargeSystemShading = {
+  /** View-space headlamp direction (x=right, y=up, z=toward camera). */
+  light_dir: [number, number, number]
+  is_ortho: boolean
+  ambient: number
+  directional: number
+  spec_strength: number
+  roughness: number
+  metalness: number
+  /** Shader branch: 0 glossy/metallic (GGX), 1 matte/soft/flat, 2 toon.
+   *  `matcap` has no WebGPU branch and resolves to 0 — see the overlay. */
+  render_style: 0 | 1 | 2
+  outline: number
+  depth_cueing: number
+  depth_near: number
+  depth_far: number
+  /** Depth-cue fade target, LINEAR RGB (the shader sRGB-encodes it). */
+  depth_bg: [number, number, number]
+  toon_shadow_threshold: number
+  toon_highlight_threshold: number
+  toon_shadow_brightness: number
+}
+
 /** MSAA sample count for the overlay. 4× MSAA + alpha-to-coverage gives the
  *  impostor silhouettes (defined by fragment discard / ray-miss) smooth,
  *  analytically-AA'd edges that match the WebGL view's `antialias:true`. Both
@@ -138,46 +225,63 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(in.color, 1.0);
+  // cell.color is LINEAR (hex_to_linear_rgb) — encode, or the default #808080
+  // grey box paints at 41/255 instead of 128/255 and all but disappears.
+  return vec4<f32>(linear_to_srgb(in.color), 1.0);
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
-/** WGSL axis-orientation gizmo shader. Draws a small camera-oriented XYZ triad
- *  (X=red, Y=green, Z=blue) pinned to a fixed SCREEN CORNER, sized in constant
- *  pixels, independent of zoom / structure scale. It replaces the WebGL Gizmo
- *  widget (which is gone when WebGL is suspended in overlay mode).
+/** Gizmo axis colors — the SAME hex constants the WebGL viewport gizmo receives
+ *  from src/lib/colors (axis_colors / neg_axis_colors). Hardcoded here instead
+ *  of imported because $lib/colors pulls in d3-color + 8 JSON palettes — far too
+ *  heavy for this lean GPU module. A unit test pins these against $lib/colors so
+ *  they cannot silently drift. Exported for that test. */
+export const GIZMO_AXIS_HEX = [`#d75555`, `#55b855`, `#5555d7`] as const
+export const GIZMO_NEG_AXIS_HEX = [`#b84444`, `#44a044`, `#4444b8`] as const
+
+/** WGSL axis-orientation gizmo. A WebGPU replica of the WebGL viewer's
+ *  three-viewport-gizmo widget (sphere type, as configured in StructureScene's
+ *  gizmo_props), which is gone while WebGL is suspended in overlay mode. Visual
+ *  spec mirrored from that library's sphere layout:
+ *    - internal ortho frame spans ±1.8 units across the widget; axis heads sit
+ *      at ±1.0 unit along each (camera-rotation-projected) axis
+ *    - positive heads: filled circle, radius 0.35 unit, axis-colored, with the
+ *      axis letter inside (labelColor #111) and a line from the center
+ *    - negative heads: smaller filled circle (0.225 unit), darker negative
+ *      color, no letter, no line
+ *    - lines: 4 px wide (lineWidth default), origin → head center
+ *    - opacities: 0.8 positive / 0.9 negative (StructureScene's axis_options)
+ *  Rendered as ONE triangle-strip quad; the fragment shader draws everything
+ *  analytically (SDF circles / round-capped segments, 0.75 px edge ramps) so
+ *  every edge is antialiased — no 1 px line-list aliasing. Elements composite
+ *  back-to-front (painter's algorithm on the rotated z) inside the shader and
+ *  the premultiplied result alpha-blends over the scene.
  *
- *  Geometry: a line-list of 22 vertices.
- *    - verts 0..5  = the 3 axis lines (3 axes × 2 endpoints): axis index = vi/2
- *      selects the unit axis (+X/+Y/+Z); the low bit picks origin vs. axis tip.
- *    - verts 6..21 = 16 LETTER-GLYPH endpoints (8 line segments × 2): tiny X/Y/Z
- *      letters drawn at each axis tip, color-matched to the axis. X=2 segments,
- *      Y=3, Z=3. Each glyph vertex offsets from its axis' PROJECTED tip by a 2D
- *      template coordinate scaled to a small constant pixel size — the letters
- *      stay SCREEN-FLAT (no 3D rotation), facing the viewer at the tip.
- *  Orientation of the AXES uses ONLY the camera view ROTATION (upper-3×3 of
- *  camera.view, NOT its translation), so the triad spins with the camera like an
- *  orientation indicator. The rotated axis' XY (screen plane; camera looks down
- *  -Z in view space) is scaled to a small NDC region and offset to the corner.
- *  The corner center + per-pixel NDC scale (aspect-corrected so the region is
- *  square in pixels) come from a uniform the renderer fills from the canvas size.
+ *  Orientation uses ONLY the camera view ROTATION (upper-3×3 of camera.view),
+ *  so the triad spins with the camera but stays pinned to its corner. A head
+ *  pointing at the viewer projects toward the widget center — same as the
+ *  WebGL gizmo. Colors are hand-authored DISPLAY-space constants (see
+ *  GIZMO_AXIS_HEX): written verbatim to the non-sRGB target, NO linear→sRGB
+ *  encode — encoding would wash them out.
  *
- *  Depth: the gizmo must ALWAYS be visible (never occluded by atoms/bonds). Its
- *  pipeline runs with depthCompare:`always` + depthWriteEnabled:false, and it is
- *  drawn LAST in the pass, so it overwrites the corner regardless of scene depth. */
-const GIZMO_WGSL = `
+ *  Always on top: depthCompare:`always`, no depth write, drawn LAST.
+ *
+ *  Exported (like the hex constants above) so the parity unit test can check
+ *  the float color literals below against GIZMO_AXIS_HEX / $lib/colors. */
+export const GIZMO_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Gizmo placement uniform:
-//   center_ndc : corner anchor in clip/NDC space (xy), z/w unused.
-//   scale_ndc  : per-unit-axis NDC half-extent (x,y) — y carries the aspect
-//                correction so the triad is square in pixels.
+// Gizmo placement uniform (filled from canvas size + dpr + HUD safe-area):
+//   place : xy = widget center in NDC, z = half-extent R in device px,
+//           w = unit_px (R / 1.8 — the internal ortho unit in device px).
+//   px    : xy = px→NDC scale (2/w, 2/h), z = line half-width in device px,
+//           w unused.
 struct GizmoU {
-  center_ndc : vec4<f32>,
-  scale_ndc : vec4<f32>,
+  place : vec4<f32>,
+  px : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera : Camera;
@@ -185,104 +289,161 @@ struct GizmoU {
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
-  @location(0) color : vec3<f32>,
+  @location(0) p : vec2<f32>, // local coords in device px, y-up, origin at center
 };
 
-// Axis unit vectors and their (linear-ish) colors. X red, Y green, Z blue.
 const AXES = array<vec3<f32>, 3>(
   vec3<f32>(1.0, 0.0, 0.0),
   vec3<f32>(0.0, 1.0, 0.0),
   vec3<f32>(0.0, 0.0, 1.0),
 );
+// axis_colors x/y/z — display-space sRGB floats of GIZMO_AXIS_HEX.
 const AXIS_COLORS = array<vec3<f32>, 3>(
-  vec3<f32>(0.85, 0.10, 0.10),
-  vec3<f32>(0.10, 0.70, 0.10),
-  vec3<f32>(0.10, 0.10, 0.85),
+  vec3<f32>(0.843, 0.333, 0.333),  // #d75555
+  vec3<f32>(0.333, 0.722, 0.333),  // #55b855
+  vec3<f32>(0.333, 0.333, 0.843),  // #5555d7
 );
+// neg_axis_colors nx/ny/nz — GIZMO_NEG_AXIS_HEX.
+const NEG_AXIS_COLORS = array<vec3<f32>, 3>(
+  vec3<f32>(0.722, 0.267, 0.267),  // #b84444
+  vec3<f32>(0.267, 0.627, 0.267),  // #44a044
+  vec3<f32>(0.267, 0.267, 0.722),  // #4444b8
+);
+const LABEL_COLOR = vec3<f32>(0.067, 0.067, 0.067); // labelColor #111
+const POS_ALPHA : f32 = 0.8;   // positive-axis opacity (gizmo_props)
+const NEG_ALPHA : f32 = 0.9;   // negative-axis opacity (gizmo_props)
+// Sphere-layout metrics in internal ortho units (×unit_px → device px).
+const HEAD_DIST : f32 = 1.0;    // head center distance from widget center
+const POS_R : f32 = 0.35;       // positive head radius (sprite scale 0.7 / 2)
+const NEG_R : f32 = 0.225;      // negative head radius (sprite scale 0.45 / 2)
+const GLYPH_R : f32 = 0.185;    // letter half-height inside the positive head
+const GLYPH_STROKE : f32 = 0.2; // letter stroke half-width, as a fraction of GLYPH_R
 
-// Letter-glyph templates as 2D line segments on a [-1,1] square, screen-aligned.
-// 8 segments = 16 endpoints (glyph verts 0..15 = gizmo verts 6..21):
-//   X (axis 0): segs 0,1 -> two crossing diagonals.
-//   Y (axis 1): segs 2,3,4 -> two upper arms to center + stem down.
-//   Z (axis 2): segs 5,6,7 -> top bar, diagonal, bottom bar.
-const GLYPH_PTS = array<vec2<f32>, 16>(
-  // X: (-1,-1)->(1,1), (-1,1)->(1,-1)
-  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0),
-  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0),
-  // Y: (-1,1)->(0,0), (1,1)->(0,0), (0,0)->(0,-1)
-  vec2<f32>(-1.0, 1.0), vec2<f32>(0.0, 0.0),
-  vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0),
-  vec2<f32>(0.0, 0.0), vec2<f32>(0.0, -1.0),
-  // Z: (-1,1)->(1,1), (1,1)->(-1,-1), (-1,-1)->(1,-1)
-  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
-  vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0),
-  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0),
+// Letter strokes on a [-1,1] template box (y-up), round-capped segments.
+// (ax, ay, bx, by) per segment. X = segs 0-1, Y = 2-4, Z = 5-7.
+const GLYPH_SEGS = array<vec4<f32>, 8>(
+  vec4<f32>(-0.72, -1.0, 0.72, 1.0),  // X diagonal /
+  vec4<f32>(-0.72, 1.0, 0.72, -1.0),  // X diagonal \\
+  vec4<f32>(-0.72, 1.0, 0.0, 0.05),   // Y left arm
+  vec4<f32>(0.72, 1.0, 0.0, 0.05),    // Y right arm
+  vec4<f32>(0.0, 0.05, 0.0, -1.0),    // Y stem
+  vec4<f32>(-0.62, 1.0, 0.62, 1.0),   // Z top bar
+  vec4<f32>(0.62, 1.0, -0.62, -1.0),  // Z diagonal
+  vec4<f32>(-0.62, -1.0, 0.62, -1.0), // Z bottom bar
 );
-// Which axis (tip + color) each of the 16 glyph endpoints belongs to.
-const GLYPH_AXIS = array<u32, 16>(
-  0u, 0u, 0u, 0u,                 // X: 2 segs
-  1u, 1u, 1u, 1u, 1u, 1u,         // Y: 3 segs
-  2u, 2u, 2u, 2u, 2u, 2u,         // Z: 3 segs
-);
-// Glyph half-size in pixels (the template [-1,1] maps to +-GLYPH_PX). Sat past
-// the axis tip by GLYPH_TIP_SCALE so the letter clears the arrow end.
-const GLYPH_PX : f32 = 9.0;
-const GLYPH_TIP_SCALE : f32 = 1.18;
-// Mirrors the TS-side GIZMO_PX: scale_ndc spans GIZMO_PX pixels per unit axis, so
-// dividing GLYPH_PX by it converts the glyph half-size into the same NDC scale.
-const GIZMO_PX_F : f32 = 120.0;
+const GLYPH_START = array<u32, 3>(0u, 2u, 5u);
+const GLYPH_COUNT = array<u32, 3>(2u, 3u, 3u);
+
+// Signed distance to the segment [a,b] (round caps come from the radius the
+// caller subtracts).
+fn sd_segment(p : vec2<f32>, a : vec2<f32>, b : vec2<f32>) -> f32 {
+  let pa = p - a;
+  let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+// SDF → coverage with a fixed 0.75 px edge ramp (p is in device px, so no
+// fwidth needed — distances ARE pixels).
+fn cov(d : f32) -> f32 {
+  return clamp(0.5 - d / 0.75, 0.0, 1.0);
+}
+
+// src-over: paint (rgb, a) on top of the premultiplied accumulator.
+fn over(acc : vec4<f32>, rgb : vec3<f32>, a : f32) -> vec4<f32> {
+  return vec4<f32>(rgb * a + acc.rgb * (1.0 - a), a + acc.a * (1.0 - a));
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
-  // Camera view ROTATION only (upper-3x3 of camera.view). Drop translation so
-  // the triad rotates with the camera but stays pinned to the corner.
-  let rot = mat3x3<f32>(
-    camera.view[0].xyz,
-    camera.view[1].xyz,
-    camera.view[2].xyz,
-  );
-
-  // The glyph half-size in NDC reuses the per-axis pixel scale (scale_ndc spans
-  // GIZMO_PX), so a GLYPH_PX template is square in pixels and not skewed.
-  let glyph_ndc = vec2<f32>(
-    giz.scale_ndc.x * (GLYPH_PX / GIZMO_PX_F),
-    giz.scale_ndc.y * (GLYPH_PX / GIZMO_PX_F),
-  );
-
+  // Full-widget quad as a 4-vert triangle-strip: (-1,-1) (1,-1) (-1,1) (1,1).
+  let cx = select(-1.0, 1.0, (vi & 1u) == 1u);
+  let cy = select(-1.0, 1.0, (vi & 2u) == 2u);
+  let r_px = giz.place.z;
   var out : VsOut;
-
-  if (vi < 6u) {
-    // --- Axis lines: 3 axes x 2 endpoints (origin -> rotated tip). ---
-    let axis_i = vi / 2u;            // 0=X, 1=Y, 2=Z
-    let is_tip = (vi & 1u) == 1u;    // segment: origin -> tip
-    let dir = rot * AXES[axis_i];    // rotated axis in view space (camera looks -Z)
-    let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
-    let off = select(vec2<f32>(0.0, 0.0), tip_off, is_tip);
-    let pos = giz.center_ndc.xy + off;
-    out.clip = vec4<f32>(pos, 0.0, 1.0);
-    out.color = AXIS_COLORS[axis_i];
-    return out;
-  }
-
-  // --- Letter glyphs: verts 6..21 -> glyph endpoints 0..15. ---
-  let gvi = vi - 6u;
-  let axis_i = GLYPH_AXIS[gvi];
-  // Projected axis tip in NDC, pushed slightly BEYOND the tip so the letter sits
-  // past the arrow end (along the rotated axis' screen direction).
-  let dir = rot * AXES[axis_i];
-  let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
-  let tip_pos = giz.center_ndc.xy + tip_off * GLYPH_TIP_SCALE;
-  // Screen-flat template offset (NO 3D rotation): the letter faces the viewer.
-  let t = GLYPH_PTS[gvi];
-  let pos = tip_pos + vec2<f32>(t.x * glyph_ndc.x, t.y * glyph_ndc.y);
-  out.clip = vec4<f32>(pos, 0.0, 1.0);
-  out.color = AXIS_COLORS[axis_i];
+  out.p = vec2<f32>(cx, cy) * r_px;
+  out.clip = vec4<f32>(giz.place.xy + out.p * giz.px.xy, 0.0, 1.0);
   return out;
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(in.color, 1.0);
+  // Camera view ROTATION only — the triad orients with the camera.
+  let rot = mat3x3<f32>(
+    camera.view[0].xyz,
+    camera.view[1].xyz,
+    camera.view[2].xyz,
+  );
+  let unit = giz.place.w;
+
+  // Rotated axes: screen offset (view-space xy, y-up — matches in.p) + depth.
+  var head : array<vec2<f32>, 3>;
+  var depth : array<f32, 3>;
+  for (var i = 0u; i < 3u; i++) {
+    let d = rot * AXES[i];
+    head[i] = d.xy * (HEAD_DIST * unit);
+    depth[i] = d.z;
+  }
+
+  var acc = vec4<f32>(0.0);
+
+  // ── Axis lines: origin → positive head center, painted behind every head
+  // (the WebGL gizmo's line meshes render under its head sprites). ──
+  for (var i = 0u; i < 3u; i++) {
+    let d = sd_segment(in.p, vec2<f32>(0.0), head[i]) - giz.px.z;
+    acc = over(acc, AXIS_COLORS[i], POS_ALPHA * cov(d));
+  }
+
+  // ── Heads: 6 balls (±X ±Y ±Z), painter-sorted far → near on rotated z. ──
+  // Encode each as axis index i + sign s; z = s·depth[i].
+  var order = array<u32, 6>(0u, 1u, 2u, 3u, 4u, 5u); // 0-2 = +XYZ, 3-5 = −XYZ
+  var zval : array<f32, 6>;
+  for (var k = 0u; k < 6u; k++) {
+    let i = k % 3u;
+    zval[k] = select(depth[i], -depth[i], k >= 3u);
+  }
+  // Insertion sort ascending (most negative = farthest = painted first).
+  for (var a = 1u; a < 6u; a++) {
+    let key = order[a];
+    let kz = zval[key];
+    var b = a;
+    for (; b > 0u && zval[order[b - 1u]] > kz; b--) {
+      order[b] = order[b - 1u];
+    }
+    order[b] = key;
+  }
+
+  for (var k = 0u; k < 6u; k++) {
+    let id = order[k];
+    let i = id % 3u;
+    let positive = id < 3u;
+    let center = select(-head[i], head[i], positive);
+    let radius = select(NEG_R, POS_R, positive) * unit;
+    let ball_cov = cov(length(in.p - center) - radius);
+    let color = select(NEG_AXIS_COLORS[i], AXIS_COLORS[i], positive);
+    let alpha = select(NEG_ALPHA, POS_ALPHA, positive);
+    acc = over(acc, color, alpha * ball_cov);
+
+    if (positive) {
+      // Letter inside the head, screen-flat. Union of the letter's stroke
+      // segments, then painted once (overlapping strokes must not double-blend).
+      let g = GLYPH_R * unit;
+      let q = (in.p - center) / g;
+      var dmin = 1e9;
+      let s0 = GLYPH_START[i];
+      for (var s = 0u; s < GLYPH_COUNT[i]; s++) {
+        let seg = GLYPH_SEGS[s0 + s];
+        dmin = min(dmin, sd_segment(q, seg.xy, seg.zw));
+      }
+      // Back to px, minus the stroke half-width; clip to the ball so AA fringes
+      // never poke outside it.
+      let letter_cov = min(cov(dmin * g - GLYPH_STROKE * g), ball_cov);
+      acc = over(acc, LABEL_COLOR, POS_ALPHA * letter_cov);
+    }
+  }
+
+  // Premultiplied out; the pipeline blends {one, one-minus-src-alpha}.
+  return acc;
 }
 `
 
@@ -320,6 +481,18 @@ struct Supercell {
 // instance_index into atom + cell offset), so the BGL grants it VERTEX only.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
 
+// Atom shading uniform — the WebGL atom shader's uniform set, mirrored 1:1 so
+// both renderers produce the same pixels. See LargeSystemShading (TS side).
+struct Shading {
+  light_dir : vec4<f32>,  // xyz = view-space headlamp, w = 1 when orthographic
+  params0   : vec4<f32>,  // ambient, directional, spec_strength, roughness
+  params1   : vec4<f32>,  // metalness, render_style, outline, depth_cueing
+  depth_cue : vec4<f32>,  // near, far, pad, pad
+  depth_bg  : vec4<f32>,  // LINEAR rgb fade target + pad
+  toon      : vec4<f32>,  // shadow_thr, highlight_thr, shadow_brightness, pad
+};
+@group(0) @binding(6) var<uniform> shading : Shading;
+
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) vc : vec3<f32>,      // view-space sphere center
@@ -327,6 +500,7 @@ struct VsOut {
   @location(2) color : vec3<f32>,
   @location(3) vpos : vec3<f32>,    // view-space position of this quad corner
   @location(4) @interpolate(flat) sel : u32, // 1 = this atom is selected
+  @location(5) quad : vec2<f32>,    // billboard corner in [-1,1]
 };
 
 struct FsOut {
@@ -339,6 +513,16 @@ fn corner_for(vi : u32) -> vec2<f32> {
   let x = select(-1.0, 1.0, (vi & 1u) == 1u);
   let y = select(-1.0, 1.0, (vi & 2u) == 2u);
   return vec2<f32>(x, y);
+}
+
+// ACES filmic tonemap — rolls off the HDR key light so glossy highlights read
+// soft instead of clipping to white. Same curve as the WebGL atom shader.
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp(
+    (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0),
+  );
 }
 
 @vertex
@@ -378,8 +562,11 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let vc = vc4.xyz;
 
   let c = corner_for(vi);
-  // Billboard in view space; bump radius slightly so the silhouette isn't clipped.
-  let vpos = vc + vec3<f32>(c * r * 1.5, 0.0);
+  // Billboard in view space, expanded by the SAME 1.05 the WebGL atom shader
+  // uses (enough to clear the silhouette at grazing angles, no more). The
+  // fragment stage reconstructs the ray from this exact factor, so the two must
+  // stay identical — a mismatch skews the analytic edge coverage.
+  let vpos = vc + vec3<f32>(c * r * 1.05, 0.0);
   var clip = camera.proj * vec4<f32>(vpos, 1.0);
   // three.js projectionMatrix uses GL NDC z in [-1,1]; WebGPU clip space needs
   // 0 <= z <= w (NDC z in [0,1]). Remap before returning @builtin(position).
@@ -392,75 +579,174 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.color = col;
   out.vpos = vpos;
   out.sel = selected[atom];
+  out.quad = c;
   return out;
 }
 
+// Port of the WebGL atom fragment shader
+// (src/lib/structure/atoms/AtomManagerInstances.svelte). Every step below has a
+// twin there — ray-sphere in view space, analytic edge coverage, the three
+// shading branches, the sRGB encode, depth cueing, the outline. Keep them in
+// lockstep: any divergence is a visible regression the moment the user toggles
+// performance mode.
 @fragment
 fn fs_main(in : VsOut) -> FsOut {
-  // Eye at view-space origin; ray through the interpolated view-space position.
-  let ro = vec3<f32>(0.0, 0.0, 0.0);
-  let rd = normalize(in.vpos);
+  let is_ortho = shading.light_dir.w > 0.5;
+  let r = in.radius;
+  let r2 = r * r;
 
-  // Ray-sphere intersection: |ro + t*rd - vc|^2 = radius^2
-  let oc = ro - in.vc;
-  let b = dot(oc, rd);
-  let c = dot(oc, oc) - in.radius * in.radius;
-  let disc = b * b - c;
+  // This fragment's view-space position on the billboard. The quad is expanded
+  // in view XY only, so z is the sphere-center depth — exactly the WebGL
+  // shader's fragViewPos.
+  let offset = in.quad * r * 1.05;
+  let frag_view_pos = vec3<f32>(in.vc.xy + offset, in.vc.z);
+  let ray_dir = normalize(frag_view_pos);
 
-  // ── Analytic silhouette coverage (alpha-to-coverage AA) ────────────────────
-  // disc = r^2 - d_perp^2 where d_perp is the eye-ray's perpendicular distance
-  // to the center: >0 inside the disk, =0 exactly on the silhouette. This is a
-  // SMOOTH varying of the interpolated ray (in.vpos), so fwidth() gives the
-  // screen-space width of the silhouette band. coverage ramps 0->1 across that
-  // ~1px band; output as alpha so alpha-to-coverage turns it into fractional
-  // MSAA sample coverage -> smooth curved edges (plain MSAA can't smooth a
-  // hard discard edge).
-  let fw = fwidth(disc);
-  let coverage = clamp(disc / max(fw, 1e-8) + 0.5, 0.0, 1.0);
+  // Perpendicular eye-ray→center distance. Cross-product form, NOT the algebraic
+  // b²−c: that one subtracts two ~|vc|² values and loses precision once centers
+  // carry large lattice offsets — i.e. exactly the supercells this mode exists
+  // for — which shows up as concentric banding across each sphere. The WebGL
+  // path made the same switch for the same reason.
+  let d_persp = length(cross(in.vc, ray_dir));
+  let d_ortho = length(offset);
+  let d = select(d_persp, d_ortho, is_ortho);
+
+  // Analytic ~1px silhouette coverage on the RADIAL distance, fed to
+  // alpha-to-coverage so the curved edge antialiases (a hard discard gives MSAA
+  // no sub-pixel coverage to work with). fwidth() is evaluated HERE, at top
+  // level in uniform control flow, before any branching.
+  let coverage = clamp((r - d) / max(fwidth(d), 1e-8) + 0.5, 0.0, 1.0);
   if (coverage <= 0.0) {
     discard;
   }
-  // Near hit. In the thin edge band disc may be ~0 (sqrt≈0), so the hit point
-  // sits on the silhouette — its depth is the right value for that band.
-  let t = -b - sqrt(max(disc, 0.0)); // near hit
-  if (t < 0.0) {
-    discard;
+
+  // thc clamped so grazing fragments (d slightly > r, inside the coverage band)
+  // still resolve to a finite hit point to shade.
+  let d2 = d * d;
+  let thc = sqrt(max(r2 - min(d2, r2), 0.0));
+
+  var hit_pos : vec3<f32>;
+  var normal : vec3<f32>;
+  if (is_ortho) {
+    // Orthographic: ray direction is −Z, so the perpendicular offset IS the
+    // fragment's XY offset from the center.
+    hit_pos = vec3<f32>(in.vc.xy + offset, in.vc.z + thc);
+    normal = vec3<f32>(offset, thc) / r;
+  } else {
+    let tca = dot(in.vc, ray_dir);
+    hit_pos = (tca - thc) * ray_dir;
+    // Normal WITHOUT hit_pos − vc (another large-value subtraction):
+    //   hit_pos − vc = −thc·ray_dir − L_perp,  where L_perp = vc − tca·ray_dir
+    let l_perp = in.vc - tca * ray_dir;
+    normal = normalize(-thc * ray_dir - l_perp);
   }
-  let p = ro + t * rd;            // view-space hit point
-  let n = normalize(p - in.vc);   // surface normal
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(n, light_dir), 0.0);
+  let light_dir_view = normalize(shading.light_dir.xyz);
+  let view_dir = select(normalize(-hit_pos), vec3<f32>(0.0, 0.0, 1.0), is_ortho);
 
-  // Correct depth: project the hit point, apply the same GL->WebGPU z remap as
-  // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
-  let clip_h = camera.proj * vec4<f32>(p, 1.0);
-  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
+  let ambient      = shading.params0.x;
+  let directional  = shading.params0.y;
+  let spec_str     = shading.params0.z;
+  let rough        = shading.params0.w;
+  let metalness    = shading.params1.x;
+  let style        = i32(shading.params1.y + 0.5);
+  let outline      = shading.params1.z;
+  let depth_cueing = shading.params1.w;
 
-  var shaded = in.color * lighting;
+  let base_color = in.color;
+
+  var color : vec3<f32>;
+  if (style == 2) {
+    // ── Toon: 3-band cel shading (the app's DEFAULT render_style) ──
+    let diffuse = dot(normal, light_dir_view);
+    if (diffuse > shading.toon.y) {
+      color = vec3<f32>(1.0, 1.0, 1.0);
+    } else if (diffuse > shading.toon.x) {
+      color = base_color;
+    } else {
+      color = base_color * shading.toon.z;
+    }
+  } else if (style == 1) {
+    // ── Matte / 2.5D / 2D-flat: diffuse-only Lambert, no specular ──
+    let diffuse = max(dot(normal, light_dir_view), 0.0);
+    color = base_color * (ambient + directional * diffuse);
+  } else {
+    // ── Glossy / metallic: Cook-Torrance GGX, lit by ambient fill + an HDR
+    //    near-head-on key, rolled back to display range by ACES. roughness /
+    //    metalness are per-render-style (glossy 0.2/0.0, metallic 0.4/0.4).
+    //    matcap has no branch here and resolves to glossy — see the overlay. ──
+    let a = rough * rough;
+    let a2 = a * a;
+    let n_dot_l = max(dot(normal, light_dir_view), 0.0);
+    let n_dot_v = max(dot(normal, view_dir), 1e-4);
+    let half_dir = normalize(light_dir_view + view_dir);
+    let n_dot_h = max(dot(normal, half_dir), 0.0);
+    let v_dot_h = max(dot(view_dir, half_dir), 0.0);
+    // GGX normal distribution — the tight lobe that makes the small hot spot.
+    let dn = (n_dot_h * n_dot_h) * (a2 - 1.0) + 1.0;
+    let ggx_d = a2 / (3.14159265 * dn * dn);
+    // Smith-Schlick geometry.
+    let k = a * 0.5;
+    let ggx_g = (n_dot_v / (n_dot_v * (1.0 - k) + k)) * (n_dot_l / (n_dot_l * (1.0 - k) + k));
+    // Schlick Fresnel with a metalness-tinted F0: dielectric 0.04, metals
+    // reflect their own (element) colour.
+    let f0 = mix(vec3<f32>(0.04), base_color, metalness);
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
+    let specular = (ggx_d * ggx_g) * fresnel / (4.0 * n_dot_v * n_dot_l + 1e-4);
+    // Metals have little/no diffuse — attenuate by (1 − metalness).
+    let diffuse_color = base_color * (1.0 - metalness);
+    // Energy-conserving Lambert (÷π) on the key, like MeshStandardMaterial;
+    // without it the base×key diffuse blows out.
+    var lit = diffuse_color * (ambient + directional * n_dot_l * 0.31831)
+            + specular * directional * n_dot_l * spec_str;
+    // Soft rim shadow at the grazing silhouette — a little volume / AO feel.
+    lit = lit * mix(0.6, 1.0, smoothstep(0.0, 0.5, n_dot_v));
+    color = aces_tonemap(lit);
+  }
+
   // ── Selection highlight ──────────────────────────────────────────────────
-  // Selected atoms (sel == 1) get a clearly-distinct look: brighten the body and
-  // add a bright cyan-tinted RIM where the eye ray grazes the silhouette (rim is
-  // strong when the surface normal is near-perpendicular to the view direction —
-  // i.e. 1 - |n·view|). This reads as a glowing outline ring on the sphere,
-  // matching the "this atom is selected" affordance of the WebGL view. Non-
-  // selected atoms (sel == 0) are untouched.
+  // Overlay-only affordance (the WebGL view draws separate highlight meshes):
+  // brighten the body and add a cyan rim where the eye ray grazes the
+  // silhouette. Applied in LINEAR space, before the encode below.
   if (in.sel == 1u) {
-    let view_dir = normalize(-p);            // toward the eye (eye at origin)
-    let rim = pow(1.0 - clamp(dot(n, view_dir), 0.0, 1.0), 2.0);
-    let highlight_tint = vec3<f32>(0.25, 0.95, 1.0); // bright cyan
-    // Brighten the body and mix toward the tint at the rim.
-    shaded = mix(shaded * 1.35 + highlight_tint * 0.25, highlight_tint, rim * 0.85);
+    let rim = pow(1.0 - clamp(dot(normal, view_dir), 0.0, 1.0), 2.0);
+    let tint = vec3<f32>(0.25, 0.95, 1.0); // bright cyan
+    color = mix(color * 1.35 + tint * 0.25, tint, rim * 0.85);
   }
+
+  // Linear → sRGB. Everything past this point is in DISPLAY space — which is
+  // why the depth-cue target is encoded too, rather than mixed in linear.
+  var rgb = linear_to_srgb(color);
+
+  // Depth cueing (VESTA / 3Dmol-style fog): fade toward the background with
+  // view-space depth. ON by default (0.4) in the viewer, and the main thing that
+  // gives a dense structure front-to-back separation.
+  if (depth_cueing > 0.0) {
+    let depth_z = -hit_pos.z;
+    let span = max(shading.depth_cue.y - shading.depth_cue.x, 0.01);
+    let fade = clamp((depth_z - shading.depth_cue.x) / span, 0.0, 1.0) * depth_cueing;
+    rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
+  }
+
+  // Silhouette outline: darken pixels at glancing angles.
+  if (outline > 0.0) {
+    let silhouette = smoothstep(0.55, 1.0, 1.0 - max(dot(normal, view_dir), 0.0));
+    rgb = mix(rgb, vec3<f32>(0.0), silhouette * outline);
+  }
+
+  // Correct depth: project the hit point, apply the same GL→WebGPU z remap as
+  // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
+  let clip_h = camera.proj * vec4<f32>(hit_pos, 1.0);
+  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
   // the color target stays opaque.
-  out.color = vec4<f32>(shaded, coverage);
+  out.color = vec4<f32>(rgb, coverage);
   return out;
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
 /** WGSL atom PICK shader. Re-runs the SAME impostor sphere ray-trace as
  *  IMPOSTOR_WGSL, INCLUDING the identical GPU-supercell instance decode (Phase 4):
@@ -701,6 +987,19 @@ struct Supercell {
 @group(0) @binding(4) var<storage, read> bond_meta : array<u32>;
 // GPU supercell instancing params (dims + base lattice). Read ONLY in vs_main.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
+// The SAME shading uniform the atom impostor binds (see the Shading struct
+// there). fs_main reads the view-space headlamp, the specular strength and the
+// depth-cue params, so bonds are lit from the same direction as the atoms and
+// fade into the same fog. Read ONLY in fs_main.
+struct Shading {
+  light_dir : vec4<f32>,
+  params0   : vec4<f32>,
+  params1   : vec4<f32>,
+  depth_cue : vec4<f32>,
+  depth_bg  : vec4<f32>,
+  toon      : vec4<f32>,
+};
+@group(0) @binding(6) var<uniform> shading : Shading;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -1054,8 +1353,19 @@ fn fs_main(in : VsOut) -> FsOut {
     hit_n = normalize(p_ray - p_seg);
   }
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(hit_n, light_dir), 0.0);
+  // Lighting ported from the WebGL bond shader (src/lib/structure/Bond.svelte):
+  // Blinn-Phong off the view-space headlamp, with a rim factor + brightness floor
+  // so cylinders seen END-ON (all normals ⊥ view) don't read as hollow interiors.
+  // ambient 0.7 / directional 0.3 are the same FIXED constants Bond.svelte uses —
+  // bonds deliberately don't follow the per-render-style lighting profile, only
+  // the headlamp direction and the specular slider.
+  let light_dir = normalize(shading.light_dir.xyz);
+  let view_dir = normalize(-hit_p);
+  let diffuse = max(dot(hit_n, light_dir), 0.0);
+  let rim_factor = smoothstep(0.0, 0.25, max(dot(hit_n, view_dir), 0.0));
+  let lighting = max(0.7 * 0.3 + (0.7 * 0.7 + 0.3 * diffuse) * rim_factor, 0.2);
+  let half_dir = normalize(light_dir + view_dir);
+  let specular = pow(max(dot(hit_n, half_dir), 0.0), 60.0);
 
   // Correct depth: project the view-space hit point, apply the SAME GL->WebGPU z
   // remap as the vertex stage, then perspective-divide into NDC z (range 0..1).
@@ -1076,10 +1386,27 @@ fn fs_main(in : VsOut) -> FsOut {
   var out : FsOut;
   out.depth = depth;
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
-  out.color = vec4<f32>(in.color * lighting, cov);
+  // in.color is LINEAR (BOND_COLOR) — shade, add the specular, then encode.
+  // Without the encode the neutral grey bond paints at 86/255 instead of
+  // 157/255 and all but vanishes against a dark background.
+  var rgb = linear_to_srgb(
+    in.color * lighting + vec3<f32>(1.0) * specular * 0.4 * shading.params0.z,
+  );
+
+  // Depth cueing — the SAME fog the atoms use (shading.params1.w = depth_cueing).
+  // Bonds must fade with it too, or they'd float out of the fog the atoms sink
+  // into. Encoded fade target, matching the atom shader.
+  if (shading.params1.w > 0.0) {
+    let depth_z = -hit_p.z;
+    let span = max(shading.depth_cue.y - shading.depth_cue.x, 0.01);
+    let fade = clamp((depth_z - shading.depth_cue.x) / span, 0.0, 1.0) * shading.params1.w;
+    rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
+  }
+
+  out.color = vec4<f32>(rgb, cov);
   return out;
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
 export type LargeSystemRenderer = {
   /** Upload a packed camera uniform (Float32Array(20), proj*view layout).
@@ -1146,8 +1473,24 @@ export type LargeSystemRenderer = {
   /** Set the clear (background) color the render pass uses. `rgb` is LINEAR
    *  float [r,g,b] in the SAME space as the atom colors uploaded via set_atoms
    *  (so the background and atoms share one color space — dark atoms keep their
-   *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
+   *  contrast against the viewer's normal background). Alpha stays 1 (opaque).
+   *  The clearValue bypasses every fragment shader, so this is sRGB-encoded on
+   *  the way in — see linear_to_srgb. */
   set_background(rgb: [number, number, number]): void
+  /** Mirror the WebGL viewer's resolved atom-shading state (headlamp, ambient /
+   *  directional intensities, render style, depth cueing, outline). Cheap — a
+   *  96-byte uniform write — so the caller may call it every frame; it only
+   *  uploads when a field actually changed. Returns true when it DID change, so
+   *  the caller can mark the frame dirty (depth-cue near/far track the camera,
+   *  so this fires on every camera move). */
+  set_shading(state: LargeSystemShading): boolean
+  /** Mirror the DOM-side inputs the corner gizmo's placement needs: the device
+   *  pixel ratio (the widget spec — size clamp, offsets, line width — is in CSS
+   *  px) and the pane's HUD safe-area insets (the docked-toolbar avoidance the
+   *  WebGL gizmo gets as offset:{left: 5+l, bottom: 5+b}). Re-derives and
+   *  re-uploads the placement uniform; call on dpr / safe-area change (resize
+   *  re-derives on its own). */
+  set_gizmo_layout(opts: { dpr?: number; safe_left?: number; safe_bottom?: number }): void
   /** Gate bond detection + bond rendering. When `false`, render() skips BOTH the
    *  GPU bond compute pass AND the bond draw (atoms + cell box still render), so
    *  the overlay shows no bonds — mirroring the WebGL view when the viewer's
@@ -1220,6 +1563,50 @@ export function create_large_system_renderer(
     size: SUPERCELL_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+
+  // Atom/bond shading uniform. Bound by BOTH render pipelines (impostor binding
+  // 6, bond binding 6) so the two shade from one source of truth. Seeded with
+  // DEFAULT_SHADING so the very first frame is sane even if the overlay hasn't
+  // pushed the viewer's settings yet.
+  const shading_buffer = device.createBuffer({
+    label: `large-system-shading`,
+    size: SHADING_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  let shading_state: LargeSystemShading = { ...DEFAULT_SHADING }
+
+  function upload_shading_uniform(): void {
+    const f = new Float32Array(SHADING_BYTES / 4)
+    const s = shading_state
+    // vec4 0: headlamp xyz + is_ortho flag
+    f[0] = s.light_dir[0]
+    f[1] = s.light_dir[1]
+    f[2] = s.light_dir[2]
+    f[3] = s.is_ortho ? 1 : 0
+    // vec4 1: ambient, directional, spec_strength, roughness
+    f[4] = s.ambient
+    f[5] = s.directional
+    f[6] = s.spec_strength
+    f[7] = s.roughness
+    // vec4 2: metalness, render_style, outline, depth_cueing
+    f[8] = s.metalness
+    f[9] = s.render_style
+    f[10] = s.outline
+    f[11] = s.depth_cueing
+    // vec4 3: depth near/far (+ 2 pad)
+    f[12] = s.depth_near
+    f[13] = s.depth_far
+    // vec4 4: depth-cue background, LINEAR rgb (+ pad)
+    f[16] = s.depth_bg[0]
+    f[17] = s.depth_bg[1]
+    f[18] = s.depth_bg[2]
+    // vec4 5: toon thresholds (+ pad)
+    f[20] = s.toon_shadow_threshold
+    f[21] = s.toon_highlight_threshold
+    f[22] = s.toon_shadow_brightness
+    device.queue.writeBuffer(shading_buffer, 0, f.buffer, f.byteOffset, SHADING_BYTES)
+  }
+  upload_shading_uniform()
   // Cached supercell dims; ncells = product. Default [1,1,1] ⇒ ncells 1.
   let supercell_dims: [number, number, number] = [1, 1, 1]
   let supercell_ncells = 1
@@ -1414,6 +1801,10 @@ export function create_large_system_renderer(
       // VERTEX only. (A spurious FRAGMENT here would not break, but VERTEX is the
       // precise + minimal visibility the binding requires.)
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 6: atom shading uniform (headlamp, ambient/directional, render
+      // style, depth cue, outline). Read ONLY in fs_main — the vertex stage does
+      // no shading — so FRAGMENT only, per the project's minimal-visibility rule.
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
 
@@ -1583,6 +1974,10 @@ export function create_large_system_renderer(
       // grant EXACTLY the reading stage — VERTEX only.
       { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 6 = the SAME atom shading uniform. fs_main reads the headlamp,
+      // specular strength and depth-cue params from it, so bonds are lit from the
+      // same direction as the atoms and fade into the same fog. FRAGMENT only.
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
   const bond_render_pipeline = device.createRenderPipeline({
@@ -1655,16 +2050,35 @@ export function create_large_system_renderer(
   const gizmo_bgl = device.createBindGroupLayout({
     label: `large-system-gizmo-bgl`,
     entries: [
-      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
-      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 0 = camera: the SDF fragment stage extracts the view rotation
+      // (fs_main is where all drawing happens now). VERTEX is OR'd in as the
+      // plausible future reader, per the project's recurrence-proof rule.
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // binding 1 = placement: vs_main positions the quad, fs_main reads the
+      // pixel scales — both stages genuinely read it.
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
   const gizmo_pipeline = device.createRenderPipeline({
     label: `large-system-gizmo-pipeline`,
     layout: device.createPipelineLayout({ bindGroupLayouts: [gizmo_bgl] }),
     vertex: { module: gizmo_module, entryPoint: `vs_main` },
-    fragment: { module: gizmo_module, entryPoint: `fs_main`, targets: [{ format }] },
-    primitive: { topology: `line-list` },
+    fragment: {
+      module: gizmo_module,
+      entryPoint: `fs_main`,
+      // The quad covers the whole widget box; everything outside the SDF shapes
+      // has alpha 0 and must show the scene through — so this pipeline blends.
+      // The shader composites internally and outputs PREMULTIPLIED color, hence
+      // src factor `one` (not src-alpha).
+      targets: [{
+        format,
+        blend: {
+          color: { srcFactor: `one`, dstFactor: `one-minus-src-alpha`, operation: `add` },
+          alpha: { srcFactor: `one`, dstFactor: `one-minus-src-alpha`, operation: `add` },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip` },
     depthStencil: {
       format: DEPTH_FORMAT,
       // Always visible: never write depth, never fail the depth test. The gizmo
@@ -1673,7 +2087,7 @@ export function create_large_system_renderer(
       depthCompare: `always`,
     },
     // Share the multisampled targets (count must match). No alpha-to-coverage —
-    // opaque colored lines.
+    // the SDF coverage feeds alpha BLENDING here, not sample masking.
     multisample: { count: SAMPLE_COUNT },
   })
   const gizmo_bind_group = device.createBindGroup({
@@ -1685,31 +2099,55 @@ export function create_large_system_renderer(
     ],
   })
 
-  /** Fixed pixel geometry of the corner gizmo. The triad region is ~2·GIZMO_PX
-   *  wide (each axis reaches GIZMO_PX from the origin), placed GIZMO_MARGIN_PX in
-   *  from the bottom-left corner — matching the WebGL Gizmo's offset:{left,bottom}. */
-  const GIZMO_PX = 120
-  const GIZMO_MARGIN_PX = 28
+  /** Gizmo layout inputs, mirrored from the DOM side (the renderer only knows
+   *  device pixels). dpr converts the CSS-pixel spec below into device px;
+   *  safe_left/safe_bottom are the pane's HUD safe-area insets (docked-toolbar
+   *  avoidance) — the same hud_safe the WebGL gizmo's offset uses. */
+  const gizmo_layout = { dpr: 1, safe_left: 0, safe_bottom: 0 }
 
-  /** Pack + upload the gizmo placement uniform from the canvas backing size.
-   *  - center_ndc: bottom-left corner anchor in NDC. NDC x∈[-1,1] (right), y∈
-   *    [-1,1] (UP). Pixel→NDC: dx_ndc = 2·px/width, dy_ndc = 2·px/height. We seat
-   *    the triad ORIGIN one (margin + axis reach) in from the bottom-left so the
-   *    whole triad stays on-screen whatever its rotation.
-   *  - scale_ndc: per-unit-axis half-extent. x = 2·GIZMO_PX/width; y =
-   *    2·GIZMO_PX/height (independent per-axis pixel scale ⇒ square in pixels,
-   *    aspect-corrected — a unit axis reaches exactly GIZMO_PX pixels either way). */
+  /** WebGL gizmo placement spec, in CSS px — kept in lockstep with the DOM side:
+   *  - offset: `{ left: 5 + hud_safe.l, bottom: 5 + hud_safe.b }` (StructureScene's
+   *    gizmo_props)
+   *  - size: `clamp(70px, 18cqmin, 100px)` (the .responsive-gizmo CSS rule) */
+  const GIZMO_EDGE_PX = 5
+  const GIZMO_MIN_PX = 70
+  const GIZMO_MAX_PX = 100
+  const GIZMO_CQMIN_FRAC = 0.18
+
+  /** Pack + upload the gizmo placement uniform from the canvas backing size +
+   *  the DOM layout inputs. Replicates the WebGL widget's box: bottom-left
+   *  anchored, responsive size, HUD-safe-area offset. Layout (see GizmoU):
+   *  - place.xy: widget CENTER in NDC (x∈[-1,1] right, y∈[-1,1] UP)
+   *  - place.z:  half-extent R in device px (the quad spans ±R)
+   *  - place.w:  unit_px = R / 1.8 — the widget's internal ortho unit (the
+   *    reference gizmo renders a ±1.8 frustum into its box)
+   *  - px.xy:    device-px → NDC scale (2/w, 2/h)
+   *  - px.z:     axis line HALF-width in device px (lineWidth 4 CSS px / 2) */
   function upload_gizmo_uniform(): void {
     const w = Math.max(1, canvas.width)
     const h = Math.max(1, canvas.height)
-    const inset = GIZMO_MARGIN_PX + GIZMO_PX
-    const cx = -1 + (2 * inset) / w // from the LEFT edge
-    const cy = -1 + (2 * inset) / h // from the BOTTOM edge (NDC y up)
-    const sx = (2 * GIZMO_PX) / w
-    const sy = (2 * GIZMO_PX) / h
+    const dpr = Math.max(gizmo_layout.dpr, 0.1)
+    // The responsive-size clamp works in CSS px (cqmin = 1% of the smaller
+    // container edge); resolve there, then convert to device px.
+    const cqmin = Math.min(w, h) / dpr / 100
+    const size_css = Math.min(
+      Math.max(GIZMO_MIN_PX, GIZMO_CQMIN_FRAC * 100 * cqmin),
+      GIZMO_MAX_PX,
+    )
+    const r_px = (size_css / 2) * dpr
+    const left_px = (GIZMO_EDGE_PX + gizmo_layout.safe_left) * dpr
+    const bottom_px = (GIZMO_EDGE_PX + gizmo_layout.safe_bottom) * dpr
+    const cx = -1 + (2 * (left_px + r_px)) / w // from the LEFT edge
+    const cy = -1 + (2 * (bottom_px + r_px)) / h // from the BOTTOM edge (NDC y up)
     const u = new Float32Array(8)
-    u[0] = cx; u[1] = cy; u[2] = 0; u[3] = 0
-    u[4] = sx; u[5] = sy; u[6] = 0; u[7] = 0
+    u[0] = cx
+    u[1] = cy
+    u[2] = r_px
+    u[3] = r_px / 1.8
+    u[4] = 2 / w
+    u[5] = 2 / h
+    u[6] = 2 * dpr // 4 CSS px line width → half-width in device px
+    u[7] = 0
     device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
   }
 
@@ -1820,6 +2258,7 @@ export function create_large_system_renderer(
         { binding: 3, resource: { buffer: colors_buffer } },
         { binding: 4, resource: { buffer: selected_buffer as GPUBuffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        { binding: 6, resource: { buffer: shading_buffer } },
       ],
     })
     // Pick pass reuses camera + positions + radii (no colors/selected) PLUS the
@@ -2006,6 +2445,9 @@ export function create_large_system_renderer(
         // supercell uniform (dims + base lattice) for the per-cell offset.
         { binding: 4, resource: { buffer: bond_meta_buffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        // binding 6: the shared shading uniform — headlamp + specular + fog, so
+        // bonds shade consistently with the atoms.
+        { binding: 6, resource: { buffer: shading_buffer } },
       ],
     })
   }
@@ -2061,10 +2503,49 @@ export function create_large_system_renderer(
   return {
     set_background(rgb: [number, number, number]): void {
       if (destroyed) return
-      clear_color.r = rgb[0]
-      clear_color.g = rgb[1]
-      clear_color.b = rgb[2]
+      // The clearValue is written into the (non-sRGB) target verbatim — it never
+      // passes through a fragment shader — so it must be encoded HERE, or the
+      // overlay's background comes out darker than the WebGL canvas's and dark
+      // atoms lose the contrast this color was picked to give them.
+      clear_color.r = linear_to_srgb(rgb[0])
+      clear_color.g = linear_to_srgb(rgb[1])
+      clear_color.b = linear_to_srgb(rgb[2])
       clear_color.a = 1
+    },
+    set_shading(state: LargeSystemShading): boolean {
+      if (destroyed) return false
+      const prev = shading_state
+      const same = prev.light_dir[0] === state.light_dir[0] &&
+        prev.light_dir[1] === state.light_dir[1] &&
+        prev.light_dir[2] === state.light_dir[2] &&
+        prev.is_ortho === state.is_ortho &&
+        prev.ambient === state.ambient &&
+        prev.directional === state.directional &&
+        prev.spec_strength === state.spec_strength &&
+        prev.roughness === state.roughness &&
+        prev.metalness === state.metalness &&
+        prev.render_style === state.render_style &&
+        prev.outline === state.outline &&
+        prev.depth_cueing === state.depth_cueing &&
+        prev.depth_near === state.depth_near &&
+        prev.depth_far === state.depth_far &&
+        prev.depth_bg[0] === state.depth_bg[0] &&
+        prev.depth_bg[1] === state.depth_bg[1] &&
+        prev.depth_bg[2] === state.depth_bg[2] &&
+        prev.toon_shadow_threshold === state.toon_shadow_threshold &&
+        prev.toon_highlight_threshold === state.toon_highlight_threshold &&
+        prev.toon_shadow_brightness === state.toon_shadow_brightness
+      if (same) return false
+      shading_state = { ...state }
+      upload_shading_uniform()
+      return true
+    },
+    set_gizmo_layout(opts: { dpr?: number; safe_left?: number; safe_bottom?: number }): void {
+      if (destroyed) return
+      if (opts.dpr !== undefined) gizmo_layout.dpr = opts.dpr
+      if (opts.safe_left !== undefined) gizmo_layout.safe_left = opts.safe_left
+      if (opts.safe_bottom !== undefined) gizmo_layout.safe_bottom = opts.safe_bottom
+      upload_gizmo_uniform()
     },
     set_cell(
       lattice: Float32Array | null,
@@ -2524,7 +3005,7 @@ export function create_large_system_renderer(
       // toggle/prop needed; it lives in the corner away from the structure.
       pass.setPipeline(gizmo_pipeline)
       pass.setBindGroup(0, gizmo_bind_group)
-      pass.draw(22) // 6 axis verts (3 axes × 2) + 16 letter-glyph verts (8 segs × 2)
+      pass.draw(4) // one quad; the fragment shader SDF-draws the whole widget
       pass.end()
       device.queue.submit([encoder.finish()])
     },

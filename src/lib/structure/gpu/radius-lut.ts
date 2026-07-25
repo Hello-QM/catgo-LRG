@@ -25,14 +25,23 @@ export function build_atom_radii(sites: readonly Site[]): Float32Array {
   return out
 }
 
+/** Impostor-sphere radius scale. The WebGL path resolves a LOGICAL radius in
+ *  StructureScene (`atom_data[i].radius`) and then halves it when writing the
+ *  instance buffer — see VISUAL_RADIUS_SCALE in
+ *  `src/lib/structure/atoms/atom-instanced-renderer.ts` (and the same `* 0.5`
+ *  in the legacy AtomImpostors path). Without it the overlay drew every sphere
+ *  at 2× the WebGL size. Keep the two in lockstep. */
+const VISUAL_RADIUS_SCALE = 0.5
+
 /** Per-atom DISPLAY radius (Å) for the impostor spheres, matching the WebGL
- *  ball-and-stick view's sizing as closely as practical. Mirrors the radius
- *  resolution in StructureScene.svelte:
+ *  ball-and-stick view's sizing. Mirrors the radius resolution in
+ *  StructureScene.svelte:
  *    site_override > same_size_atoms > occu-weighted (element_override | atomic_radii)
- *  all multiplied by the global atom_radius scale. `atomic_radii` here is the
- *  half-covalent-radius LUT exported from $lib/structure (covalent/2), the same
- *  base the WebGL path uses — distinct from build_atom_radii's full covalent
- *  radius used for bond cutoffs. */
+ *  all multiplied by the global atom_radius scale AND by VISUAL_RADIUS_SCALE,
+ *  which is the halving the WebGL instance writer applies. `atomic_radii` here
+ *  is the half-covalent-radius LUT exported from $lib/structure (covalent/2),
+ *  the same base the WebGL path uses — distinct from build_atom_radii's full
+ *  covalent radius used for bond cutoffs. */
 export function build_display_radii(
   sites: readonly Site[],
   opts: {
@@ -42,7 +51,10 @@ export function build_display_radii(
     site_radius_overrides?: Map<number, number> | { get(k: number): number | undefined }
   } = {},
 ): Float32Array {
-  const scale = opts.atom_radius ?? 1
+  // VISUAL_RADIUS_SCALE folds in here so it hits all three resolution branches
+  // uniformly — the WebGL path likewise halves the FINAL resolved radius,
+  // whichever branch produced it.
+  const scale = (opts.atom_radius ?? 1) * VISUAL_RADIUS_SCALE
   const same_size = opts.same_size_atoms ?? false
   const ero = opts.element_radius_overrides
   const sro = opts.site_radius_overrides

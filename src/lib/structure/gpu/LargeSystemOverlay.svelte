@@ -13,6 +13,7 @@
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
+    type LargeSystemShading,
   } from '$lib/structure/gpu/large-system-renderer'
 
   let {
@@ -39,6 +40,8 @@
     on_pick = undefined,
     supercell = [1, 1, 1],
     show_image_atoms = false,
+    get_shading = undefined,
+    hud_safe = { l: 0, r: 0, t: 0, b: 0 },
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -146,6 +149,25 @@
      *  so image atoms gain bonds (matching the WebGL view). Default false ⇒ stubs
      *  ⇒ zero change; supercell mode is unaffected (Phase-2 logic is authoritative). */
     show_image_atoms?: boolean
+    /** Getter for the viewer's resolved atom-shading state (StructureScene's
+     *  `get_shading_state` bridge): view-space headlamp, ambient / directional
+     *  intensities, render style, depth cueing, silhouette outline — the exact
+     *  values the WebGL atom shader's matching uniforms receive. Mirrored rather
+     *  than re-derived here so the two renderers cannot drift apart.
+     *
+     *  A GETTER, not a plain value, for the same reason
+     *  get_displayed_frame_positions is: the depth-cue near/far plane track the
+     *  CAMERA DISTANCE, so they change on every orbit/zoom — with no prop
+     *  identity change to drive a re-render. The overlay's frame loop calls this
+     *  each frame and gets a fresh, authoritative answer.
+     *
+     *  undefined / null ⇒ the renderer keeps its neutral defaults (a `glossy`
+     *  profile with depth cueing off), i.e. the pre-bridge behaviour. */
+    get_shading?: (() => LargeSystemShading | null) | null | undefined
+    /** Pane HUD safe-area insets (CSS px) — the SAME hud_safe StructureScene
+     *  hands its WebGL gizmo (`offset: {left: 5+l, bottom: 5+b}`), so the
+     *  overlay's corner gizmo dodges a docked toolbar identically. */
+    hud_safe?: { l: number; r: number; t: number; b: number }
   } = $props()
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)
@@ -508,10 +530,17 @@
     frame_lattice_sig = lat_sig
   }
 
-  // Hex -> linear RGB, matching the WebGL path (Color.convertSRGBToLinear).
+  // Hex -> linear RGB, matching the WebGL path (StructureScene.__hex_to_linear_rgb).
+  // Color.set(hex) ALREADY converts sRGB→linear (three ColorManagement is on by
+  // default), so .r/.g/.b are LINEAR here. An extra .convertSRGBToLinear() —
+  // which this function used to do — applies the transfer curve a SECOND time
+  // and double-darkens every colour: mid-tones collapse (grey #808080 → 0.038
+  // instead of 0.216), which is what made the overlay's cell box and bonds
+  // nearly invisible. The WebGL path hit and fixed this same bug; keep the two
+  // in lockstep.
   const _col = new Color()
   function hex_to_linear_rgb(hex: string): [number, number, number] {
-    _col.set(hex).convertSRGBToLinear()
+    _col.set(hex)
     return [_col.r, _col.g, _col.b]
   }
 
@@ -522,8 +551,11 @@
   const _bg = new Color()
 
   /** Walk up from the overlay canvas to find the first opaque CSS background
-   *  color (the theme bg). Mirrors StructureScene.find_theme_bg so the overlay
-   *  resolves the same theme background the WebGL clear color lerps toward. */
+   *  color (the theme bg), returned in LINEAR RGB. Mirrors
+   *  StructureScene.find_theme_bg so the overlay resolves the same theme
+   *  background the WebGL clear color lerps toward. `setRGB` writes the working
+   *  (linear) space RAW, so the CSS sRGB components need an explicit
+   *  convertSRGBToLinear — unlike Color.set(hex), which converts on its own. */
   function find_theme_bg(target: Color): Color {
     let el: HTMLElement | null = canvas ?? null
     while (el) {
@@ -531,7 +563,9 @@
       const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
       if (m) {
         const a = m[4] !== undefined ? parseFloat(m[4]) : 1
-        if (a >= 0.5) return target.setRGB(+m[1] / 255, +m[2] / 255, +m[3] / 255)
+        if (a >= 0.5) {
+          return target.setRGB(+m[1] / 255, +m[2] / 255, +m[3] / 255).convertSRGBToLinear()
+        }
       }
       el = el.parentElement
     }
@@ -539,17 +573,18 @@
   }
 
   /** Resolve the viewer background the SAME way StructureScene.compute_canvas_bg
-   *  does (picked hex, theme bg, or a lerp by background_opacity), then convert
-   *  to linear RGB with the SAME conversion used for atom colors. Returns the
-   *  linear-RGB triple to upload as the overlay clear color. */
+   *  does (picked hex, theme bg, or a lerp by background_opacity). Returns the
+   *  LINEAR-RGB triple — every input is already linear (Color.set(hex) converts,
+   *  find_theme_bg converts), so there is NO outer conversion here. The previous
+   *  trailing convertSRGBToLinear() double-darkened any non-black picked
+   *  background (it only looked right on the default #000000, where both spaces
+   *  meet at 0). */
   function resolve_background_rgb(): [number, number, number] {
     const picked = new Color(background_color ?? `#000000`)
     const t = Math.max(0, Math.min(1, background_opacity))
     if (t >= 0.999) _bg.copy(picked)
     else if (t <= 0.001) find_theme_bg(_bg)
     else find_theme_bg(_bg).lerp(picked, t)
-    // convertSRGBToLinear matches hex_to_linear_rgb (atom color space).
-    _bg.convertSRGBToLinear()
     return [_bg.r, _bg.g, _bg.b]
   }
 
@@ -569,6 +604,18 @@
     last_bg = rgb
     renderer.set_background(rgb)
     return true
+  }
+
+  /** Pull the viewer's resolved shading state and push it to the renderer. The
+   *  renderer compares against what it already holds and only re-uploads on a
+   *  real change, returning true when it did — so this is cheap to call every
+   *  frame (the depth-cue near/far DO move with the camera, so it legitimately
+   *  fires on every orbit/zoom). */
+  function sync_shading(): boolean {
+    if (!renderer || !get_shading) return false
+    const state = get_shading()
+    if (!state) return false
+    return renderer.set_shading(state)
   }
 
   /** Cheap signature of the radius-affecting inputs; changes when any of them
@@ -756,6 +803,10 @@
     const dpr = typeof window !== `undefined` ? window.devicePixelRatio || 1 : 1
     const w = el.clientWidth * dpr
     const h = el.clientHeight * dpr
+    // dpr FIRST: the corner gizmo's placement spec is in CSS px, and resize()
+    // re-derives placement from the stored dpr — a monitor-to-monitor drag
+    // (dpr change) must land before that re-derivation.
+    renderer?.set_gizmo_layout({ dpr })
     renderer?.resize(w, h)
     needs_render = true // resized backing store/depth must repaint
   }
@@ -898,6 +949,11 @@
     // clear color shows. Cheap when static (string compare + no GPU work).
     if (sync_background()) dirty = true
 
+    // Shading: mirror the viewer's headlamp / lighting profile / render style /
+    // depth cueing / outline. Pulled fresh each frame because the depth-cue
+    // near+far planes track the camera distance.
+    if (sync_shading()) dirty = true
+
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
       camera.updateMatrixWorld()
@@ -987,6 +1043,10 @@
     }
     renderer = r
     frame_token = token
+    // Seed the corner-gizmo layout with the pane's current HUD safe-area before
+    // the first size derivation (`renderer` is not reactive state, so the
+    // hud_safe $effect below only covers LATER changes, not this initial value).
+    r.set_gizmo_layout({ safe_left: hud_safe.l, safe_bottom: hud_safe.b })
     size_to_client(el)
 
     // Resize: repaint the new backing store and wake the loop if it had slept.
@@ -1052,6 +1112,20 @@
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
     void [structure, element_colors, atom_radius, same_size_atoms, element_radius_overrides, site_radius_overrides, bonding_options, bond_distance_rules]
     if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Corner-gizmo safe-area sync: a toolbar dock/undock moves the WebGL gizmo
+    // via its offset — mirror the same insets into the overlay's gizmo and
+    // repaint so the two widgets sit in the same spot. (The initial value is
+    // seeded at renderer creation; this covers changes while the overlay is up.)
+    const safe_left = hud_safe.l
+    const safe_bottom = hud_safe.b
+    if (renderer) {
+      renderer.set_gizmo_layout({ safe_left, safe_bottom })
       needs_render = true
       wake()
     }

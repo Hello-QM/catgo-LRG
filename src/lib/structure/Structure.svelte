@@ -73,6 +73,7 @@
   } from './index'
   import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
+  import type { LargeSystemShading } from './gpu/large-system-renderer'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { clone_structure } from '$lib/structure/clone'
@@ -258,6 +259,11 @@
   // The overlay calls this so its positions match the WebGL view atom-for-atom
   // instead of re-deriving from base-only trajectory data. Null until mount.
   let scene_get_displayed_frame_positions = $state<(() => Float32Array) | null>(null)
+  // Same bridge shape for the overlay's SHADING inputs (headlamp, lighting
+  // profile, render style, depth cueing, outline) — the values StructureScene
+  // already resolves for the WebGL atom shader. Mirrored instead of re-derived so
+  // the two renderers can't drift. Null until mount.
+  let scene_get_shading_state = $state<(() => LargeSystemShading | null) | null>(null)
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -4611,6 +4617,7 @@
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
             bind:get_displayed_frame_positions={scene_get_displayed_frame_positions}
+            bind:get_shading_state={scene_get_shading_state}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4697,6 +4704,7 @@
             {trajectory_positions_version}
             {trajectory_step_idx}
             get_displayed_frame_positions={scene_get_displayed_frame_positions}
+            get_shading={scene_get_shading_state}
             selected_sites={overlay_selected_displayed}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {

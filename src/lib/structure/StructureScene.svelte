@@ -7,6 +7,7 @@
   import * as math from '$lib/math'
   import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, should_reduce_motion, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
+  import type { LargeSystemShading } from '$lib/structure/gpu/large-system-renderer'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -654,6 +655,21 @@
     // behaviour). Bound out as a function so the parent always reads the LIVE
     // $derived value, not a stale snapshot.
     get_displayed_frame_positions = $bindable<(() => Float32Array) | null>(null),
+    // WebGPU large-system overlay bridge #2: a getter the parent hands to the
+    // overlay so it can shade its impostor spheres with the SAME values this
+    // scene feeds the WebGL atom shader — headlamp direction, the active
+    // render_style's lighting profile, the render-style branch, depth cueing and
+    // the silhouette outline. Mirrored instead of re-derived so the two renderers
+    // cannot drift (they did: the overlay used to hard-code `0.35 + 0.65·lambert`
+    // and ignore every lighting setting, which is why performance mode looked
+    // flat next to the normal view).
+    //
+    // A getter, not a value: the depth-cue near/far planes track the CAMERA
+    // DISTANCE, so they change on every orbit/zoom. It also recomputes them on
+    // call rather than reading the cached uniform object, because the per-frame
+    // useTask that normally refreshes them belongs to the WebGL render loop —
+    // which is exactly what's suspended while the overlay is up.
+    get_shading_state = $bindable<(() => LargeSystemShading | null) | null>(null),
     deleted_bond_keys = new Set<string>(),
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
     bond_first_atom = null as number | null,
@@ -944,6 +960,10 @@
     /** WebGPU overlay bridge: getter returning the live per-displayed-atom
      *  current-frame position array (3 × n_displayed) the WebGL view renders. */
     get_displayed_frame_positions?: (() => Float32Array) | null
+    /** WebGPU overlay bridge #2: getter returning the resolved atom-shading state
+     *  (headlamp, lighting profile, render-style branch, depth cueing, outline)
+     *  the WebGL atom shader is fed, so the overlay shades identically. */
+    get_shading_state?: (() => LargeSystemShading | null) | null
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -4531,6 +4551,57 @@
   // $derived inside the returned closure (not capturing a snapshot) means each
   // call yields the live current-frame array. Assigned via $effect so the
   // binding survives prop reassignment churn.
+  // Map the app's render_style onto the overlay's shader branches (0 = glossy /
+  // metallic GGX, 1 = matte / 2.5D / 2D-flat, 2 = toon). Mirrors
+  // render_style_to_int in atoms/AtomManagerInstances.svelte with ONE deliberate
+  // difference: `matcap` has no WebGPU branch — it needs the baked studio-sphere
+  // texture uploaded as a GPU texture — so it resolves to glossy in the overlay.
+  // A known, bounded gap; matcap is not the default style.
+  function overlay_shading_branch(style: RenderStyle): 0 | 1 | 2 {
+    if (style === `toon`) return 2
+    if (style === `matte` || style === `soft` || style === `flat`) return 1
+    return 0 // glossy, metallic, and matcap's fallback
+  }
+
+  // WebGPU overlay bridge #2: hand the overlay the SAME shading inputs the WebGL
+  // atom shader gets, read live at call time (see the prop's comment for why this
+  // is a getter and why it refreshes the depth-cue planes itself).
+  $effect(() => {
+    get_shading_state = (): LargeSystemShading => {
+      // The useTask that normally keeps the depth-cue planes tracking the camera
+      // is part of the WebGL render loop — suspended while the overlay is up. So
+      // recompute here, against the current camera, rather than reading a value
+      // that stopped updating the moment performance mode was switched on.
+      update_depth_cue_uniforms()
+      const cam = threlte.camera.current
+      // Per-render-style PBR, mirroring style_pbr in AtomManagerInstances.
+      const metallic = render_style === `metallic`
+      const bg = depth_cue_uniforms.uDepthCueBgColor.value
+      return {
+        light_dir: [light_dir.x, light_dir.y, light_dir.z],
+        is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
+        ambient: active_ambient_light,
+        directional: active_directional_light,
+        spec_strength: active_highlight_strength,
+        roughness: metallic ? 0.4 : 0.2,
+        metalness: metallic ? 0.4 : 0,
+        render_style: overlay_shading_branch(render_style),
+        outline: depth_cue_uniforms.uOutlineStrength.value,
+        depth_cueing: depth_cue_uniforms.uDepthCueing.value,
+        depth_near: depth_cue_uniforms.uDepthNear.value,
+        depth_far: depth_cue_uniforms.uDepthFar.value,
+        // LINEAR rgb — the overlay's shaders sRGB-encode it themselves, exactly
+        // as the WebGL atom shader does with uDepthCueBgColor.
+        depth_bg: [bg.r, bg.g, bg.b],
+        // Toon thresholds: the same constants the WebGL material is built with.
+        toon_shadow_threshold: 0.3,
+        toon_highlight_threshold: 0.97,
+        toon_shadow_brightness: 0.5,
+      }
+    }
+    return () => { get_shading_state = null }
+  })
+
   $effect(() => {
     get_displayed_frame_positions = () => atom_positions_buffer
     return () => { get_displayed_frame_positions = null }
