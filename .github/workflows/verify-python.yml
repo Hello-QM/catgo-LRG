@@ -9,11 +9,15 @@ on:
       - "server/catgo/mcp_tools/verify_gates.py"
       - "server/catgo/mcp_tools/verify_enforcement.py"
       - "server/catgo/mcp_tools/test_verify.py"
+      - "server/catgo/mcp_tools/provenance.py"
+      - "server/catgo/mcp_tools/test_server_paths.py"
   pull_request:
     paths:
       - "server/catgo/mcp_tools/verify_gates.py"
       - "server/catgo/mcp_tools/verify_enforcement.py"
       - "server/catgo/mcp_tools/test_verify.py"
+      - "server/catgo/mcp_tools/provenance.py"
+      - "server/catgo/mcp_tools/test_server_paths.py"
 
 jobs:
   test:
@@ -30,7 +34,10 @@ jobs:
         run: pip install pytest httpx mcp
       - name: Run verification-layer tests (standalone, stdlib-only)
         working-directory: server/catgo/mcp_tools
-        run: python test_verify.py
+        run: |
+          python test_verify.py
+          python provenance.py
+          python test_server_paths.py
       - name: Run verification-layer tests (pytest)
         working-directory: server/catgo/mcp_tools
-        run: pytest test_verify.py -q
+        run: pytest test_verify.py test_server_paths.py -q

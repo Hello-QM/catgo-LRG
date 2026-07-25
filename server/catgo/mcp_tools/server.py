@@ -32,8 +32,13 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-# Ensure server/ is on sys.path so plugin_loader and mcp_tools are importable
-_server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Ensure server/ is on sys.path so plugin_loader and mcp_tools are importable.
+# This file is server/catgo/mcp_tools/<this>, so server/ is three levels up. Two
+# levels put server/catgo/ at sys.path[0] instead, which SHADOWS the real packages:
+# server/catgo/workflow/ then wins over server/workflow/, so every
+# `from workflow.catalysis...` import died with "No module named 'workflow.catalysis'"
+# and catgo_catalysis answered "Catalysis module not available" for every call.
+_server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 

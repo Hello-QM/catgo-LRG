@@ -10,8 +10,11 @@ Structure Building tools remain inline here until migrated.
 import sys
 from pathlib import Path
 
-# Ensure server/ is on sys.path so tool_schema can be imported
-_server_dir = str(Path(__file__).resolve().parent.parent.parent)
+# Ensure server/ is on sys.path so tool_schema can be imported. This file is
+# server/catgo/mcp_tools/tools/<this>, so server/ is FOUR parents up; three landed on
+# server/catgo/, which shadows server/workflow/ with server/catgo/workflow/ and broke
+# every `from workflow.catalysis...` import (see test_server_paths.py).
+_server_dir = str(Path(__file__).resolve().parent.parent.parent.parent)
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 

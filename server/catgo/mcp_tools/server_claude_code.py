@@ -33,8 +33,12 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-# Ensure server/ is on sys.path so we can reuse helpers from the full server
-_server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Ensure server/ is on sys.path so we can reuse helpers from the full server.
+# This file is server/catgo/mcp_tools/<this>, so server/ is three levels up — two
+# levels landed on server/catgo/, which silently defeated the purpose: every
+# `from workflow...` import failed with "No module named 'workflow.catalysis'"
+# unless PYTHONPATH happened to supply server/ from outside.
+_server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 
@@ -2225,7 +2229,17 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
             valid = "oer, co2rr, nrr, free_energy, volcano, d_band_center, adsorption_energy"
             return [T(type="text", text=f"Unknown catalysis action '{action}'. Valid: {valid}")]
 
-        return [T(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+        # Wrap the numbers so they stay checkable: what produced them, from which
+        # inputs, and — the load-bearing part — which fields the tool does NOT have
+        # and therefore cannot vouch for. A bare number is unverifiable by anyone.
+        try:
+            from . import provenance as _prov
+        except ImportError:
+            import provenance as _prov
+        enveloped = _prov.envelope(result, tool="catgo_catalysis", action=action,
+                                   inputs=params, claim=_prov.CATALYSIS_CLAIM.get(action),
+                                   method=f"workflow.catalysis.{action}")
+        return [T(type="text", text=json.dumps(enveloped, indent=2, ensure_ascii=False))]
     except ImportError as exc:
         return [T(type="text", text=f"Catalysis module not available: {exc}")]
     except Exception as exc:
