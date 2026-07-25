@@ -27,11 +27,49 @@ function stepNamed(steps, name) {
   return steps.find((step) => step.name === name)
 }
 
+test('smoke builds omit release inputs while publishers require exact tag source', () => {
+  const steps = workflowSteps()
+  const sourceGate = stepNamed(steps, 'Verify release source')
+  const eventIdentity = stepNamed(steps, 'Verify tag event source identity')
+  const smoke = stepNamed(steps, 'Build Tauri app (no release)')
+  const release = stepNamed(steps, 'Build and upload Tauri release')
+
+  assert.ok(sourceGate)
+  assert.equal(
+    sourceGate.env.RELEASE_SOURCE_TAG,
+    "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}",
+  )
+  assert.equal(
+    sourceGate.env.RELEASE_SOURCE_REQUIRE_TAG,
+    "${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}",
+  )
+  assert.ok(eventIdentity)
+  assert.equal(eventIdentity.if, "startsWith(github.ref, 'refs/tags/')")
+  assert.match(eventIdentity.run, /git rev-parse HEAD\^\{commit\}/)
+  assert.match(eventIdentity.run, /git rev-parse "refs\/tags\/\$GITHUB_REF_NAME\^\{commit\}"/)
+  assert.match(eventIdentity.run, /GITHUB_SHA/)
+
+  assert.ok(smoke)
+  assert.equal(
+    smoke.if,
+    "!startsWith(github.ref, 'refs/tags/') && !inputs.release",
+  )
+  assert.deepEqual(Object.keys(smoke.with).sort(), ['args'])
+
+  assert.ok(release)
+  assert.equal(
+    release.if,
+    "startsWith(github.ref, 'refs/tags/') || inputs.release",
+  )
+  assert.equal(release.with.tagName, '${{ github.ref_name }}')
+  assert.equal(release.with.releaseDraft, true)
+})
+
 test('release macOS builds fail closed before Tauri when any signing secret is absent', () => {
   const steps = workflowSteps()
   const preflight = stepNamed(steps, 'Preflight macOS release signing')
   const buildIndex = steps.findIndex(
-    (step) => step.uses === 'tauri-apps/tauri-action@v0.6',
+    (step) => step.name === 'Build and upload Tauri release',
   )
   const preflightIndex = steps.indexOf(preflight)
 
@@ -71,7 +109,7 @@ test('release macOS builds verify the produced app and the app mounted from the 
   const steps = workflowSteps()
   const verify = stepNamed(steps, 'Verify macOS release signatures')
   const buildIndex = steps.findIndex(
-    (step) => step.uses === 'tauri-apps/tauri-action@v0.6',
+    (step) => step.name === 'Build and upload Tauri release',
   )
   const verifyIndex = steps.indexOf(verify)
 
@@ -97,3 +135,35 @@ test('release macOS builds verify the produced app and the app mounted from the 
   assert.match(verify.run, /TeamIdentifier=\$APPLE_DEVELOPMENT_TEAM/)
 })
 
+test('uploads a hash-bound macOS signing attestation only after remote artifacts match', () => {
+  const steps = workflowSteps()
+  const verify = stepNamed(steps, 'Verify macOS release signatures')
+  const upload = stepNamed(steps, 'Upload macOS signing attestation')
+  const verifyIndex = steps.indexOf(verify)
+  const uploadIndex = steps.indexOf(upload)
+
+  assert.equal(verify.id, 'macos_signing')
+  assert.equal(verify.if, RELEASE_MACOS_CONDITION)
+  assert.match(verify.run, /gh release download "\$RELEASE_TAG"/)
+  assert.match(verify.run, /shasum -a 256/)
+  assert.match(verify.run, /local_dmg_sha.*remote_dmg_sha/s)
+  assert.match(
+    verify.run,
+    /verify-macos-signing-attestation\.mjs[\s\S]*--tag "\$RELEASE_TAG"[\s\S]*--source-commit "\$source_commit"/,
+  )
+  assert.match(verify.run, /"githubRunId"/)
+  assert.match(verify.run, /"signer"/)
+  assert.match(verify.run, /"teamIdentifier"/)
+
+  assert.ok(upload, 'the verified attestation has a dedicated upload boundary')
+  assert.ok(uploadIndex > verifyIndex)
+  assert.equal(upload.if, RELEASE_MACOS_CONDITION)
+  assert.equal(
+    upload.env.ATTESTATION_PATH,
+    '${{ steps.macos_signing.outputs.attestation }}',
+  )
+  assert.match(
+    upload.run,
+    /gh release upload "\$RELEASE_TAG" "\$ATTESTATION_PATH"[\s\S]*--clobber/,
+  )
+})

@@ -16,6 +16,16 @@ function workflow(name) {
 
 const RELEASE_WORKFLOWS = [
   {
+    file: 'tauri-build.yml',
+    job: 'build',
+    checkoutRef:
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.ref }}",
+    tag:
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}",
+    requireTag:
+      "${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}",
+  },
+  {
     file: 'android-build.yml',
     job: 'android',
     checkoutRef:

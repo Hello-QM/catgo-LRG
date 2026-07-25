@@ -72,6 +72,9 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.ref }}
+          fetch-depth: 0
 
       - name: Verify release rights
         run: node scripts/verify-release-rights.mjs
@@ -81,6 +84,24 @@ jobs:
           RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
         run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
+        run: node scripts/verify-release-source.mjs
+
+      - name: Verify tag event source identity
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          head_commit=$(git rev-parse HEAD^{commit})
+          tag_commit=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")
+          if [ "$head_commit" != "$GITHUB_SHA" ] ||
+             [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag moved after this workflow was triggered; refusing release."
+            exit 1
+          fi
 
       - name: Preflight macOS release signing
         if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
@@ -249,7 +270,16 @@ jobs:
           printf '%s' "$APPLE_API_KEY_P8" > "$KEY_PATH"
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Build Tauri app
+      - name: Build Tauri app (no release)
+        if: "!startsWith(github.ref, 'refs/tags/') && !inputs.release"
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Build and upload Tauri release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -339,8 +369,12 @@ jobs:
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
       - name: Verify macOS release signatures
+        id: macos_signing
         if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: |
@@ -384,7 +418,7 @@ jobs:
           mounted=0
           cleanup() {
             if (( mounted )); then
-              hdiutil detach "$mount_dir"
+              hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
             fi
             rmdir "$mount_dir" 2>/dev/null || true
           }
@@ -399,6 +433,77 @@ jobs:
             exit 1
           fi
           verify_app_signature "${dmg_apps[0]}"
+          hdiutil detach "$mount_dir"
+          mounted=0
+          rmdir "$mount_dir" 2>/dev/null || true
+          trap - EXIT
+
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid macOS release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          source_commit=$(git rev-parse HEAD^{commit})
+          version="${RELEASE_TAG#v}"
+          dmg_name="CatGo_${version}_aarch64.dmg"
+          updater_name="CatGo_aarch64.app.tar.gz"
+          release_assets=$(mktemp -d "$RUNNER_TEMP/catgo-macos-release.XXXXXX")
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$release_assets" \
+            --pattern "$dmg_name" \
+            --pattern "$updater_name"
+
+          local_dmg_sha=$(shasum -a 256 "${dmgs[0]}" | awk '{print $1}')
+          remote_dmg_sha=$(shasum -a 256 "$release_assets/$dmg_name" | awk '{print $1}')
+          if [ "$local_dmg_sha" != "$remote_dmg_sha" ]; then
+            echo "::error::Uploaded DMG differs from the locally verified DMG."
+            exit 1
+          fi
+          updater_sha=$(shasum -a 256 "$release_assets/$updater_name" | awk '{print $1}')
+
+          attestation="$release_assets/catgo-macos-signing-${RELEASE_TAG}.json"
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg sourceCommit "$source_commit" \
+            --arg githubRunId "$GITHUB_RUN_ID" \
+            --arg signer "$MACOS_SIGNING_IDENTITY" \
+            --arg teamIdentifier "$APPLE_DEVELOPMENT_TEAM" \
+            --arg dmgName "$dmg_name" \
+            --arg dmgSha256 "$remote_dmg_sha" \
+            --arg updaterName "$updater_name" \
+            --arg updaterSha256 "$updater_sha" \
+            '{
+              "schemaVersion": 1,
+              "releaseTag": $releaseTag,
+              "sourceCommit": $sourceCommit,
+              "githubRunId": $githubRunId,
+              "signer": $signer,
+              "teamIdentifier": $teamIdentifier,
+              "artifacts": [
+                {"name": $dmgName, "sha256": $dmgSha256},
+                {"name": $updaterName, "sha256": $updaterSha256}
+              ]
+            }' > "$attestation"
+          node scripts/verify-macos-signing-attestation.mjs \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$source_commit" \
+            --assets-dir "$release_assets" \
+            --expected-signer "$MACOS_SIGNING_IDENTITY" \
+            --expected-team "$APPLE_DEVELOPMENT_TEAM"
+          echo "attestation=$attestation" >> "$GITHUB_OUTPUT"
+
+      - name: Upload macOS signing attestation
+        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          ATTESTATION_PATH: ${{ steps.macos_signing.outputs.attestation }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "$ATTESTATION_PATH" \
+            --repo "$REPOSITORY" \
+            --clobber
 
       - name: Finalize canonical v1.4.6 release body
         if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.4.6'
