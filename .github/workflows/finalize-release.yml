@@ -1,0 +1,193 @@
+name: Finalize verified CatGo release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Exact draft CatGo release tag to verify and publish (for example, v1.4.6)'
+        type: string
+        required: true
+
+concurrency:
+  group: finalize-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate complete draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      asset_snapshot: ${{ steps.draft.outputs.asset_snapshot }}
+      source_commit: ${{ steps.source.outputs.commit }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION_REQUIRE_TAG: 'true'
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        id: source
+        env:
+          RELEASE_SOURCE_TAG: ${{ inputs.tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: 'true'
+        run: |
+          set -euo pipefail
+          node scripts/verify-release-source.mjs
+          source_commit=$(git rev-parse HEAD)
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
+
+      - name: Confirm release is a draft
+        id: draft
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid CatGo release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          release_json=$(mktemp)
+          trap 'rm -f "$release_json"' EXIT
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Release $RELEASE_TAG is not a draft."
+            exit 1
+          fi
+          asset_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          echo "asset_snapshot=$asset_snapshot" >> "$GITHUB_OUTPUT"
+
+      - name: Download complete draft assets
+        run: |
+          set -euo pipefail
+          release_assets="$RUNNER_TEMP/release-assets"
+          mkdir -p "$release_assets"
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$release_assets"
+          echo "RELEASE_ASSETS_DIR=$release_assets" >> "$GITHUB_ENV"
+
+      - name: Prepare Cloudflare validation manifest
+        env:
+          R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
+        run: |
+          set -euo pipefail
+          validation_assets="$RUNNER_TEMP/release-validation-assets"
+          mkdir -p "$validation_assets"
+          cp -a "$RELEASE_ASSETS_DIR/." "$validation_assets/"
+          latest="$validation_assets/latest.json"
+          if [ ! -f "$latest" ] || [ -L "$latest" ]; then
+            echo "::error::Draft release has no regular latest.json asset."
+            exit 1
+          fi
+          rewritten=$(mktemp)
+          trap 'rm -f "$rewritten"' EXIT
+          jq --arg base "${R2_PUBLIC_BASE_URL%/}" '
+            .platforms |= map_values(
+              .url |= sub(
+                "^https://github.com/[^/]+/[^/]+/releases/download/";
+                $base + "/"
+              )
+            )
+          ' "$latest" > "$rewritten"
+          mv "$rewritten" "$latest"
+          jq . "$latest" > /dev/null
+          echo "VALIDATION_ASSETS_DIR=$validation_assets" >> "$GITHUB_ENV"
+
+      - name: Verify complete mirrored release
+        env:
+          R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
+        run: |
+          node scripts/verify-mirrored-release.mjs \
+            --tag "$RELEASE_TAG" \
+            --assets-dir "$VALIDATION_ASSETS_DIR" \
+            --source-root "$GITHUB_WORKSPACE"
+
+      - name: Verify TestFlight acceptance
+        run: |
+          node scripts/verify-ios-testflight-attestation.mjs \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --assets-dir "$VALIDATION_ASSETS_DIR"
+
+  publish:
+    name: Publish verified release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
+      EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
+      EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+    steps:
+      - name: Checkout validated release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Re-confirm release is a draft
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+             ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid validated release identity."
+            exit 1
+          fi
+          actual_source_commit=$(git rev-parse HEAD)
+          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Release tag moved after validation; refusing publication."
+            exit 1
+          fi
+          release_json=$(mktemp)
+          trap 'rm -f "$release_json"' EXIT
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Release $RELEASE_TAG is no longer a draft."
+            exit 1
+          fi
+          actual_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$actual_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Draft assets changed after validation; refusing publication."
+            exit 1
+          fi
+
+      - name: Publish verified release
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --draft=false \
+            --latest

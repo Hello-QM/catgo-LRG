@@ -30,6 +30,14 @@ const WORKFLOW_INVENTORY = {
   'docker-publish.yml': {
     classification: 'rolling-publisher',
   },
+  'finalize-release.yml': {
+    classification: 'root-versioned-publisher',
+    gate: {
+      step: 'Verify release version',
+      tagSource: /inputs\.tag/,
+      requireSource: /true/,
+    },
+  },
   'hpc-bundle.yml': {
     classification: 'root-versioned-publisher',
     gate: {
@@ -90,7 +98,7 @@ const WORKFLOW_INVENTORY = {
   },
 }
 const PUBLISHER_SIGNAL =
-  /softprops\/action-gh-release|gh release (?:create|upload)|tauri-apps\/tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|docker\/build-push-action|cloudflare\/wrangler-action|xcrun altool|aws s3 sync/
+  /softprops\/action-gh-release|gh release (?:create|edit|upload)|tauri-apps\/tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|docker\/build-push-action|cloudflare\/wrangler-action|xcrun altool|aws s3 sync/
 const activeWorkflowSource = (path) =>
   source(path)
     .split('\n')

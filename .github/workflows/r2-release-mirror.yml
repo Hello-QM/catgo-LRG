@@ -223,6 +223,11 @@ jobs:
             --tag "$tag" \
             --assets-dir dist \
             --source-root "$target_source"
+          source_commit=$(git rev-parse "$tag^{commit}")
+          node scripts/verify-ios-testflight-attestation.mjs \
+            --tag "$tag" \
+            --source-commit "$source_commit" \
+            --assets-dir dist
 
       - name: Generate index.html download page
         if: steps.creds.outputs.configured == 'true'
