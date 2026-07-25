@@ -23,13 +23,21 @@ import { syncLegalBundle } from './sync-legal-bundle.mjs'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MIGRATION_VERSION = [1, 4, 6]
 const DEFAULT_PUBLIC_BASE_URL = 'https://dl.catgo-ucsd.org'
-const APP_ASSET =
-  /\.(?:appimage|deb|dmg|exe|msi|pkg|rpm|apk|aab|ipa|vsix)$/i
+const TAURI_UPDATER_ASSETS = [
+  /^CatGo_\d+\.\d+\.\d+_(?:x64|aarch64)(?:_[A-Za-z0-9-]+)?(?:-setup)?\.(?:exe|msi)$/i,
+  /^CatGo_(?:\d+\.\d+\.\d+_)?(?:aarch64|x64)\.app\.tar\.gz$/i,
+  /^CatGo_\d+\.\d+\.\d+_(?:amd64|aarch64)\.(?:deb|AppImage(?:\.tar\.gz)?)$/i,
+  /^CatGo-\d+\.\d+\.\d+-\d+\.(?:x86_64|aarch64)\.rpm$/i,
+]
 const SIDECAR_ASSETS = [
   'catgo-server-linux-x64',
   'catgo-server-darwin-arm64',
   'catgo-server-win-x64.exe',
 ]
+
+function isTauriUpdaterAsset(asset) {
+  return TAURI_UPDATER_ASSETS.some((pattern) => pattern.test(asset))
+}
 
 function parseVersionTag(tag) {
   const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag)
@@ -170,6 +178,12 @@ function verifyUpdaterUrls(latest, tag, baseUrl, assets) {
         `latest.json updater URL for ${platform} must target one release asset`,
       )
     }
+    if (!isTauriUpdaterAsset(asset)) {
+      throw new Error(
+        `latest.json updater URL for ${platform} must target a recognized ` +
+          `Tauri updater artifact: ${asset}`,
+      )
+    }
     if (!assets.has(asset)) {
       throw new Error(
         `latest.json updater URL for ${platform} targets missing release asset: ` +
@@ -202,8 +216,8 @@ function verifyAppAssets(assetsDir, tag, baseUrl) {
   const assets = readdirSync(assetsDir)
   const assetNames = new Set(assets)
   verifyUpdaterUrls(latest, tag, baseUrl, assetNames)
-  if (!assets.some((name) => APP_ASSET.test(name))) {
-    throw new Error('Release has no recognized CatGo app asset')
+  if (!assets.some(isTauriUpdaterAsset)) {
+    throw new Error('Release has no recognized Tauri updater artifact')
   }
 }
 

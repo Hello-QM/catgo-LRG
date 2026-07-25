@@ -49,6 +49,7 @@ function fixture({
     resolve(assets, `CatGo_${version}_aarch64.app.tar.gz`),
     'updater\n',
   )
+  writeFileSync(resolve(assets, 'catgo-server-win-x64.exe'), 'sidecar\n')
   return { root, assets, sourceRoot, tag }
 }
 
@@ -148,12 +149,26 @@ test('rejects an updater URL whose release asset is absent', () => {
   withFixture(
     {
       urls: [
-        `${PUBLIC_BASE_URL}/v1.4.5/CatGo_1.4.5_missing.AppImage`,
+        `${PUBLIC_BASE_URL}/v1.4.5/CatGo_1.4.5_amd64.AppImage`,
       ],
     },
     (result) => {
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, /missing.*release asset/i)
+    },
+  )
+})
+
+test('rejects a sidecar binary as a Tauri updater artifact', () => {
+  withFixture(
+    {
+      urls: [
+        `${PUBLIC_BASE_URL}/v1.4.5/catgo-server-win-x64.exe`,
+      ],
+    },
+    (result) => {
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /recognized Tauri updater artifact/i)
     },
   )
 })
