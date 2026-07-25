@@ -209,6 +209,90 @@ test('normalizes suffix and open-ended GET ranges before calling R2', async () =
   )
 })
 
+test('honors Range only when If-Range strongly matches the current object', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult(_key, options) {
+      return createObject({
+        body: new ReadableStream(),
+        size: 100,
+        range: options.range,
+      })
+    },
+  })
+
+  const matching = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=10-14',
+      'If-Range': '"abc123"',
+    },
+  })
+  const stale = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=10-14',
+      'If-Range': '"old-etag"',
+    },
+  })
+  const weak = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=10-14',
+      'If-Range': 'W/"abc123"',
+    },
+  })
+
+  assert.equal(matching.status, 206)
+  assert.deepEqual(bucket.getCalls[0].options.range, {
+    offset: 10,
+    length: 5,
+  })
+  assert.equal(stale.status, 200)
+  assert.equal(bucket.getCalls[1].options.range, undefined)
+  assert.equal(weak.status, 200)
+  assert.equal(bucket.getCalls[2].options.range, undefined)
+})
+
+test('honors date If-Range only when the object has not changed', async () => {
+  const bucket = createBucket({
+    headResult: createObject({ size: 100 }),
+    getResult(_key, options) {
+      return createObject({
+        body: new ReadableStream(),
+        size: 100,
+        range: options.range,
+      })
+    },
+  })
+
+  const unchanged = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=90-',
+      'If-Range': 'Thu, 24 Jul 2026 12:00:00 GMT',
+    },
+  })
+  const changed = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=90-',
+      'If-Range': 'Thu, 24 Jul 2026 11:59:59 GMT',
+    },
+  })
+  const invalid = await fetchDownload(bucket, '/v1.4.6/CatGo.exe', {
+    headers: {
+      Range: 'bytes=90-',
+      'If-Range': 'not-a-validator',
+    },
+  })
+
+  assert.equal(unchanged.status, 206)
+  assert.deepEqual(bucket.getCalls[0].options.range, {
+    offset: 90,
+    length: 10,
+  })
+  assert.equal(changed.status, 200)
+  assert.equal(bucket.getCalls[1].options.range, undefined)
+  assert.equal(invalid.status, 200)
+  assert.equal(bucket.getCalls[2].options.range, undefined)
+})
+
 test('returns 416 before GET for malformed, multiple, or unsatisfiable ranges', async () => {
   const bucket = createBucket({
     headResult: createObject({ size: 100 }),

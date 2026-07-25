@@ -25,6 +25,15 @@ test('auxiliary app asset workflows may create only draft releases', () => {
   }
 
   assert.match(source('.github/workflows/tauri-build.yml'), /releaseDraft:\s*true/)
+
+  const hpcReleaseStep = source('.github/workflows/hpc-bundle.yml')
+    .split('- name: Upload to release')[1]
+  assert.ok(hpcReleaseStep, 'HPC workflow has a release upload step')
+  assert.match(
+    hpcReleaseStep,
+    /uses:\s*softprops\/action-gh-release@v2[\s\S]*?\n\s+draft:\s*true(?:\s|$)/,
+    'HPC bundle upload must keep the app release in draft state',
+  )
 })
 
 test('the independent STT release can never become GitHub latest', () => {

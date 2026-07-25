@@ -130,3 +130,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: catgo-hpc-bundle.tar.gz
+          draft: true

@@ -95,6 +95,23 @@ function validDate(value) {
   return Number.isNaN(timestamp) ? null : timestamp
 }
 
+function ifRangeMatches(request, object) {
+  const value = request.headers.get('if-range')
+  if (!value) return true
+
+  const validator = value.trim()
+  if (validator.startsWith('"') || /^W\//i.test(validator)) {
+    return !/^W\//i.test(validator) && validator === object.httpEtag.trim()
+  }
+
+  const ifRangeDate = validDate(validator)
+  if (ifRangeDate === null || !(object.uploaded instanceof Date)) {
+    return false
+  }
+  const uploaded = Math.floor(object.uploaded.getTime() / 1000) * 1000
+  return uploaded <= ifRangeDate
+}
+
 function headPreconditionStatus(request, object) {
   const { headers } = request
   const etag = object.httpEtag
@@ -272,7 +289,9 @@ async function serveGet(request, bucket, key) {
       rangeMetadata.size,
     )
     if (range?.invalid) return rangeNotSatisfiable(rangeMetadata.size)
-    options.range = range
+    if (ifRangeMatches(request, rangeMetadata)) {
+      options.range = range
+    }
   }
   if (requestHasConditionals(request.headers)) {
     options.onlyIf = request.headers
