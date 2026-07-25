@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Physics verification gates + verifiability layer for CatBot comp-chem outputs.
 
-Vendored (pure-stdlib) from the ai-agent verification-layer work. Two layers:
-  audit(result)              — 17 value gates over the silent-error taxonomy
-                               (A1 PAW / A2 range / A3 gas-thermo / B ZPE / C1-C3
-                               convergence+exit / D1-D2 freq / E geometry / F3 MLIP
-                               force / H k-grid / I field-prov / J label-prov).
-  verifiability(result,claims) — the distinguishing feature: refuses to certify a
-                               claim whose provenance is absent (flags UNVERIFIABLE
-                               instead of silently passing). Catches the value-gate
-                               ceiling (G: in-range value, no provenance).
+Vendored (pure-stdlib) from the ai-agent verification-layer work. Three entry points:
+  audit(result)                  — value gates over the silent-error taxonomy, each
+                                   PASS/FAIL/SKIP (absent inputs declared, never dropped).
+  verifiability(result, claims)  — refuses to certify a claim whose provenance is absent
+                                   (UNVERIFIABLE), default-deny for unregistered claims.
+  workflow_consistency(steps) / harvest_consistency(rows, ...)
+                                 — cross-step and cross-record identities that no
+                                   single-result gate can see.
 Additive: no existing CatGo module imports or depends on this file.
 
-Design rule: a gate that never fires is worse than no gate — absent inputs are
-reported as SKIP (never silently omitted); a claim without provenance is flagged
-UNVERIFIABLE (never silently trusted).
-"""
+Design rule: a gate that never fires is worse than no gate — absent inputs are reported
+as SKIP; a claim without provenance is flagged UNVERIFIABLE, never silently trusted.
 
+GENERATED from catgo-projects/data/ai-agent/agentbench/verifier.py by sync_copies.py —
+edit that file, not this one.
+"""
 from collections import defaultdict
 
 # ---- thresholds: each traces to a recorded real failure ---------------------
@@ -187,14 +187,15 @@ def gate_residual_imag(n_imag, imag_max_cm=None):
 # ---- G2 limiting potential: NO value gate (see below) ----------------------
 
 
-# RETIRED as a value gate (D-030). Measured on an information-isolated corpus, the
-# good and bad U_L populations OVERLAP: accepted results reach +6.550 V (strong-binder
-# regime, geometry verified) while a reference-mismatch artifact sits at +6.346 V. The
-# zero-false-alarm ceiling of ANY window is 2/4 catches; the deployed [-2.0,3.5] window
-# bought 2 catches at the price of every false alarm the suite had (6/79). Tuning it
-# would be fitting the test set. What separates the populations is not the magnitude but
-# which reaction, which reference state and which PCET convention produced it — so U_L
-# moves to the verifiability layer as the claim `limiting_potential`.
+# RETIRED as a value gate (D-030). Measured on the independent corpus, the good
+# and bad U_L populations OVERLAP: accepted results reach +6.550 V (strong-binder
+# regime, geometry verified) while a reference-mismatch artifact sits at +6.346 V.
+# The zero-false-alarm ceiling of ANY window is 2/4 catches; the deployed [-2.0,3.5]
+# window bought 2 catches at the price of every false alarm the suite had (6/79).
+# Tuning it would be fitting the test set. The information that separates the two
+# populations is not the magnitude — it is which reaction, which reference state and
+# which PCET convention produced it, i.e. provenance. So U_L moves to the
+# verifiability layer as the claim `limiting_potential`; see eval_threshold_separability.py.
 
 
 # ---- E geometry parse sanity (min interatomic pair) ------------------------
@@ -239,6 +240,184 @@ def gate_label_provenance(netq_true, netq_label):
     return _v("label_provenance", ok, f"label netq={netq_label} vs true netq={netq_true}", "J")
 
 
+# ===========================================================================
+# D-030 batch: deductive gates mined from 477 memory notes + 4438 decisions
+# across 65 projects (analysis/NEW_GATE_SPECS_2026-07-25.md). Every one is an
+# IDENTITY or a conservation law — pass/fail with no tunable threshold, so none
+# of them can be accused of a fitted constant. Each cites the recorded case and
+# its blast radius. They are PROVISIONAL: exercised by the self-test on the real
+# recorded numbers, but not yet by a held-out corpus (their input fields are not
+# in corpus v1 — see PROVISIONAL_GATES and eval_gate_audit.py).
+# ===========================================================================
+
+# VASP legally coerces these, so an echo differing from the request is not a fault
+_VASP_COERCED_TAGS = {"NBANDS", "NPAR", "NCORE", "KPAR", "ISMEAR", "LREAL", "LMAXMIX"}
+
+
+def gate_incar_tag_echo_identity(incar_requested, outcar_param_echo):
+    """What was asked must be what ran (K1). The `vasp.6.4.2-cp` build parses only the
+    FIRST tag on a space-separated INCAR line; every later tag silently falls back to its
+    default, with no error and no warning. The run converges and reports energies computed
+    under settings nobody chose.
+    Case: ai-emlp-iface D-78 (feedback_vasp_cp_build_one_tag_per_line_incar) — the line
+    `ALGO=All PREC=Accurate ENCUT=450 GGA=PE IVDW=12` applied ALGO only, so the campaign
+    ran with IVDW=0 (no D3) and ISPIN=1 (no spin); NELM fell 500 -> 60.
+    Blast radius: a whole multi-stage campaign on unchosen physics; every absolute
+    capacitance / PZC / energy had to be recomputed."""
+    mismatch = {}
+    for tag, want in incar_requested.items():
+        if tag in _VASP_COERCED_TAGS or tag not in outcar_param_echo:
+            continue
+        got = outcar_param_echo[tag]
+        try:
+            same = abs(float(want) - float(got)) < 1e-9
+        except (TypeError, ValueError):
+            same = str(want).strip().upper() == str(got).strip().upper()
+        if not same:
+            mismatch[tag] = f"asked {want!r}, ran {got!r}"
+    return _v("incar_tag_echo_identity", not mismatch,
+              f"INCAR request vs OUTCAR echo: {mismatch}" if mismatch
+              else f"all {len(incar_requested)} requested tags echoed as applied", "K1")
+
+
+def gate_grand_potential_energy(energy_source, nelect_states, lcep=True):
+    """Under constant potential, compared states float to DIFFERENT NELECT, so a canonical
+    TOTEN difference silently omits mu_e*dN_e (K2). The number has the right units and a
+    plausible magnitude.
+    Case: ai-strain D-108/109 (feedback_fcp_lcep_use_gce_not_canonical_energy) — naive
+    E(H*)-E(clean) gave Mo2CO2 dG_H* = -6 eV and a 5.6 eV spread across strain, all
+    artefact; the build's own GCE field restored physical values.
+    Deductive: if NELECT differs across the compared states and the energies are TOTEN,
+    the comparison is provably missing a term. Canonical fixed-NELECT runs are exempt."""
+    vals = {round(float(n), 6) for n in nelect_states}
+    floated = len(vals) > 1
+    ok = (not lcep) or (not floated) or str(energy_source).upper() == "GCE"
+    return _v("grand_potential_energy", ok,
+              f"energy_source={energy_source!r}, NELECT across states={sorted(vals)}"
+              + (" — TOTEN differences omit mu_e*dN_e" if not ok else ""), "K2")
+
+
+# elements whose valence configuration carries d (l=2) or f (l=3) occupancy
+_D_BLOCK = set("Sc Ti V Cr Mn Fe Co Ni Cu Zn Y Zr Nb Mo Tc Ru Rh Pd Ag Cd "
+               "Hf Ta W Re Os Ir Pt Au Hg".split())
+_F_BLOCK = set("La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu "
+               "Ac Th Pa U Np Pu".split())
+
+
+def gate_lmaxmix_covers_valence(titels, lmaxmix):
+    """LMAXMIX must reach 2*l_max of the valence shell: d -> 4, f -> 6 (K3). The default 2
+    mixes only up to l=1, so with d electrons the d density is not fully mixed; SCF
+    oscillates, hits NELM, and settles in a spurious metastable spin solution that then
+    reports a converged energy.
+    Case: ai-plasma D-41 (feedback_vasp_lmaxmix_4_for_d_electrons) — all intermediates
+    missing LMAXMIX hit NELM=120 with oscillating dE; magmom n_vac +2.59 / nh2 -0.57 /
+    CycleB -6.5 uB while the clean slab is ~0, producing a false PDS *NH -> *NH2 = +0.85 eV.
+    No false-alarm cost: LMAXMIX=4 on an s/p-only system is merely slightly slower."""
+    els = {t.split()[1].split("_")[0] for t in titels if len(t.split()) >= 2}
+    need = 6 if (els & _F_BLOCK) else (4 if (els & _D_BLOCK) else 2)
+    return _v("lmaxmix_covers_valence", lmaxmix is not None and lmaxmix >= need,
+              f"LMAXMIX={lmaxmix} vs required {need} for {sorted(els & (_D_BLOCK | _F_BLOCK)) or 's/p only'}",
+              "K3")
+
+
+def gate_gas_reference_spin(species, magnetization, e_total=None):
+    """A closed-shell gas reference must come out with zero net moment (K4). With ISPIN=2
+    and a default MAGMOM, H2 happily converges to the FERROMAGNETIC DISSOCIATED triplet:
+    SCF converges, relaxation converges, the energy is a real number.
+    Case: ai-seawater D-39 (feedback_vasp_gas_h2_highspin_dissociation_nupdown0) —
+    E(H2) ~ -2.2 eV instead of -6.77 eV, OSZICAR mag=2.0000 throughout, H-H stretched
+    0.74 -> ~3.5 A. Every CHE step was biased +2.27 eV. NUPDOWN=0 fixed it:
+    E(H2) = -6.76881170 eV, mag = 0.
+    Deductive for the closed-shell set; O2 (triplet ground state) is excluded by name."""
+    closed_shell = {"H2", "N2", "H2O", "CO", "CO2", "CH4", "NH3"}
+    if str(species) not in closed_shell:
+        return _v("gas_reference_spin", True, f"{species} is not in the closed-shell set", "K4")
+    ok = abs(float(magnetization)) < 0.05
+    detail = f"{species} net moment={magnetization} (closed shell must be 0)"
+    if e_total is not None:
+        detail += f", E={e_total}"
+    return _v("gas_reference_spin", ok, detail, "K4")
+
+
+def gate_partial_hessian_dof(n_modes, n_free_atoms):
+    """A partial Hessian is defined by which atoms are free: n_modes == 3 * n_free (K5).
+    A POSCAR missing `Selective dynamics` makes the frequency tool compute ALL modes; the
+    thermal correction is then a perfectly finite, plausible number of the wrong magnitude.
+    Case: ai-gs D-010 — vaspkit task 501 produced 285 modes over 95 atoms instead of the
+    12 modes of the 4 free NH3 atoms; G_corr came out 2.799 eV against the sibling Mo
+    value 0.965 eV (delta -1.834 eV), moving the W Distal onset 0.876 -> -0.16 V vs SHE.
+    Exactly 1 of 60+ freq POSCARs was affected — a per-file gate, not a per-campaign one.
+    Pure identity: a deliberately full Hessian still satisfies it with n_free = n_atoms."""
+    expect = 3 * int(n_free_atoms)
+    return _v("partial_hessian_dof", int(n_modes) == expect,
+              f"n_modes={n_modes} vs 3*n_free_atoms={expect} (n_free={n_free_atoms})", "K5")
+
+
+def gate_optimizer_step_budget(ibrion, nsw, n_ionic_steps=None):
+    """An optimiser that took no steps still writes a clean output and exits COMPLETED (K6).
+    Case: ai-strain D-131 — a VTST NEB with `IBRION=3 POTIM=0 IOPT=3` and no NSW line
+    defaulted to NSW=0, so every image froze at its IDPP starting geometry and the barriers
+    came out 3-5 eV too high; the diagnostic was 'each image OSZICAR has only 1 F= step'.
+    Exempt on the intentional single-point pair IBRION=-1 with NSW=0."""
+    if int(ibrion) < 0:
+        return _v("optimizer_step_budget", True, f"IBRION={ibrion} (single point, NSW ignored)", "K6")
+    ok = nsw is not None and int(nsw) >= 1
+    if ok and n_ionic_steps is not None:
+        ok = int(n_ionic_steps) >= 2
+    return _v("optimizer_step_budget", ok,
+              f"IBRION={ibrion} NSW={nsw} ionic_steps={n_ionic_steps} "
+              f"(an optimisation that took <2 steps optimised nothing)", "K6")
+
+
+def gate_dos_electron_count(dos_integral, nelect, tol=0.02):
+    """Integrating the DOS to the Fermi level must return the electron count (K7).
+    A sum rule, so no threshold: if it does not, the DOS was integrated wrongly — k-point
+    weights dropped, or the energy window truncated — and every quantity derived from it
+    (magnetic moment, d-band centre, N(E_F)) is wrong while looking perfectly plausible.
+    Cases (both from ai-spin, and both invisible to every other gate):
+      - DOS harvested with an UNWEIGHTED k-point sum gave Cr magmom = 74 uB, while the
+        DFT run's own `mags` field held the physical 2-3 uB and no value was ever > 8.
+      - A truncated DOS window produced a 73 uB moment entirely from s-orbital spin-up
+        (sum_up 73.62 vs sum_dn 0.88), i.e. the missing channel was simply outside the
+        window that was integrated."""
+    err = abs(float(dos_integral) - float(nelect)) / max(abs(float(nelect)), 1.0)
+    return _v("dos_electron_count", err <= tol,
+              f"integral(DOS)={dos_integral} vs NELECT={nelect} "
+              f"({err:.1%} off — k-point weights or window)", "K7")
+
+
+def gate_relaxation_minimum_endpoint(energy_series, tol=0.005):
+    """A relaxation must END at the lowest energy it found (K8). The force criterion can
+    trigger on a shoulder: forces fall below EDIFFG while the energy has already risen off
+    the minimum, so the run stops, reports 'reached required accuracy', and hands back a
+    point that is not the minimum it already walked through.
+    Case: 8 ionic steps, stopped on max force 0.00848 < 0.01, but step2 = -298.550 eV and
+    step8 = -298.526 eV — the reported endpoint is 24 meV ABOVE a geometry the same run
+    had already visited.
+    Deductive: an optimiser's own trajectory is the witness; no external threshold."""
+    es = [float(e) for e in energy_series]
+    best = min(es)
+    gap = es[-1] - best
+    return _v("relaxation_minimum_endpoint", gap <= tol,
+              f"E_final={es[-1]:.3f} eV is {gap*1000:.0f} meV above the run's own minimum "
+              f"{best:.3f} eV (step {es.index(best)+1}/{len(es)})", "K8")
+
+
+def gate_restoring_force_sign(r_series, r0):
+    """A restoring bias must move the coordinate TOWARD its target (K9). Sign errors in a
+    biasing force are silent: the simulation runs, the thermostat reports a sane
+    temperature, and the collective variable simply drifts the wrong way.
+    Case: `adjust_forces` used f = -k(r-r0)u while ASE's get_distance vector points i->j,
+    so the restraint pushed the cation AWAY: a pilot with r0 = 3.0 A ended at r = 6.13 A
+    (std 1.62) with E = +733 +/- 1058 eV.
+    Deductive: compare |r-r0| at the start and end of the biased segment."""
+    rs = [float(x) for x in r_series]
+    start, end = abs(rs[0] - float(r0)), abs(rs[-1] - float(r0))
+    return _v("restoring_force_sign", end <= start,
+              f"|r-r0| grew {start:.2f} -> {end:.2f} A under a restraint targeting "
+              f"r0={r0} (a restoring force cannot push away)", "K9")
+
+
 # ---- audit: coverage-aware, no silent skips --------------------------------
 _SPEC = [
     ("physical_range",          "A2", ("dG",),                                   lambda r: gate_physical_range(r["dG"], r.get("species", "default"))),
@@ -258,7 +437,25 @@ _SPEC = [
     ("field_provenance",        "I",  ("pc_field_source",),                      lambda r: gate_field_provenance(r["pc_field_source"])),
     ("label_provenance",        "J",  ("netq_true", "netq_label"),               lambda r: gate_label_provenance(r["netq_true"], r["netq_label"])),
     ("residual_imag",           "D3", ("n_imag",),                               lambda r: gate_residual_imag(r["n_imag"], r.get("imag_max_cm"))),
+    ("incar_tag_echo_identity", "K1", ("incar_requested", "outcar_param_echo"),  lambda r: gate_incar_tag_echo_identity(r["incar_requested"], r["outcar_param_echo"])),
+    ("grand_potential_energy",  "K2", ("energy_source", "nelect_states"),        lambda r: gate_grand_potential_energy(r["energy_source"], r["nelect_states"], r.get("lcep", True))),
+    ("lmaxmix_covers_valence",  "K3", ("ads_titels", "lmaxmix"),                 lambda r: gate_lmaxmix_covers_valence(r["ads_titels"], r["lmaxmix"])),
+    ("gas_reference_spin",      "K4", ("species", "magnetization"),              lambda r: gate_gas_reference_spin(r["species"], r["magnetization"], r.get("energy"))),
+    ("partial_hessian_dof",     "K5", ("n_modes", "n_free_atoms"),               lambda r: gate_partial_hessian_dof(r["n_modes"], r["n_free_atoms"])),
+    ("optimizer_step_budget",   "K6", ("ibrion", "nsw"),                         lambda r: gate_optimizer_step_budget(r["ibrion"], r["nsw"], r.get("n_ionic_steps"))),
+    ("dos_electron_count",      "K7", ("dos_integral", "nelect"),                lambda r: gate_dos_electron_count(r["dos_integral"], r["nelect"])),
+    ("relaxation_minimum_endpoint", "K8", ("energy_series",),                    lambda r: gate_relaxation_minimum_endpoint(r["energy_series"])),
+    ("restoring_force_sign",    "K9", ("r_series", "r0"),                        lambda r: gate_restoring_force_sign(r["r_series"], r["r0"])),
 ]
+
+# Added in the D-030 batch: proven on their recorded cases in the self-test, but their
+# input fields do not exist in corpus v1, so no held-out corpus has exercised them yet.
+# eval_gate_audit.py separates these from gates that are dead for lack of firing.
+PROVISIONAL_GATES = {"incar_tag_echo_identity", "grand_potential_energy",
+                     "lmaxmix_covers_valence", "gas_reference_spin",
+                     "partial_hessian_dof", "optimizer_step_budget",
+                     "dos_electron_count", "relaxation_minimum_endpoint",
+                     "restoring_force_sign"}
 
 
 def audit(result, require=None):
@@ -417,6 +614,74 @@ def workflow_consistency(steps):
                       else f"k-grid consistent ({kgrids[0]})", "WF"))
     else:
         out.append(_skip("wf_kgrid_consistency", "WF", ("kgrid×≥2 steps",)))
+
+    return out
+
+
+def harvest_consistency(rows, key_fields, value_field, tol=1e-6):
+    """rows: harvested records from >=1 host/run. Two CROSS-RECORD identities that no
+    single-result gate can see (D-030 batch, taxon HV).
+
+    (1) duplicate-key agreement — two hosts computed the same cell and both wrote a row.
+        Neither errored; the table just has extra rows and every aggregate double-counts.
+        Case: ai-pbsa D-117 (feedback_multihost_harvest_duplicate_keys_disagree) — 268
+        duplicated (combo, system, ligand) keys, 244 of them DISAGREE on dg_bind, median
+        4.09 kcal/mol, worst 77314.93. Not float32 noise (~0.5 kcal). The headline claim
+        "MACEPOL >> AIMNet2, 0.309 vs 0.137" was comparing 597 cells against 11 and was
+        overturned by the matched subset. NEVER average duplicates — averaging hides a
+        77315 kcal/mol disagreement.
+    (2) variational lower bound — SCF is a minimisation, so on the SAME geometry a
+        converged HIGHER energy is provably a spurious metastable state, however smooth
+        its forces and however happily it met EDIFF.
+        Case: ai-xmat D-27 — ALGO=Normal "converged" cu_ref/clean at -142.30 eV while
+        ALGO=All reached -191.36 eV (sibling scale ~ -2.98 eV/atom): 49.06 eV of pure
+        spurious-state error, caused by MAGMOM=64*1.0 on non-magnetic Cu. D-38: NUPDOWN
+        locked to the clean-slab moment gave Fe_CO dE +6.10 eV and Mn ~ +8.4 eV.
+    Both are deductive: uniqueness/agreement and an inequality that minimisation
+    guarantees. Records must declare `geometry_hash` for (2) — without it the comparison
+    is not defined, and the check is declared SKIP rather than guessed."""
+    out = []
+
+    dupes = defaultdict(list)
+    for r in rows:
+        if all(k in r for k in key_fields) and value_field in r:
+            dupes[tuple(r[k] for k in key_fields)].append(r)
+    dup_keys = {k: v for k, v in dupes.items() if len(v) > 1}
+    if dup_keys:
+        disagree = {}
+        for k, group in dup_keys.items():
+            vals = [float(r[value_field]) for r in group]
+            if max(vals) - min(vals) > tol:
+                disagree[k] = (min(vals), max(vals),
+                               sorted({str(r.get("source_host", "?")) for r in group}))
+        worst = max((hi - lo for lo, hi, _ in disagree.values()), default=0.0)
+        out.append(_v("hv_duplicate_agreement", not disagree,
+                      f"{len(disagree)}/{len(dup_keys)} duplicated keys disagree on "
+                      f"{value_field}; worst spread {worst:.2f}" if disagree
+                      else f"{len(dup_keys)} duplicated keys all agree within {tol}", "HV"))
+    else:
+        out.append(_v("hv_duplicate_agreement", True,
+                      f"no duplicated {key_fields} keys among {len(rows)} rows", "HV"))
+
+    by_geom = defaultdict(list)
+    for r in rows:
+        if "geometry_hash" in r and "energy" in r:
+            by_geom[r["geometry_hash"]].append(r)
+    families = {g: v for g, v in by_geom.items() if len(v) > 1}
+    if families:
+        spurious = {}
+        for g, group in families.items():
+            best = min(float(r["energy"]) for r in group)
+            for r in group:
+                gap = float(r["energy"]) - best
+                if gap > tol:
+                    spurious[f"{g}/{r.get('recipe', '?')}"] = round(gap, 3)
+        out.append(_v("hv_variational_bound", not spurious,
+                      f"converged states above their family minimum (eV): {spurious} "
+                      f"— the higher energy is a spurious metastable solution" if spurious
+                      else f"{len(families)} geometry families each at their minimum", "HV"))
+    else:
+        out.append(_skip("hv_variational_bound", "HV", ("geometry_hash+energy ×≥2 recipes",)))
 
     return out
 
