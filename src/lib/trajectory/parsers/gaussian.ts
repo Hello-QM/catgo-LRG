@@ -10,6 +10,12 @@ const HARTREE_TO_EV = 27.211386245988
 const HARTREE_BOHR_TO_EV_A = 51.42206313
 
 type GaussianGeometry = { positions: number[][]; elements: ElementSymbol[] }
+type GaussianIrcRecord = {
+  point: number
+  path: number
+  geometry: GaussianGeometry
+  energy: number
+}
 
 const parse_orientation_blocks = (
   lines: string[],
@@ -64,6 +70,11 @@ const parse_checkpoint_geometry = (content: string): GaussianGeometry | undefine
   return positions.length > 0 ? { positions, elements } : undefined
 }
 
+const parse_scf_energies = (content: string): number[] =>
+  [...content.matchAll(
+    /SCF Done:\s*E\(.+?\)\s*=\s*([-+]?\d+(?:\.\d+)?(?:[DE][-+]?\d+)?)/gi,
+  )].map((match) => parseFloat(match[1].replace(/[dD]/, `E`)))
+
 const parse_irc_reaction_coordinates = (content: string): number[] => {
   const summary = content.match(
     /Summary of reaction path following([\s\S]*?)Total number of points:/,
@@ -80,6 +91,54 @@ const parse_irc_reaction_coordinates = (content: string): number[] => {
   return coordinates
 }
 
+const parse_irc_records = (
+  content: string,
+  lines: string[],
+): GaussianIrcRecord[] | undefined => {
+  const marker_matches = [...content.matchAll(
+    /Point Number:\s*(\d+)\s+Path Number:\s*(\d+)/g,
+  )]
+  if (marker_matches.length === 0) return undefined
+
+  const has_input_orientation = lines.some((line) => line.includes(`Input orientation:`))
+  const preferred_orientation = has_input_orientation
+    ? `Input orientation:`
+    : `Standard orientation:`
+  const checkpoint_geometry = parse_checkpoint_geometry(content)
+  const checkpoint_energy_match = content.match(
+    /Energy From Chk\s*=\s*([-+]?\d+(?:\.\d+)?(?:[DE][-+]?\d+)?)/i,
+  )
+  const checkpoint_energy = checkpoint_energy_match
+    ? parseFloat(checkpoint_energy_match[1].replace(/[dD]/, `E`))
+    : undefined
+  const irc_start = content.lastIndexOf(`IRC-IRC-IRC-`, marker_matches[0].index)
+
+  const records: GaussianIrcRecord[] = []
+  for (let idx = 0; idx < marker_matches.length; idx++) {
+    const marker = marker_matches[idx]
+    const previous_marker = marker_matches[idx - 1]
+    const interval_start = previous_marker?.index === undefined
+      ? Math.max(0, irc_start)
+      : previous_marker.index + previous_marker[0].length
+    if (marker.index === undefined) return undefined
+
+    const interval = content.slice(interval_start, marker.index)
+    const point = Number(marker[1])
+    const path = Number(marker[2])
+    const geometry = parse_orientation_blocks(
+      interval.split(/\r?\n/),
+      preferred_orientation,
+    ).at(-1) ?? (point === 0 ? checkpoint_geometry : undefined)
+    const energy = parse_scf_energies(interval).at(-1)
+      ?? (point === 0 ? checkpoint_energy : undefined)
+    if (!geometry || energy === undefined || (path !== 1 && path !== 2)) return undefined
+
+    records.push({ point, path, geometry, energy })
+  }
+
+  return records
+}
+
 const parse_gaussian_irc = (
   content: string,
   lines: string[],
@@ -87,73 +146,33 @@ const parse_gaussian_irc = (
 ): TrajectoryType | undefined => {
   if (!content.includes(`IRC-IRC-IRC-`)) return undefined
 
-  const path_points = [...content.matchAll(
-    /Point Number:\s*(\d+)\s+Path Number:\s*(\d+)/g,
-  )].map((match) => ({
-    point: parseInt(match[1], 10),
-    path: parseInt(match[2], 10),
-  }))
-  if (path_points.length === 0) return undefined
+  const records = parse_irc_records(content, lines)
+  if (!records) return undefined
 
   // IRC output is written as Path 1 from TS outward, followed by Path 2 from
   // TS outward. A physical trajectory must instead run endpoint -> TS -> endpoint.
-  const path_one_count = path_points.filter(({ path }) => path === 1).length
-  const path_two_count = path_points.filter(({ path }) => path === 2).length
-  if (path_one_count + path_two_count !== path_points.length) return undefined
+  const path_one = records.filter(({ path }) => path === 1)
+  const path_two = records.filter(({ path }) => path === 2)
+  if (path_one.length + path_two.length !== records.length) return undefined
 
-  const has_input_orientation = lines.some((line) => line.includes(`Input orientation:`))
-  const orientation_geometries = parse_orientation_blocks(
-    lines,
-    has_input_orientation ? `Input orientation:` : `Standard orientation:`,
-  )
-  const checkpoint_geometry = parse_checkpoint_geometry(content)
-  const raw_geometries = checkpoint_geometry
-    ? [checkpoint_geometry, ...orientation_geometries]
-    : orientation_geometries
-
-  const scf_energies = [...content.matchAll(
-    /SCF Done:\s*E\(.+?\)\s*=\s*([-+]?\d+(?:\.\d+)?(?:[DE][-+]?\d+)?)/gi,
-  )].map((match) => parseFloat(match[1].replace(/[dD]/, `E`)))
-  const checkpoint_energy_match = content.match(
-    /Energy From Chk\s*=\s*([-+]?\d+(?:\.\d+)?(?:[DE][-+]?\d+)?)/i,
-  )
-  const checkpoint_energy = checkpoint_energy_match
-    ? parseFloat(checkpoint_energy_match[1].replace(/[dD]/, `E`))
-    : undefined
-  const raw_energies = checkpoint_energy === undefined
-    ? scf_energies
-    : [checkpoint_energy, ...scf_energies]
-
-  const point_count = path_points.length
-  if (raw_geometries.length < point_count || raw_energies.length < point_count) {
-    return undefined
-  }
-
-  const ordered_indices = [
-    ...Array.from(
-      { length: path_two_count },
-      (_, idx) => point_count - 1 - idx,
-    ),
-    ...Array.from({ length: path_one_count }, (_, idx) => idx),
-  ]
+  const ordered_records = [...path_two.reverse(), ...path_one]
+  const point_count = records.length
   const reaction_coordinates = parse_irc_reaction_coordinates(content)
 
-  const frames = ordered_indices.map((raw_idx, step) => {
-    const geometry = raw_geometries[raw_idx]
-    const path_point = path_points[raw_idx]
+  const frames = ordered_records.map((record, step) => {
     const metadata: Record<string, unknown> = {
-      energy: raw_energies[raw_idx] * HARTREE_TO_EV,
-      irc_path: path_point.path,
-      irc_point: path_point.point,
-      is_transition_state: path_point.point === 0,
+      energy: record.energy * HARTREE_TO_EV,
+      irc_path: record.path,
+      irc_point: record.point,
+      is_transition_state: record.point === 0,
     }
     if (reaction_coordinates.length === point_count) {
       metadata.reaction_coordinate = reaction_coordinates[step]
     }
 
     return create_trajectory_frame(
-      geometry.positions,
-      geometry.elements,
+      record.geometry.positions,
+      record.geometry.elements,
       undefined,
       undefined,
       step,
@@ -179,7 +198,7 @@ export const parse_gaussian_output = (content: string, filename?: string): Traje
   if (irc_trajectory) return irc_trajectory
 
   // Pass 1: collect all data separately
-  const energies: number[] = []
+  const energies = parse_scf_energies(content)
   const max_forces: number[] = []
   const rms_forces: number[] = []
   const geometries: { positions: number[][]; elements: ElementSymbol[] }[] = []
@@ -188,12 +207,6 @@ export const parse_gaussian_output = (content: string, filename?: string): Traje
   let idx = 0
   while (idx < lines.length) {
     const line = lines[idx]
-
-    // SCF energy
-    if (line.includes(`SCF Done`)) {
-      const m = line.match(/=\s+([-+]?\d+\.\d+)/)
-      if (m) energies.push(parseFloat(m[1]))
-    }
 
     // Force convergence (Maximum Force / RMS Force lines with values)
     if (line.includes(`Maximum Force`) && !line.includes(`Threshold`)) {

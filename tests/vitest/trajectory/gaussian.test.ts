@@ -16,6 +16,15 @@ const scf_energy = (energy: number) =>
 const point = (point_number: number, path_number: number) =>
   ` Point Number: ${point_number} Path Number: ${path_number}\n`
 
+const completed_point = (
+  point_number: number,
+  path_number: number,
+  attempts: Array<{ x: number; energy: number }>,
+) =>
+  attempts.map(({ x, energy }) =>
+    orientation_block(`Input orientation`, x) + scf_energy(energy)
+  ).join(``) + point(point_number, path_number)
+
 const irc_summary = ` Summary of reaction path following
  --------------------------------------------------------------------------
                          Energy    RxCoord
@@ -52,12 +61,11 @@ describe(`parse_gaussian_output`, () => {
  C,0,0.000000,0.000000,0.000000
  Recover connectivity data from disk.
  Energy From Chk = -10.00000000
-${point(0, 1)}${orientation_block(`Input orientation`, 1)}${scf_energy(-10.1)}
-${point(1, 1)}${orientation_block(`Input orientation`, 2)}${scf_energy(-10.2)}
-${point(2, 1)}${orientation_block(`Input orientation`, 3)}${scf_energy(-10.3)}
-${point(1, 2)}${orientation_block(`Input orientation`, 4)}${scf_energy(-10.4)}
-${point(2, 2)}${irc_summary}
-${orientation_block(`Input orientation`, 4)}
+${point(0, 1)}${completed_point(1, 1, [{ x: 1, energy: -10.1 }])}
+${completed_point(2, 1, [{ x: 2, energy: -10.2 }])}
+${completed_point(1, 2, [{ x: 3, energy: -10.3 }])}
+${completed_point(2, 2, [{ x: 4, energy: -10.4 }])}
+${irc_summary}
 `
 
     const trajectory = parse_gaussian_output(content)
@@ -83,13 +91,12 @@ ${orientation_block(`Input orientation`, 4)}
 
   it(`keeps an IRC transition state already present in a non-checkpoint output`, () => {
     const content = ` IRC-IRC-IRC-IRC-IRC-
-${point(0, 1)}${orientation_block(`Input orientation`, 0)}${scf_energy(-10)}
-${point(1, 1)}${orientation_block(`Input orientation`, 1)}${scf_energy(-10.1)}
-${point(2, 1)}${orientation_block(`Input orientation`, 2)}${scf_energy(-10.2)}
-${point(1, 2)}${orientation_block(`Input orientation`, 3)}${scf_energy(-10.3)}
-${point(2, 2)}${orientation_block(`Input orientation`, 4)}${scf_energy(-10.4)}
+${completed_point(0, 1, [{ x: 0, energy: -10 }])}
+${completed_point(1, 1, [{ x: 1, energy: -10.1 }])}
+${completed_point(2, 1, [{ x: 2, energy: -10.2 }])}
+${completed_point(1, 2, [{ x: 3, energy: -10.3 }])}
+${completed_point(2, 2, [{ x: 4, energy: -10.4 }])}
 ${irc_summary}
-${orientation_block(`Input orientation`, 4)}
 `
 
     const trajectory = parse_gaussian_output(content)
@@ -102,5 +109,45 @@ ${orientation_block(`Input orientation`, 4)}
       2,
     ])
     expect(trajectory.frames[2].metadata?.is_transition_state).toBe(true)
+  })
+
+  it(`keeps the final correction geometry and energy inside each IRC point`, () => {
+    const content = ` IRC-IRC-IRC-IRC-IRC-
+ Redundant internal coordinates found in file.  (old form).
+ C,0,0.000000,0.000000,0.000000
+ Recover connectivity data from disk.
+ Energy From Chk = -10.00000000
+${point(0, 1)}
+${completed_point(1, 1, [
+  { x: 1.1, energy: -10.01 },
+  { x: 1, energy: -10.1 },
+])}
+${completed_point(2, 1, [{ x: 2, energy: -10.2 }])}
+${completed_point(1, 2, [{ x: -1, energy: -10.3 }])}
+${completed_point(2, 2, [{ x: -2, energy: -10.4 }])}
+${irc_summary}
+${orientation_block(`Input orientation`, 999)}${scf_energy(-99)}
+`
+
+    const trajectory = parse_gaussian_output(content)
+
+    expect(trajectory.frames.map((frame) => frame.structure.sites[0].xyz[0])).toEqual([
+      -2,
+      -1,
+      0,
+      1,
+      2,
+    ])
+    expect(trajectory.frames.map((frame) => frame.metadata?.energy)).toEqual(
+      [-10.4, -10.3, -10, -10.1, -10.2].map((energy) =>
+        energy * 27.211386245988
+      ),
+    )
+    expect(
+      trajectory.frames.some((frame) => frame.structure.sites[0].xyz[0] === 1.1),
+    ).toBe(false)
+    expect(
+      trajectory.frames.some((frame) => frame.structure.sites[0].xyz[0] === 999),
+    ).toBe(false)
   })
 })
