@@ -288,21 +288,12 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.3
-            - **LAMMPS `.data` files open correctly** — force-field data files (`Atoms # full` from `write_data`) no longer freeze the viewer for minutes or show absurd elements: the style annotation wins over column guessing (image flags were read as coordinates), atoms are shifted by the box origin, and `Pair Coeffs` no longer bleeds into the Masses table. An 11k-atom kerogen renders in seconds as C/H/O/N.
-            - **Large systems no longer freeze on PBC boundary images** — the image search dropped its reactive-proxy overhead (190 s → 0.1 s for 11k atoms) and a successful zero-image WASM result no longer re-runs the search in JS.
-            - **Large systems get bonds again** — worker bond requests carry a deadline (a wedged worker left big structures bondless forever) and `solid_angle` auto-downgrades to `atom_radii` above 8,000 atoms.
-            - **Terminal Chinese input no longer swallows characters** — committing a pinyin candidate could emit synthetic backspaces that erased the tail of the just-typed text (timing-dependent). Fixed on desktop and mobile.
-            - **Doc viewer polish** — the Render toggle sits in the editor header next to Visualize/Save with proper accent styling.
-
-            ### New in 1.4.2
-            - **Terminal file opening works end-to-end** — Ctrl+click a file in a local shell opens it again (empty-session reads were rejected by the backend), and Ctrl+click a **directory** now navigates the Files sidebar to it.
-            - **"Open files in" targets are honored everywhere** — with a full-pane terminal, Split/Tab place the structure beside the terminal instead of silently doing nothing; **Overwrite replaces** the existing pane instead of splitting a new one each time; **Window + Overwrite** reuses a single popout and live-updates it on every open.
-            - **PDFs render in the doc viewer on every platform** — pages are drawn with pdf.js (fit-to-width, high-DPI), so Linux no longer shows a blank frame; local PDFs/images load correctly too. Markdown preview upgraded to GitHub-grade GFM + safe raw HTML, and the Edit toggle sits in the header next to PDF/Download.
-            - **`catgo view` is reliable** — repeat pushes update the External tab's label, and multi-file trajectory pushes (`catgo view a.xyz b.poscar …`) display instead of being dropped (SSE fan-out now reaches tab-alias subscribers).
-            - **Desktop popout windows fixed** — structure popouts had no Tauri ACL capability, so every call from them failed (the "Update failed: … not allowed by ACL" toast). Update checks now run only in the main window.
-            - **iOS: Chinese dictation into the terminal** — the transcript no longer re-appends on every recognizer refinement; Chinese takes the same reconcile path as English.
-            - **MCP `catgo_analyze` repaired** — symmetry / dft_input / optimize / rdf / coordination hit real endpoints (new standalone symmetry, single-structure RDF, CrystalNN coordination).
+            ### New in 1.4.6
+            - **Exact, smooth trajectory playback** — ASE and LAMMPS dump trajectories preserve source coordinates and cells exactly while the prepared-frame GPU path sustains at least 24 unique presented frames per second on the reference trajectory.
+            - **GPU impostor bonds everywhere** — trajectory playback and standalone static structures now share the same seamless GPU bond representation without midpoint boundaries.
+            - **Gaussian frame counting and IRC trajectories** — concatenated jobs no longer over-count frames, and IRC points are reconstructed in the correct order without duplicate transition-state frames.
+            - **China-friendly all-platform download center** — Windows, Apple Silicon macOS, Linux, Android, iOS/TestFlight, HPC, VS Code, and sidecar downloads are available through `dl.catgo-ucsd.org` with resumable transfers.
+            - **Cloudflare-only app acquisition and updates** — normal app downloads, update checks, and signed updater packages no longer depend on GitHub availability.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true

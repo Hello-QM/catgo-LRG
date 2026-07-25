@@ -78,15 +78,17 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
-      # Single source of truth for the version: the VS Code extension always
-      # inherits the root package.json version at publish time. Prevents
-      # shipping a stale .vsix when a release bump forgets to update
-      # extensions/vscode/package.json (this happened for v1.1.1).
-      - name: Sync extension version from root package.json
+      # Release manifests are committed together. Refuse to publish when the
+      # extension or tag is stale instead of mutating package.json in CI.
+      - name: Verify extension release version
         run: |
           root_ver=$(node -p "require('./package.json').version")
-          npm --prefix extensions/vscode pkg set version="$root_ver"
-          echo "Extension version synced to $root_ver"
+          extension_ver=$(node -p "require('./extensions/vscode/package.json').version")
+          test "$extension_ver" = "$root_ver"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "$GITHUB_REF_NAME" = "v$root_ver"
+          fi
+          echo "Extension version verified at $root_ver"
 
       - name: Build extension
         working-directory: extensions/vscode
@@ -96,28 +98,14 @@ jobs:
         working-directory: extensions/vscode
         run: pnpm dlx @vscode/vsce package --no-dependencies
 
-      # Real publish failures (bad token, network, packaging) now fail the job
-      # loudly instead of being swallowed by continue-on-error. The ONLY
-      # tolerated error is "already published" — keeps re-tagging the same
-      # version idempotent without masking genuine breakage.
+      # Duplicate versions are release errors: v1.4.6 must produce a new
+      # marketplace version, not pass as an idempotent no-op.
       - name: Publish to VS Code Marketplace
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          set +e
-          out=$(pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix 2>&1)
-          code=$?
-          echo "$out"
-          if [ "$code" -ne 0 ]; then
-            if echo "$out" | grep -qiE "already (exists|published)"; then
-              echo "::warning::Version already on the VS Code Marketplace — treating as a no-op (idempotent re-tag)."
-            else
-              echo "::error::vsce publish failed (exit $code)."
-              exit "$code"
-            fi
-          fi
+        run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
 
       # Claim ownership of the Open VSX namespace so published extensions are not
       # flagged "not a verified publisher of the namespace". The token's account
@@ -147,19 +135,8 @@ jobs:
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          set +e
           vsix=$(ls catgo-*.vsix | head -1)
-          out=$(pnpm dlx ovsx publish "$vsix" --no-dependencies 2>&1)
-          code=$?
-          echo "$out"
-          if [ "$code" -ne 0 ]; then
-            if echo "$out" | grep -qiE "already (exists|published)"; then
-              echo "::warning::Version already on Open VSX — treating as a no-op (idempotent re-tag)."
-            else
-              echo "::error::ovsx publish failed (exit $code)."
-              exit "$code"
-            fi
-          fi
+          pnpm dlx ovsx publish "$vsix" --no-dependencies
 
       - name: Upload VSIX as workflow artifact
         uses: actions/upload-artifact@v4

@@ -1,6 +1,6 @@
 [package]
 name = "catgo"
-version = "1.4.5"
+version = "1.4.6"
 description = "Interactive visualizations for materials science"
 authors = ["LRG <gul026@ucsd.edu>"]
 license-file = "../license"
