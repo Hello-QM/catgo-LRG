@@ -254,7 +254,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
 
     // Bond-length sanity filter (opt-in): drop bonds far longer than the sum
     // of covalent radii — removes spurious over-long bonds from distance-based
-    // connectivity. Uses the perceive.rs covalent-radius table.
+    // connectivity.
     let pruned_owned: Vec<crate::types::Bond>;
     let raw_bonds: &[crate::types::Bond] = if inp.style.prune_long_bonds {
         let factor = cfg_f(&cfg, "bond_prune_factor", 1.3);
@@ -293,8 +293,10 @@ pub fn render_svg(inp: &RenderInput) -> String {
                     (d[0].powi(2) + d[1].powi(2) + d[2].powi(2)).sqrt()
                 };
                 let max = factor
-                    * (crate::perceive::covalent_rad(s2n(&inp.atoms[b.i].el))
-                        + crate::perceive::covalent_rad(s2n(&inp.atoms[b.j].el)));
+                    * (crate::element_data::covalent_radius(&inp.atoms[b.i].el)
+                        .unwrap_or(1.6)
+                        + crate::element_data::covalent_radius(&inp.atoms[b.j].el)
+                            .unwrap_or(1.6));
                 len <= max
             })
             .cloned()
@@ -2049,6 +2051,20 @@ mod tests {
                 "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
         );
         assert_eq!(on.matches("<line").count(), 1, "normal-length bond kept under prune");
+    }
+
+    #[test]
+    fn prune_long_bonds_keeps_iodine_pair_with_generated_radius() {
+        let on = render(
+            r#"{"atoms":[{"el":"I","xyz":[0,0,0]},{"el":"I","xyz":[3,0,0]}],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
+        );
+        assert_eq!(
+            on.matches("<line").count(),
+            1,
+            "iodine bond below 1.3 times the generated covalent-radius sum must survive"
+        );
     }
 
     #[test]
