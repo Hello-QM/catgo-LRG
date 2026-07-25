@@ -31,6 +31,10 @@ custom, package metadata must not describe the result as plain PolyForm or
 AGPL. It will use `LicenseRef-CatGo-Noncommercial-1.0`, `license-file`, or
 `SEE LICENSE IN license`, depending on the package ecosystem.
 
+`CITATION.cff` is not a package manifest. To remain valid under the official
+CFF 1.2 schema, it will omit the top-level `license` field, whose values are a
+closed SPDX enumeration, and use the exact root-license URL in `license-url`.
+
 This is preferred over:
 
 1. Keeping AGPL and adding a README prohibition. AGPL users may remove
@@ -145,6 +149,8 @@ A Node regression test will fail before implementation and then require:
 - the exact custom license identifier in every first-party manifest;
 - no stale first-party AGPL claims in package metadata, README files, or
   `CITATION.cff`;
+- no top-level `license` field in `CITATION.cff`, the exact root
+  `license-url`, and full validation against the official CFF 1.2 schema;
 - the mandatory acknowledgement sentence and ChemRxiv DOI in the license,
   READMEs, and `CITATION.cff`;
 - explicit commercial-use, termination, enforcement, and third-party

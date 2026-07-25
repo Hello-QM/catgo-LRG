@@ -26,6 +26,8 @@ test('canonical citation file contains mandatory citation data', () => {
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
   assert.match(text, /^version: 1\.4\.6$/m)
+  assert.doesNotMatch(text, /^license:/m)
+  assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)
   assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')))
   assert.match(text, /If you use CatGo, you must acknowledge and cite it/)

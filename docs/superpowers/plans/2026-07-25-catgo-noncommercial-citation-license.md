@@ -84,6 +84,8 @@ test('canonical citation file contains mandatory citation data', () => {
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
   assert.match(text, /^version: 1\.4\.6$/m)
+  assert.doesNotMatch(text, /^license:/m)
+  assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)
   assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')))
   assert.match(text, /If you use CatGo, you must acknowledge and cite it/)
@@ -160,9 +162,12 @@ not rename the complete custom license to plain PolyForm.
 
 - [ ] **Step 4: Canonicalize the CFF file and commercial-license page**
 
-Rename `citation.cff` to `CITATION.cff`. Set `version: 1.4.6`,
-`license: LicenseRef-CatGo-Noncommercial-1.0`, and the GitHub license URL ending
-in `/blob/main/license`. Set the message exactly to:
+Rename `citation.cff` to `CITATION.cff`. Set `version: 1.4.6`, omit the
+top-level `license` field because CFF 1.2 only accepts its enumerated SPDX
+identifiers, and set `license-url` exactly to
+`https://github.com/Hello-QM/catgo-LRG/blob/main/license`. This CFF-specific
+schema requirement does not change the custom-license requirements for package
+manifests in Task 2. Set the message exactly to:
 
 ```yaml
 message: If you use CatGo, you must acknowledge and cite it as described below.

@@ -1,7 +1,6 @@
 cff-version: 1.2.0
 message: If you use CatGo, you must acknowledge and cite it as described below.
 version: 1.4.6
-license: LicenseRef-CatGo-Noncommercial-1.0
 title: CatGo
 authors:
   - family-names: Li
