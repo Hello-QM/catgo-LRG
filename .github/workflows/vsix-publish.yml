@@ -176,8 +176,12 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           vsix=$(ls extensions/vscode/catgo-*.vsix | head -1)
-          gh release view "$tag" >/dev/null 2>&1 \
-            || gh release create "$tag" --title "$tag" --notes "Release $tag"
+          for i in 1 2 3 4 5; do
+            if gh release view "$tag" >/dev/null 2>&1; then break; fi
+            gh release create "$tag" --draft --title "$tag" \
+              --notes "Release $tag" && break || sleep 15
+          done
+          gh release view "$tag" >/dev/null
           gh release upload "$tag" "$vsix" --clobber
           # The platform sidecar binaries (catgo-server-{linux-x64,darwin-arm64,
           # win-x64.exe}) that src/sidecar.ts downloads on first activate are

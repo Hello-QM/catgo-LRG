@@ -57,12 +57,36 @@ test('rewrites and validates every updater URL before publishing metadata', () =
   assert.ok(prune > uploadIndex, 'pruning starts only after root metadata uploads')
 })
 
-test('keeps release/manual triggers and resolves workflow runs to latest', () => {
+test('keeps triggers but resolves only validated CatGo app releases', () => {
   assert.match(WORKFLOW, /release:\s*\n\s+types:\s*\[published\]/)
   assert.match(WORKFLOW, /workflow_dispatch:/)
-  assert.match(
-    WORKFLOW,
-    /github\.event_name.*workflow_run[\s\S]*releases\/latest/,
-  )
+  assert.match(WORKFLOW, /APP_TAG_PATTERN:/)
+  assert.match(WORKFLOW, /releases\?per_page=100/)
+  assert.match(WORKFLOW, /sort -V/)
+  assert.match(WORKFLOW, /startsWith\(github\.event\.release\.tag_name, 'v'\)/)
+  assert.doesNotMatch(WORKFLOW, /repos\/\$\{\{ github\.repository \}\}\/releases\/latest/)
   assert.match(WORKFLOW, /group: r2-release-mirror/)
+})
+
+test('never interpolates event or output tags into secrets-bearing shell', () => {
+  assert.match(WORKFLOW, /RELEASE_EVENT_TAG:\s*\$\{\{ github\.event\.release\.tag_name \}\}/)
+  assert.match(WORKFLOW, /REQUESTED_TAG:\s*\$\{\{ inputs\.tag \}\}/)
+  assert.match(WORKFLOW, /MIRROR_TAG:\s*\$\{\{ steps\.tag\.outputs\.tag \}\}/)
+  assert.doesNotMatch(
+    WORKFLOW,
+    /tag\s*=\s*['"]\$\{\{\s*(?:github\.event\.release\.tag_name|inputs\.tag|steps\.tag\.outputs\.tag)\s*\}\}/,
+  )
+  assert.match(WORKFLOW, /\[\[ "\$tag" =~ \$APP_TAG_PATTERN \]\]/)
+})
+
+test('manual old-tag backfills cannot replace public root metadata', () => {
+  const syncStart = WORKFLOW.indexOf('- name: Sync to R2')
+  const pruneStart = WORKFLOW.indexOf('- name: Prune older releases')
+  const syncBlock = WORKFLOW.slice(syncStart, pruneStart)
+
+  assert.match(syncBlock, /latest_app_tag=/)
+  assert.match(
+    syncBlock,
+    /if \[ "\$tag" = "\$latest_app_tag" \]; then[\s\S]*aws s3 cp latest\.mirror\.json[\s\S]*aws s3 cp index\.html[\s\S]*fi/,
+  )
 })

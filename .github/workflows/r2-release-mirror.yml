@@ -47,8 +47,12 @@ concurrency:
   group: r2-release-mirror
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  APP_TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+$'
   R2_BUCKET: ${{ vars.R2_BUCKET || 'catgo-releases' }}
   R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://dl.catgo-ucsd.org' }}
   AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -61,7 +65,11 @@ env:
 
 jobs:
   mirror:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      (github.event_name != 'workflow_run' ||
+        github.event.workflow_run.conclusion == 'success') &&
+      (github.event_name != 'release' ||
+        startsWith(github.event.release.tag_name, 'v'))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -81,17 +89,44 @@ jobs:
       - name: Resolve tag
         id: tag
         if: steps.creds.outputs.configured == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            tag="${{ github.event.release.tag_name }}"
-          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
-          elif [ -n "${{ inputs.tag }}" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          set -euo pipefail
+          latest_app_tag=$(
+            gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
+              --jq '.[] |
+                select(.draft == false and .prerelease == false) |
+                .tag_name |
+                select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+              sort -V |
+              tail -n 1
+          )
+          if [ -z "$latest_app_tag" ]; then
+            echo "No published CatGo app release found." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_EVENT_TAG"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            tag="$latest_app_tag"
+          elif [ -n "$REQUESTED_TAG" ]; then
+            tag="$REQUESTED_TAG"
+          else
+            tag="$latest_app_tag"
+          fi
+          if ! [[ "$tag" =~ $APP_TAG_PATTERN ]]; then
+            echo "Refusing non-CatGo release tag: $tag" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "latest_app_tag=$latest_app_tag"
+          } >> "$GITHUB_OUTPUT"
           echo "Mirroring release: $tag"
 
       - name: Wait for asset list to stabilize
@@ -99,11 +134,14 @@ jobs:
         # published. Poll until the asset count is unchanged for 3 consecutive
         # minutes (skipped on manual dispatch — by then the release is done).
         if: steps.creds.outputs.configured == 'true' && github.event_name == 'release'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          tag="$MIRROR_TAG"
           prev=-1; stable=0
           for i in $(seq 1 30); do
-            count=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.assets | length')
+            count=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq '.assets | length')
             echo "poll $i: $count assets"
             if [ "$count" = "$prev" ]; then
               stable=$((stable + 1))
@@ -117,10 +155,13 @@ jobs:
 
       - name: Download release assets
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p dist
-          gh release download '${{ steps.tag.outputs.tag }}' \
-            --repo '${{ github.repository }}' --dir dist
+          gh release download "$MIRROR_TAG" \
+            --repo "$REPOSITORY" --dir dist
           ls -lh dist
 
       - name: Rewrite and validate latest.json URLs
@@ -152,8 +193,10 @@ jobs:
 
       - name: Generate index.html download page
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          tag="$MIRROR_TAG"
           node scripts/generate-download-page.mjs \
             --assets-dir dist \
             --tag "$tag" \
@@ -161,24 +204,55 @@ jobs:
             --output index.html
 
       - name: Sync to R2
+        id: sync
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          set -euo pipefail
+          tag="$MIRROR_TAG"
           aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"
-          if [ -f latest.mirror.json ]; then
+
+          latest_app_tag=$(
+            gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
+              --jq '.[] |
+                select(.draft == false and .prerelease == false) |
+                .tag_name |
+                select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+              sort -V |
+              tail -n 1
+          )
+          if [ "$tag" = "$latest_app_tag" ]; then
             aws s3 cp latest.mirror.json "s3://$R2_BUCKET/latest.json" \
               --content-type application/json --cache-control 'public, max-age=300'
+            aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
+              --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'
+            echo "root_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Backfilled $tag; latest app release is $latest_app_tag, so root metadata was not changed."
+            echo "root_published=false" >> "$GITHUB_OUTPUT"
           fi
-          aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
-            --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'
 
       - name: Prune older releases (keep only the latest)
         # Only prune when the tag we just synced IS the repo's latest release —
         # a manual backfill of an old tag must not delete the current one.
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
-          latest=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          latest=$(
+            gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
+              --jq '.[] |
+                select(.draft == false and .prerelease == false) |
+                .tag_name |
+                select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+              sort -V |
+              tail -n 1
+          )
           if [ "$tag" != "$latest" ]; then
             echo "synced $tag but latest is $latest — skipping prune"
             exit 0
@@ -195,12 +269,19 @@ jobs:
 
       - name: Summary
         if: steps.creds.outputs.configured == 'true'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          ROOT_PUBLISHED: ${{ steps.sync.outputs.root_published }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          tag="$MIRROR_TAG"
           {
             echo "### Mirrored $tag to R2"
             echo ""
-            echo "- Download page: $R2_PUBLIC_BASE_URL/"
-            echo "- Updater manifest: $R2_PUBLIC_BASE_URL/latest.json"
             echo "- Assets: $R2_PUBLIC_BASE_URL/$tag/<file>"
+            if [ "$ROOT_PUBLISHED" = "true" ]; then
+              echo "- Download page: $R2_PUBLIC_BASE_URL/"
+              echo "- Updater manifest: $R2_PUBLIC_BASE_URL/latest.json"
+            else
+              echo "- Root metadata: unchanged (backfill is not latest)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
