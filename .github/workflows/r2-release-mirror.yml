@@ -4,7 +4,7 @@
 # Layout in the bucket (keep-only-latest policy):
 #   <tag>/<asset>   e.g. v1.4.5/CatGo_1.4.5_x64-setup.exe
 #   latest.json     updater manifest with URLs rewritten to the mirror
-#   index.html      minimal bilingual download page listing the current assets
+#   index.html      self-contained bilingual all-platform download page
 # Older <tag>/ prefixes are pruned after a successful sync, so storage stays
 # within R2's 10 GB free tier (~2.8 GB per release). Egress from R2 is free.
 #
@@ -18,17 +18,24 @@
 #      (CLOUDFLARE_ACCOUNT_ID already exists as a secret.)
 #   Optional repo variables (defaults in env below): R2_BUCKET, R2_PUBLIC_BASE_URL.
 #
-# Triggers: `release: published` — but note releases published by workflows
-# using GITHUB_TOKEN do NOT fire this event (same gotcha as pypi-publish.yml),
-# and manual asset uploads (e.g. the iOS .ipa) may land after publication.
-# When in doubt, run the workflow_dispatch form with the tag — the sync is
-# idempotent and safe to re-run any number of times.
+# Triggers include release publication, manual dispatch, and successful
+# completion of every workflow that can attach assets to the CatGo release.
+# Build STT accelerator is intentionally absent: it owns a separate
+# `stt-accel-v*` release series.
 
 name: Mirror release to R2
 
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows:
+      - Build Desktop App
+      - Android build
+      - Build HPC Bundle
+      - Publish VSCode Extension
+      - Build VSCode Sidecar Binaries
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -54,6 +61,7 @@ env:
 
 jobs:
   mirror:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -67,12 +75,17 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.configured == 'true'
+
       - name: Resolve tag
         id: tag
         if: steps.creds.outputs.configured == 'true'
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
             tag="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
           elif [ -n "${{ inputs.tag }}" ]; then
             tag="${{ inputs.tag }}"
           else
@@ -110,42 +123,42 @@ jobs:
             --repo '${{ github.repository }}' --dir dist
           ls -lh dist
 
-      - name: Rewrite latest.json URLs to the mirror
+      - name: Rewrite and validate latest.json URLs
         # latest.json is the Tauri updater manifest; its asset URLs point at
         # github.com, which defeats the purpose for users behind the GFW.
         # Point them at the mirror instead and serve the manifest from the
         # bucket root (the updater endpoint in tauri.conf.json).
         if: steps.creds.outputs.configured == 'true'
         run: |
-          if [ -f dist/latest.json ]; then
-            jq --arg base "$R2_PUBLIC_BASE_URL" '
-              .platforms |= map_values(
-                .url |= sub("https://github.com/[^/]+/[^/]+/releases/download/"; $base + "/")
-              )' dist/latest.json > latest.mirror.json
-            jq . latest.mirror.json > /dev/null
-          else
-            echo "no latest.json in this release — skipping manifest rewrite"
+          if [ ! -f dist/latest.json ]; then
+            echo "Release has no latest.json; refusing to publish a broken updater mirror." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+
+          jq --arg base "$R2_PUBLIC_BASE_URL" '
+            .platforms |= map_values(
+              .url |= sub(
+                "^https://github.com/[^/]+/[^/]+/releases/download/";
+                $base + "/"
+              )
+            )
+            | if all(.platforms[]; (.url | startswith($base + "/")))
+              then .
+              else error("updater manifest contains a non-mirror URL")
+              end
+          ' dist/latest.json > latest.mirror.json
+          jq . latest.mirror.json > /dev/null
 
       - name: Generate index.html download page
         if: steps.creds.outputs.configured == 'true'
         run: |
           tag='${{ steps.tag.outputs.tag }}'
-          {
-            echo '<!doctype html><meta charset="utf-8">'
-            echo "<title>CatGo downloads — $tag</title>"
-            echo '<style>body{font-family:system-ui;max-width:720px;margin:3rem auto;padding:0 1rem}td{padding:.3rem .8rem}</style>'
-            echo "<h1>CatGo $tag</h1>"
-            echo '<p>中国大陆下载镜像 / China download mirror.'
-            echo '完整发布说明见 <a href="https://github.com/${{ github.repository }}/releases">GitHub Releases</a>.</p>'
-            echo '<table>'
-            for f in dist/*; do
-              name=$(basename "$f")
-              size=$(du -h "$f" | cut -f1)
-              echo "<tr><td><a href=\"$tag/$name\">$name</a></td><td>$size</td></tr>"
-            done
-            echo '</table>'
-          } > index.html
+          node scripts/generate-download-page.mjs \
+            --assets-dir dist \
+            --tag "$tag" \
+            --base-url "$R2_PUBLIC_BASE_URL" \
+            --output index.html
 
       - name: Sync to R2
         if: steps.creds.outputs.configured == 'true'
