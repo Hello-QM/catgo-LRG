@@ -32,7 +32,6 @@ function exactKeys(value, expected, kind) {
     throw new Error(`${kind} must contain only ${expected.join(', ')}`)
   }
 }
-
 function parseArguments(argv) {
   const allowed = new Set([
     '--tag',
@@ -215,4 +214,3 @@ try {
   console.error(`[macos-signing-attestation] ${error.message}`)
   process.exitCode = 1
 }
-

@@ -85,7 +85,6 @@ test('accepts an exact macOS signing attestation bound to both release artifacts
     assert.equal(result.status, 0, result.stderr || result.stdout)
   })
 })
-
 test('rejects a DMG changed after Developer-ID verification', () => {
   withFixture((current) => {
     writeFileSync(resolve(current.assets, DMG), 'replaced dmg\n')
@@ -127,4 +126,3 @@ test('rejects signer, team, source, and schema claims not authorized by the gate
     })
   }
 })
-
