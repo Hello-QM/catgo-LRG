@@ -24,6 +24,8 @@ on:
       - "svelte.config.js"
       - "wrangler.docs.toml"
       - "wrangler.app.toml"
+      - "wrangler.downloads.toml"
+      - "workers/downloads/**"
       - ".github/workflows/deploy-cloudflare.yml"
   workflow_dispatch:
 
@@ -188,3 +190,16 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config wrangler.app.toml
+
+  deploy-downloads:
+    name: Deploy dl.catgo-ucsd.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.downloads.toml

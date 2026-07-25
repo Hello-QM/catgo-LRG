@@ -1,0 +1,11 @@
+name = "catgo-downloads"
+main = "workers/downloads/index.mjs"
+compatibility_date = "2026-07-24"
+
+routes = [
+  { pattern = "dl.catgo-ucsd.org/*", zone_name = "catgo-ucsd.org" }
+]
+
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "catgo-releases"

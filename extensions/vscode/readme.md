@@ -12,7 +12,7 @@
 >
 > **Desktop client only** — the surrounding workbench *shell*, which the extension does **not** load: the **multi-pane tabbed workspace** (tabs / split-view / pop-out windows), the standalone **visual workflow DAG editor**, and the **HPC terminal & job manager**.
 >
-> For the full workbench use the **[CatGo desktop client](https://github.com/Hello-QM/catgo-LRG/releases)** (Windows / macOS / Linux) or the **[web app](https://app.catgo-ucsd.org)**.
+> For the full workbench use the **[CatGo desktop client](https://dl.catgo-ucsd.org/)** (Windows / macOS / Linux) or the **[web app](https://app.catgo-ucsd.org)**.
 
 ## ✨ Features
 

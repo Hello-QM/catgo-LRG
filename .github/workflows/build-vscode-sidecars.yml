@@ -107,6 +107,7 @@ jobs:
           # retry briefly in case this job wins the race, then upload.
           for i in 1 2 3 4 5; do
             if gh release view "$tag" >/dev/null 2>&1; then break; fi
-            gh release create "$tag" --title "$tag" --notes "Release $tag" && break || sleep 15
+            gh release create "$tag" --draft --title "$tag" \
+              --notes "Release $tag" && break || sleep 15
           done
           gh release upload "$tag" "${{ matrix.asset_name }}" --clobber
