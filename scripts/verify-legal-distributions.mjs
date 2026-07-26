@@ -56,7 +56,7 @@ const INTERNAL_ARTIFACT_WORKFLOWS = new Set([
 ])
 
 const DISTRIBUTION_MARKER =
-  /upload-artifact|gh release upload|action-gh-release|tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|build-push-action|wrangler-action|aws s3 sync/
+  /upload-artifact|gh release upload|action-gh-release|tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|build-push-action|wrangler-action|pnpm dlx wrangler@\S+ deploy|aws s3 sync/
 
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const CITATION_REQUEST =
