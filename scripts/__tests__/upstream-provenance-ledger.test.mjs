@@ -49,6 +49,35 @@ test('machine-readable ledger pins exact MatterViz import evidence', () => {
   ])
 })
 
+test('bounded pymatgen, ASE, MatterViz, and xterm mappings are notice-backed', () => {
+  const ledger = JSON.parse(read(LEDGER_PATH))
+  assert.equal(ledger.releaseStatus, 'NOTICE_BACKED')
+  assert.deepEqual(ledger.noticeFiles, [
+    'THIRD_PARTY_NOTICES.md',
+    'third_party/licenses/ASE-LGPL-2.1.txt',
+    'third_party/licenses/MatterViz-MIT.txt',
+    'third_party/licenses/pymatgen-MIT.txt',
+    'third_party/licenses/xterm.js-MIT.txt',
+  ])
+  assert.deepEqual(ledger.coveredPaths, [
+    'extensions/rust/src/algorithms/ewald.rs',
+    'extensions/rust/src/cif.rs',
+    'extensions/rust/src/composition.rs',
+    'extensions/rust/src/crystal_nn.rs',
+    'extensions/rust/src/element.rs',
+    'extensions/rust/src/integrators.rs',
+    'extensions/rust/src/io.rs',
+    'extensions/rust/src/lattice.rs',
+    'extensions/rust/src/matcher.rs',
+    'extensions/rust/src/structure_matcher.rs',
+    'extensions/rust/src/voronoi_cell.rs',
+    'extensions/rust/src/wasm_types.rs',
+    'src/lib/structure/TerminalPanel.svelte',
+    'src/lib/xrd/atomic-scattering-params.ts',
+    'src/lib/xrd/calc-xrd.ts',
+  ])
+})
+
 test('pymatgen mappings distinguish data, implementations, tests, and interoperability', () => {
   const { pymatgen } = JSON.parse(read(LEDGER_PATH)).components
   assert.equal(

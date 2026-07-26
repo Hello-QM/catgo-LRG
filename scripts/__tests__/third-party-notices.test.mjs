@@ -75,6 +75,24 @@ test('the PORMAKE notice records official PyPI notice evidence without inferring
   assert.match(text, /no dedicated open redistribution license was found/i)
 })
 
+test('the bounded pymatgen, ASE, MatterViz, and xterm mappings have notice-backed release evidence', () => {
+  const text = read('THIRD_PARTY_NOTICES.md')
+
+  assert.match(text, /bounded pymatgen, ASE, MatterViz, and xterm\.js mappings/i)
+  assert.match(text, /\*\*NOTICE_BACKED\*\* release evidence/i)
+  for (const path of [
+    'extensions/rust/src/algorithms/ewald.rs',
+    'extensions/rust/src/integrators.rs',
+    'src/lib/structure/TerminalPanel.svelte',
+    'src/lib/xrd/atomic-scattering-params.ts',
+    'src/lib/xrd/calc-xrd.ts',
+  ]) {
+    assert.match(text, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), path)
+  }
+  assert.match(text, /actual pymatgen revisions[\s\S]*audit snapshot must not be promoted/i)
+  assert.match(text, /actual ASE revision used by the original author/i)
+})
+
 test('bundled fonts retain copyright notices and the complete OFL text', () => {
   const notices = read('third_party/licenses/BUNDLED-FONTS.txt')
   for (const copyright of [

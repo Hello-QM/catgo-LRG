@@ -111,6 +111,16 @@ test('accepts NOTICE_BACKED covered directories with nested regular files', () =
   }
 })
 
+test("the repository's notice-backed provenance ledgers are both release-verifiable", () => {
+  assert.deepEqual(verifyReleaseRights(ROOT), [
+    { ledger: 'pormake-database-provenance.json', status: 'NOTICE_BACKED' },
+    { ledger: 'pymatgen-ase-xterm-provenance.json', status: 'NOTICE_BACKED' },
+  ])
+  const result = verify(ROOT)
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  assert.match(result.stdout, /VERIFIED: 2 ledgers/i)
+})
+
 test('blocks NOTICE_BACKED covered directories with no regular files', () => {
   const root = fixture({
     'empty-vendor-component.json': {

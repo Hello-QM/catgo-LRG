@@ -297,6 +297,20 @@ does not prove the revision actually used by the original author, the immutable
 revision below is identified only as a verified audit snapshot and the external
 evidence gate remains open.
 
+The bounded pymatgen, ASE, MatterViz, and xterm.js mappings are supported by
+retained notices that provide **NOTICE_BACKED** release evidence:
+`extensions/rust/src/algorithms/ewald.rs`,
+`extensions/rust/src/cif.rs`, `extensions/rust/src/composition.rs`,
+`extensions/rust/src/crystal_nn.rs`, `extensions/rust/src/element.rs`,
+`extensions/rust/src/integrators.rs`, `extensions/rust/src/io.rs`,
+`extensions/rust/src/lattice.rs`, `extensions/rust/src/matcher.rs`,
+`extensions/rust/src/structure_matcher.rs`,
+`extensions/rust/src/voronoi_cell.rs`, `extensions/rust/src/wasm_types.rs`,
+`src/lib/structure/TerminalPanel.svelte`,
+`src/lib/xrd/atomic-scattering-params.ts`, and `src/lib/xrd/calc-xrd.ts`.
+This bounded release classification neither identifies an actual adopted
+revision nor closes either external evidence gate.
+
 ### pymatgen
 
 - Source: https://github.com/materialsproject/pymatgen
