@@ -385,7 +385,10 @@ jobs:
             echo "::error::Untrusted TestFlight exact-tag backfill context."
             exit 1
           fi
-          draft=$(gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.draft')
+          draft=$(gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --json isDraft \
+            --jq '.isDraft')
           if [ "$draft" != "true" ]; then
             echo "::error::Release $RELEASE_TAG must still be a draft."
             exit 1

@@ -114,7 +114,11 @@ test('binds direct and trusted exact-tag backfill uploads to the release source'
   assert.match(run, /"accepted"/)
   assert.match(run, /RELEASE_SOURCE_COMMIT/)
   assert.match(run, /commits\/\$RELEASE_TAG/)
-  assert.match(run, /gh api[\s\S]*\.draft/)
+  assert.match(
+    run,
+    /gh release view "\$RELEASE_TAG"[\s\S]*--json isDraft[\s\S]*--jq '\.isDraft'/,
+  )
+  assert.doesNotMatch(run, /releases\/tags\/\$RELEASE_TAG/)
   assert.match(run, /gh release upload "\$RELEASE_TAG"[\s\S]*--clobber/)
   assert.doesNotMatch(run, /\$\{\{\s*inputs\.release_tag\s*\}\}/)
 })
