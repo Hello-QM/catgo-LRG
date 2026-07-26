@@ -62,8 +62,8 @@ const WORKFLOW_INVENTORY = {
     classification: 'root-versioned-publisher',
     gate: {
       step: 'Verify release version',
-      tagSource: /github\.event\.release\.tag_name/,
-      requireSource: /inputs\.dry_run/,
+      tagSource: /steps\.request\.outputs\.release_tag/,
+      requireSource: /RELEASE_VERSION_REQUIRE_TAG:\s*true/,
     },
   },
   'r2-release-mirror.yml': {

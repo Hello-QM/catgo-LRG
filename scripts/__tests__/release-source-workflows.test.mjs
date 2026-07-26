@@ -63,12 +63,9 @@ const RELEASE_WORKFLOWS = [
   {
     file: 'pypi-publish.yml',
     job: 'build-and-publish',
-    checkoutRef:
-      "${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}",
-    tag:
-      "${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}",
-    requireTag:
-      "${{ github.event_name == 'release' || !inputs.dry_run }}",
+    checkoutRef: '${{ steps.request.outputs.release_tag }}',
+    tag: '${{ steps.request.outputs.release_tag }}',
+    requireTag: true,
   },
   {
     file: 'build-vscode-sidecars.yml',
