@@ -537,3 +537,58 @@ jobs:
           tar tzf catgo-legal-bundle.tar.gz
           tag="${CATGO_RELEASE_TAG}"
           gh release upload "$tag" catgo-legal-bundle.tar.gz --clobber
+
+  normalize-updater-manifest:
+    name: Normalize updater manifest
+    needs: [build]
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: >-
+        ${{ startsWith(github.ref, 'refs/tags/') &&
+            github.ref_name ||
+            inputs.release_tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Normalize canonical Windows updater metadata
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --pattern latest.json
+          expected_url="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/CatGo_${version}_x64-setup.exe"
+          jq -e \
+            --arg version "$version" \
+            --arg expectedUrl "$expected_url" \
+            '.version == $version and
+             (.platforms | type == "object") and
+             (.platforms["windows-x86_64-nsis"] | type == "object") and
+             .platforms["windows-x86_64-nsis"].url == $expectedUrl and
+             (.platforms["windows-x86_64-nsis"].signature |
+               type == "string" and length > 0)' \
+            latest.json > /dev/null
+          jq '
+            .platforms["windows-x86_64"] =
+              .platforms["windows-x86_64-nsis"]
+          ' latest.json > latest.normalized.json
+          mv latest.normalized.json latest.json
+          jq -e \
+            --arg expectedUrl "$expected_url" \
+            '.platforms["windows-x86_64"].url == $expectedUrl and
+             .platforms["windows-x86_64"].signature ==
+               .platforms["windows-x86_64-nsis"].signature' \
+            latest.json > /dev/null
+          gh release upload "$RELEASE_TAG" latest.json \
+            --repo "$REPOSITORY" \
+            --clobber

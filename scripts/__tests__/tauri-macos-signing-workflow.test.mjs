@@ -72,6 +72,34 @@ test('branch dispatch is smoke-only while tag push or dispatch publishes exact s
   assert.equal(release.with.releaseDraft, true)
 })
 
+test('normalizes the canonical Windows updater after every release matrix completes', () => {
+  const current = workflow()
+  const normalize = current.jobs['normalize-updater-manifest']
+
+  assert.ok(normalize)
+  assert.deepEqual(normalize.needs, ['build'])
+  assert.deepEqual(normalize.permissions, { contents: 'write' })
+  assert.match(normalize.if, /needs\.build\.result == 'success'/)
+  assert.match(normalize.if, /refs\/tags/)
+  assert.match(normalize.if, /inputs\.release_tag/)
+
+  const step = stepNamed(
+    normalize.steps,
+    'Normalize canonical Windows updater metadata',
+  )
+  assert.ok(step)
+  assert.match(step.run, /gh release download "\$RELEASE_TAG"/)
+  assert.match(
+    step.run,
+    /\.platforms\["windows-x86_64"\]\s*=\s*\.platforms\["windows-x86_64-nsis"\]/,
+  )
+  assert.match(step.run, /CatGo_\$\{version\}_x64-setup\.exe/)
+  assert.match(
+    step.run,
+    /gh release upload "\$RELEASE_TAG" latest\.json[\s\S]*--clobber/,
+  )
+})
+
 test('release macOS builds fail closed before Tauri when any signing secret is absent', () => {
   const steps = workflowSteps()
   const preflight = stepNamed(steps, 'Preflight macOS release signing')
