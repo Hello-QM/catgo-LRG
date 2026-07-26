@@ -1,7 +1,8 @@
 cff-version: 1.2.0
-message: This work used CatGo (https://catgo-ucsd.org). If you use CatGo, you must acknowledge and cite it as described below.
+message: If CatGo contributes to your work, please acknowledge and cite it as described below. This request is not an additional condition of AGPL-3.0-or-later.
 version: 1.4.6
 title: CatGo
+license: AGPL-3.0-or-later
 authors:
   - family-names: Li
     given-names: Wanlu

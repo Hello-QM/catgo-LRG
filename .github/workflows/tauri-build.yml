@@ -320,13 +320,13 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License change in 1.4.6
-            CatGo 1.4.6 distributions use the **source-available CatGo Noncommercial Research License 1.0**. Commercial use requires prior written permission; see [COMMERCIAL_LICENSE.md](https://github.com/${{ github.repository }}/blob/main/COMMERCIAL_LICENSE.md) or contact `gul026@ucsd.edu`.
+            CatGo 1.4.6 distributions use **AGPL-3.0-or-later**.
 
-            Every public output must include this exact acknowledgement:
+            If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
             > This work used CatGo (https://catgo-ucsd.org).
 
-            It must also cite DOI [`10.26434/chemrxiv.15002984/v1`](https://doi.org/10.26434/chemrxiv.15002984/v1). Third-party materials retain their own terms. Copies of historical CatGo releases already distributed under AGPL remain governed by those grants; those AGPL permissions are **not revoked**.
+            Please cite DOI [`10.26434/chemrxiv.15002984/v1`](https://doi.org/10.26434/chemrxiv.15002984/v1). This request is not an additional condition of the AGPL license. Third-party materials retain their own terms. Historical AGPL grants remain in effect.
 
             ### Downloads
             - **Windows** — `.msi` (recommended) or `.exe`

@@ -149,7 +149,6 @@ Thanks again — happy hacking!
 - Third-party code must retain its original notices; copying it into CatGo does
   not relicense third-party code.
 - Accepting a pull request does not by itself prove copyright assignment.
-- Before accepting a contribution, maintainers may require a separate
-  contributor agreement so the project has the right to license and enforce
-  its code.
-- Contributions must not weaken or contradict the CatGo noncommercial terms.
+- Contributions to CatGo are accepted under AGPL-3.0-or-later.
+- Requested acknowledgement and citation are not an additional condition of
+  the AGPL license.

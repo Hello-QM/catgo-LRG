@@ -3,8 +3,9 @@
 This file records third-party code and assets identified in the CatGo source
 tree as audited at commit `ba35376e98d888aaee02f9cb34848da25110a0cf`.
 It is an evidence inventory, not a legal opinion or a claim that every
-third-party item has been found. The CatGo Noncommercial Research License 1.0
-does not replace or override the licenses described here.
+third-party item has been found. CatGo is licensed under AGPL-3.0-or-later,
+which does not replace or override the licenses described here. Requested
+acknowledgement and citation are not additional conditions of that license.
 
 The path scopes below are deliberately narrow. A path listed for one component
 does not imply that every byte in that path came from that component, and an

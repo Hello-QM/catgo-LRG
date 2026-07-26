@@ -35,17 +35,15 @@ repository. This package is the Python/CLI + web-UI distribution.
 
 ## License and citation
 
-CatGo is licensed under the CatGo Noncommercial Research License 1.0.
-Commercial use requires prior written permission; see
-[COMMERCIAL_LICENSE.md](https://github.com/Hello-QM/catgo-LRG/blob/main/COMMERCIAL_LICENSE.md).
-
-Every public output resulting from CatGo use must visibly include:
+CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
+please include the acknowledgement and preferred citation below. This request
+is not an additional condition of the AGPL license.
 
 ```
 This work used CatGo (https://catgo-ucsd.org).
 ```
 
-Every such public output must also cite CatGo using the preferred ChemRxiv DOI:
+Please cite CatGo using the preferred ChemRxiv DOI:
 [10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1),
 and the canonical
 [CITATION.cff](https://github.com/Hello-QM/catgo-LRG/blob/main/CITATION.cff).

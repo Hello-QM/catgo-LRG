@@ -23,9 +23,12 @@ const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
 const AGPL_ID = 'AGPL-3.0-or-later'
+const CITATION_REQUEST =
+  'If CatGo contributes to your work, please acknowledge and cite it as ' +
+  'described below. This request is not an additional condition of ' +
+  'AGPL-3.0-or-later.'
 const AGPL_SHA256 =
   '0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0'
-const CUSTOM_LICENSE = 'LicenseRef-CatGo-Noncommercial-1.0'
 const FORBLAZE_IMPORT_COMMIT = 'dcb8a503245602dae82a4157de6a69ab1d795fe1'
 
 const noticeLinkTargets = (path) =>
@@ -103,7 +106,10 @@ const workflowInventory = {
 
 const licenseClaimInventory = {
   activeFirstParty: [
+    'CITATION.cff',
     'COMMERCIAL_LICENSE.md',
+    'contributing.md',
+    'contributing.zh.md',
     'docs/.vitepress/config.ts',
     'extensions/rust-wasm/README.md',
     'extensions/vscode/readme.md',
@@ -111,6 +117,7 @@ const licenseClaimInventory = {
     'readme.md',
     'readme.zh.md',
     'server/README-pypi.md',
+    'THIRD_PARTY_NOTICES.md',
   ],
   historicalGrantPreservation: [
     '.github/release-notes/v1.4.6.md',
@@ -122,9 +129,11 @@ const licenseClaimInventory = {
     'docs/zh/reference/changelog.md',
   ],
   redistributedThirdPartyNotices: [
-    'THIRD_PARTY_NOTICES.md',
+    'extensions/rust-wasm/CITATION.cff',
     'extensions/rust-wasm/THIRD_PARTY_NOTICES.md',
+    'extensions/vscode/CITATION.cff',
     'extensions/vscode/THIRD_PARTY_NOTICES.md',
+    'server/CITATION.cff',
     'server/THIRD_PARTY_NOTICES.md',
   ],
 }
@@ -246,24 +255,22 @@ test('root license is the canonical GNU AGPL v3 text', () => {
   assert.doesNotMatch(bytes.toString('utf8'), /CatGo Noncommercial Research License/)
 })
 
-test('canonical citation file contains mandatory citation data', () => {
+test('canonical citation file requests citation without adding an AGPL condition', () => {
   assert.equal(existsSync(resolve(ROOT, 'citation.cff')), false)
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
   assert.match(text, /^version: 1\.4\.6$/m)
-  assert.doesNotMatch(text, /^license:/m)
+  assert.match(text, /^license: AGPL-3\.0-or-later$/m)
   assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)
   assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')))
-  assert.match(text, /If you use CatGo, you must acknowledge and cite it/)
+  assert.match(text, new RegExp(CITATION_REQUEST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
 
-test('commercial license page repeats the enforceable entry points', () => {
+test('commercial license page is a superseded AGPL notice', () => {
   const text = read('COMMERCIAL_LICENSE.md')
-  assert.match(text, /gul026@ucsd\.edu/)
-  assert.match(text, /LicenseRef-CatGo-Noncommercial-1\.0/)
-  assert.match(text, /not open source/i)
-  assert.match(text, /historical releases/i)
+  assert.match(text, /superseded.*AGPL-3\.0-or-later/is)
+  assert.doesNotMatch(text, /commercial use requires|prior written commercial permission/i)
 })
 
 test('first-party manifests declare AGPL-3.0-or-later', () => {
@@ -538,54 +545,46 @@ test('separately licensed crates retain their own terms', () => {
   assert.match(read('extensions/vsepr-rs/Cargo.toml'), /MIT OR Apache-2\.0/)
 })
 
-const userDocs = ['readme.md', 'readme.zh.md', 'server/README-pypi.md']
+const userDocs = [
+  'readme.md',
+  'readme.zh.md',
+  'server/README-pypi.md',
+  'extensions/rust-wasm/README.md',
+  'extensions/vscode/readme.md',
+  'docs/.vitepress/config.ts',
+  'contributing.md',
+  'contributing.zh.md',
+]
 
-test('user docs require acknowledgement, citation, and commercial permission', () => {
+test('active user surfaces make citation a non-binding AGPL request', () => {
   for (const file of userDocs) {
     const text = read(file)
-    assert.match(text, /CatGo Noncommercial Research License 1\.0/, file)
-    assert.match(text, /CITATION\.cff/, file)
-    assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')), file)
-    assert.match(text, /COMMERCIAL_LICENSE\.md/, file)
-    assert.doesNotMatch(text, /AGPL-3\.0-or-later|AGPL v3/, file)
-    assert.match(
-      text,
-      new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-      file,
-    )
+    assert.doesNotMatch(text,
+      /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i, file)
+    assert.match(text, /AGPL-3\.0-or-later/, file)
+    assert.match(text, /not an additional condition|不构成.*附加条件/i, file)
   }
-  const englishReadme = read('readme.md')
-  assert.match(englishReadme, /must .*citation/i)
-  assert.match(englishReadme, /prior written permission/i)
-  const pypiReadme = read('server/README-pypi.md')
-  assert.match(pypiReadme, /Every such public output must also cite/i)
-  assert.match(pypiReadme, /prior written permission/i)
-  const chineseReadme = read('readme.zh.md')
-  assert.match(chineseReadme, /必须.*致谢.*引用/)
-  assert.match(chineseReadme, /必须事先取得书面许可/)
 })
 
-test('contribution guides disclose the relicensing authority requirement', () => {
+test('contribution guides preserve third-party provenance under AGPL', () => {
   const english = read('contributing.md')
   assert.match(english, /must have the right to submit/i)
   assert.match(english, /third-party code must retain its original notices/i)
   assert.match(english, /not.*relicense third-party/i)
   assert.match(english, /does not by itself prove copyright assignment/i)
-  assert.match(english, /may require a separate\s+contributor agreement/i)
-  assert.match(english, /right to license and enforce/i)
-  assert.match(english, /must not weaken or contradict.*noncommercial terms/i)
+  assert.match(english, /AGPL-3\.0-or-later/)
+  assert.match(english, /not an additional condition/i)
 
   const chinese = read('contributing.zh.md')
   assert.match(chinese, /贡献者必须有权/)
   assert.match(chinese, /第三方代码必须保留原有声明/)
   assert.match(chinese, /并不会.*重新许可.*第三方代码/)
   assert.match(chinese, /接受.*本身并不证明著作权已经转让/)
-  assert.match(chinese, /可在接受贡献前要求单独的贡献者协议/)
-  assert.match(chinese, /许可和维权/)
-  assert.match(chinese, /不得削弱或抵触.*非商业条款/)
+  assert.match(chinese, /AGPL-3\.0-or-later/)
+  assert.match(chinese, /不构成.*附加条件/)
 })
 
-test('active non-package surfaces retain their documented terms', () => {
+test('active non-package surfaces declare AGPL without custom licensing claims', () => {
   const active = new Set([
     ...licenseClaimInventory.activeFirstParty.filter((file) => file !== 'license'),
     'extensions/rust-wasm/CITATION.cff',
@@ -596,19 +595,8 @@ test('active non-package surfaces retain their documented terms', () => {
     'CITATION.cff',
   ])
   for (const file of active) {
-    assert.doesNotMatch(read(file), /AGPL|GNU AFFERO/i, file)
+    assert.match(read(file), /AGPL-3\.0-or-later/, file)
+    assert.doesNotMatch(read(file),
+      /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i, file)
   }
-  const vscodeReadme = read('extensions/vscode/readme.md')
-  assert.match(vscodeReadme, /CatGo Noncommercial Research License 1\.0/)
-  assert.match(
-    vscodeReadme,
-    new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-  )
-  assert.match(vscodeReadme, /must also cite CatGo/i)
-  assert.match(vscodeReadme, new RegExp(DOI.replaceAll('.', '\\.')))
-  assert.match(
-    vscodeReadme,
-    /Commercial use requires\s+prior written permission/i,
-  )
-  assert.match(vscodeReadme, /gul026@ucsd\.edu/)
 })

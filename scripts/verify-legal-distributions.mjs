@@ -8,6 +8,7 @@ import yaml from 'js-yaml'
 
 import {
   ACKNOWLEDGEMENT,
+  ACKNOWLEDGEMENT_NOTICE,
   DEFAULT_TARGETS,
   legalBundleSources,
   PACKAGE_TARGETS,
@@ -58,6 +59,10 @@ const DISTRIBUTION_MARKER =
   /upload-artifact|gh release upload|action-gh-release|tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|build-push-action|wrangler-action|aws s3 sync/
 
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
+const CITATION_REQUEST =
+  'If CatGo contributes to your work, please acknowledge and cite it as ' +
+  'described below. This request is not an additional condition of ' +
+  'AGPL-3.0-or-later.'
 
 function requireMatch(path, pattern, explanation) {
   assert.match(read(path), pattern, `${path}: ${explanation}`)
@@ -181,8 +186,12 @@ function discoverDistributionWorkflows() {
 }
 
 function verifySources() {
-  assert.match(read('license'), new RegExp(ACKNOWLEDGEMENT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-  assert.match(read('CITATION.cff'), new RegExp(ACKNOWLEDGEMENT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.match(read('license'), /GNU AFFERO GENERAL PUBLIC LICENSE/)
+  assert.match(read('CITATION.cff'), /^license: AGPL-3\.0-or-later$/m)
+  assert.match(
+    read('CITATION.cff'),
+    new RegExp(CITATION_REQUEST.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  )
   for (const source of legalBundleSources()) read(source)
 }
 
@@ -198,7 +207,7 @@ export function verifyStagedLegalBundles() {
     }
     assert.equal(
       readFileSync(resolve(ROOT, target, 'ACKNOWLEDGEMENT.txt'), 'utf8'),
-      `${ACKNOWLEDGEMENT}\n`,
+      ACKNOWLEDGEMENT_NOTICE,
       `${target}/ACKNOWLEDGEMENT.txt: staged acknowledgement is stale`,
     )
   }
@@ -315,8 +324,8 @@ function verifyReleaseAssets() {
   )
   requireMatch(
     '.github/release-notes/v1.4.6.md',
-    /CatGo Noncommercial Research License 1\.0[\s\S]*This work used CatGo \(https:\/\/catgo-ucsd\.org\)\.[\s\S]*10\.26434\/chemrxiv\.15002984\/v1[\s\S]*not revoked/i,
-    'release body must prominently disclose migration, acknowledgement, DOI, and preserved AGPL grants',
+    /AGPL-3\.0-or-later[\s\S]*This work used CatGo \(https:\/\/catgo-ucsd\.org\)\.[\s\S]*10\.26434\/chemrxiv\.15002984\/v1[\s\S]*not an additional condition/i,
+    'release body must prominently disclose AGPL, the requested acknowledgement, DOI, and its non-binding status',
   )
   requireActiveWorkflowRun(
     '.github/workflows/tauri-build.yml',

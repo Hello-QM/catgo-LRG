@@ -74,7 +74,7 @@ test('canonical sync stages the complete redistribution bundle byte-for-byte', (
     for (const path of REQUIRED_FILES) {
       const staged = readFileSync(resolve(output, path))
       if (path === 'ACKNOWLEDGEMENT.txt') {
-        assert.equal(staged.toString('utf8'), `${ACK}\n`, path)
+        assert.equal(staged.toString('utf8'), legalSync.ACKNOWLEDGEMENT_NOTICE, path)
       } else {
         assert.deepEqual(staged, readFileSync(resolve(ROOT, path)), path)
       }

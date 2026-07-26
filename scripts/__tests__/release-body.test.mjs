@@ -66,14 +66,13 @@ exit 0
 test('canonical v1.4.6 release body contains every mandatory disclosure', () => {
   assert.ok(existsSync(NOTES), 'canonical release notes file exists')
   const body = readFileSync(NOTES, 'utf8')
-  assert.match(body, /CatGo Noncommercial Research License 1\.0/)
-  assert.match(body, /source-available/i)
-  assert.match(body, /prior written permission/i)
-  assert.match(body, /COMMERCIAL_LICENSE\.md/)
-  assert.match(body, /gul026@ucsd\.edu/)
+  assert.match(body, /AGPL-3\.0-or-later/)
+  assert.doesNotMatch(body,
+    /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i)
   assert.match(body, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
   assert.match(body, /10\.26434\/chemrxiv\.15002984\/v1/)
-  assert.match(body, /historical[\s\S]*AGPL[\s\S]*not revoked/i)
+  assert.match(body, /please include this acknowledgement/i)
+  assert.match(body, /not an additional condition/i)
 })
 
 test('existing release is always edited to the canonical body', () => {

@@ -348,7 +348,7 @@ export default defineConfig({
           ],
         },
         footer: {
-          message: `CatGo Noncommercial Research License 1.0：公开成果必须致谢并引用 CatGo；商业使用须事先取得书面许可，请联系 gul026@ucsd.edu。`,
+          message: `CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明并引用；该请求不构成 AGPL 许可的附加条件。`,
           copyright: `Copyright 2024-present CatGo Contributors`,
         },
         docFooter: { prev: `上一页`, next: `下一页` },
@@ -742,7 +742,7 @@ export default defineConfig({
 
     // Footer
     footer: {
-      message: `CatGo Noncommercial Research License 1.0. Public outputs require acknowledgment and citation. Commercial use requires prior written commercial permission; contact gul026@ucsd.edu.`,
+      message: `CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work, please acknowledge and cite it; this request is not an additional condition of the AGPL license.`,
       copyright: `Copyright 2024-present CatGo Contributors`,
     },
 
