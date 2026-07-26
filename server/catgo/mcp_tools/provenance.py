@@ -23,7 +23,16 @@ UNVERIFIABLE verdict rather than a silent pass.
 
 # what a checkable claim of each kind needs, beyond the value itself
 NEEDS = {
-    "binding_dG": ["ads_titels", "bare_titels", "nelect_ads", "nelect_bare"],
+    # `reference_dir` is asked for on the EMISSION side even though certification does
+    # not strictly require it: measured on a live ai-screen tree, only 67 of 751
+    # adsorbate directories could be paired with their bare slab by name heuristics
+    # (9%), because one project used two opposite naming conventions across its own
+    # trees (<species>_<M1>_<M2> in one, <M1>_<M2>_<species> in another) with
+    # inconsistent metal-pair ordering. The pairwise PAW gate carries the largest
+    # recorded blast radius here (~3.1 eV across 122 units, undetected for two months)
+    # and it simply cannot run without knowing which calculation was referenced.
+    "binding_dG": ["ads_titels", "bare_titels", "nelect_ads", "nelect_bare",
+                   "reference_dir"],
     "limiting_potential": ["ul_reaction", "ul_reference", "ul_convention"],
     "her_dGH": ["gas_entropy_included"],
     "free_energy": ["temperature", "pressure", "gas_entropy_included"],

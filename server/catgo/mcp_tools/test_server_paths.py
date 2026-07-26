@@ -50,6 +50,11 @@ def test_envelope_declares_what_it_cannot_vouch_for():
     assert e["value"]["overpotential"] == 1.07
     assert e["provenance"]["method"] == "workflow.catalysis.oer"
     assert e["unverifiable_without"] == ["ul_reaction", "ul_reference", "ul_convention"]
+    # binding_dG must also ask which calculation was referenced — without it the
+    # pairwise PAW gate cannot be run at all (only 9% of a live tree could be paired)
+    b = prov.envelope(-1.2, tool="catgo_catalysis", action="adsorption_energy",
+                      claim="binding_dG")
+    assert "reference_dir" in b["unverifiable_without"], b
 
 
 def test_envelope_never_invents_provenance():
