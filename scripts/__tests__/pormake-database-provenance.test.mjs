@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -11,6 +12,39 @@ const LEDGER_PATH =
   'third_party/provenance/pormake-database-provenance.json'
 const NOTICE_PATH = 'THIRD_PARTY_NOTICES.md'
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
+const DATABASE_ROOT = 'server/catgo/vendor/pormake/database'
+
+const databaseManifest = (path) => {
+  const records = []
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory)) {
+      const file = join(directory, entry)
+      if (statSync(file).isDirectory()) {
+        visit(file)
+      } else {
+        records.push({
+          path: relative(resolve(ROOT, DATABASE_ROOT), file).split(sep).join('/'),
+          sha256: createHash('sha256').update(readFileSync(file)).digest('hex'),
+        })
+      }
+    }
+  }
+
+  visit(resolve(ROOT, path))
+  const sortedRecords = records.sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )
+  return {
+    fileCount: sortedRecords.length,
+    sha256: createHash('sha256')
+      .update(
+        sortedRecords
+          .map(({ path, sha256 }) => `${sha256}  ${path}\n`)
+          .join(''),
+      )
+      .digest('hex'),
+  }
+}
 
 test('PORMAKE database ledger pins the exact imported tree and official archive', () => {
   assert.equal(existsSync(resolve(ROOT, LEDGER_PATH)), true, LEDGER_PATH)
@@ -35,8 +69,8 @@ test('PORMAKE database ledger pins the exact imported tree and official archive'
       'SHA-256 of sorted sha256sum records with paths relative to the database root',
     bbs: '793516ee8a627990e633633c9d97c39e339d03a26cb09c893dcccaa035801290',
     topologies:
-      '45bc4d3b8cabae37f935fb88a1436bfc0db3a695962b992b779fd44e2043ca4d',
-    all: '0e9df18d6bfd14f4970375ec40242d131eb245547316014e44049f1353b65548',
+      '6d5c74c7d1647304983a39328c157e2f7701bc7821dbf68a9a97fa7b6260f595',
+    all: 'aaf45f145fccd856509542295884a7877f1cf67b36f8ae3d3cd2eda7d4aeb910',
   })
   assert.deepEqual(ledger.counts, {
     databaseFiles: 3274,
@@ -44,6 +78,66 @@ test('PORMAKE database ledger pins the exact imported tree and official archive'
     topologiesCgd: 2404,
     toBaCCoBuildingBlocks: 71,
     coREBuildingBlocks: 796,
+  })
+})
+
+test('PORMAKE notice-backed ledger records the official PyPI 0.2.2 artifacts', () => {
+  const ledger = JSON.parse(read(LEDGER_PATH))
+
+  assert.equal(ledger.releaseStatus, 'NOTICE_BACKED')
+  assert.deepEqual(ledger.noticeFiles, [
+    'THIRD_PARTY_NOTICES.md',
+    'server/catgo/vendor/pormake/LICENSE',
+    'third_party/licenses/PORMAKE-MIT.txt',
+  ])
+  assert.deepEqual(ledger.coveredPaths, [
+    'server/catgo/vendor/pormake/database',
+  ])
+  assert.equal(ledger.officialPyPIRelease.version, '0.2.2')
+  assert.deepEqual(ledger.officialPyPIRelease, {
+    project: 'pormake',
+    version: '0.2.2',
+    artifacts: {
+      wheel: {
+        filename: 'pormake-0.2.2-py3-none-any.whl',
+        url: 'https://files.pythonhosted.org/packages/c4/a5/f374f804c02b2be4d31f2f70452d5028f28753ce9a19bc664efdf36e4893/pormake-0.2.2-py3-none-any.whl',
+        sha256: 'cdcd945ed9146781cb05154b34cc4fb283c84e0d12cd6e0bb6c31e223c293c20',
+        licensePath: 'pormake-0.2.2.dist-info/LICENSE.md',
+        databasePath: 'pormake/database',
+        databaseFileCount: 3274,
+      },
+      sdist: {
+        filename: 'pormake-0.2.2.tar.gz',
+        url: 'https://files.pythonhosted.org/packages/22/c2/0b8ce705072c2c7aa52bcd15c08d1ee96ef1abb5971c6c6195e827e12a25/pormake-0.2.2.tar.gz',
+        sha256: 'd5b73897cf4f3b3828073f7ba71ece535172318e709a9a2186b925c40c37a04e',
+        licensePath: 'LICENSE.md',
+        databasePath: 'pormake/database',
+        databaseFileCount: 3274,
+      },
+    },
+    retainedLicense: {
+      sha256: '62bf3249aed0b2105bd66c0f99283f68d97e6afac79cd5a2df083821373c1a31',
+      bytes: 1064,
+      identicalToCatGoCopies: {
+        'server/catgo/vendor/pormake/LICENSE': true,
+        'third_party/licenses/PORMAKE-MIT.txt': true,
+      },
+    },
+  })
+})
+
+test('PORMAKE manifests are independently computed from the live CatGo database tree', () => {
+  assert.deepEqual(databaseManifest(DATABASE_ROOT), {
+    fileCount: 3274,
+    sha256: 'aaf45f145fccd856509542295884a7877f1cf67b36f8ae3d3cd2eda7d4aeb910',
+  })
+  assert.deepEqual(databaseManifest(`${DATABASE_ROOT}/bbs`), {
+    fileCount: 867,
+    sha256: '793516ee8a627990e633633c9d97c39e339d03a26cb09c893dcccaa035801290',
+  })
+  assert.deepEqual(databaseManifest(`${DATABASE_ROOT}/topologies`), {
+    fileCount: 2407,
+    sha256: '6d5c74c7d1647304983a39328c157e2f7701bc7821dbf68a9a97fa7b6260f595',
   })
 })
 
@@ -66,16 +160,17 @@ test('PORMAKE source records do not extrapolate dataset redistribution rights', 
   assert.equal(sources.rcsr.dedicatedOpenRedistributionLicenseFound, false)
 })
 
-test('database release remains blocked on written permission or exclusion', () => {
+test('PORMAKE notice-backed evidence does not establish an independent contributor chain of title', () => {
   const ledger = JSON.parse(read(LEDGER_PATH))
-  assert.equal(ledger.releaseStatus, 'BLOCKED')
-  assert.equal(ledger.externalRightsGate, 'written permission or exclusion')
+  assert.equal(
+    ledger.independentChainOfTitle.status,
+    'NOT_INDEPENDENTLY_ESTABLISHED',
+  )
   for (const source of Object.values(ledger.sources)) {
     assert.equal(source.externalRightsGate, 'written permission or exclusion')
   }
 
   const notice = read(NOTICE_PATH)
   assert.match(notice, /pormake-database-provenance\.json/)
-  assert.match(notice, /release remains \*\*BLOCKED\*\*/i)
   assert.ok(legalBundleSources().includes(LEDGER_PATH))
 })

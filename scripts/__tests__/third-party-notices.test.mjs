@@ -56,6 +56,25 @@ test('the notice index links confirmed sources without assigning blanket path co
   assert.match(text, /does not establish that every current\s+file came from MatterViz/i)
 })
 
+test('the PORMAKE notice records official PyPI notice evidence without inferring contributor rights', () => {
+  const text = read('THIRD_PARTY_NOTICES.md')
+
+  assert.match(text, /official PyPI project and version:\s*`pormake 0\.2\.2`/i)
+  for (const artifact of [
+    'cdcd945ed9146781cb05154b34cc4fb283c84e0d12cd6e0bb6c31e223c293c20',
+    'd5b73897cf4f3b3828073f7ba71ece535172318e709a9a2186b925c40c37a04e',
+  ]) {
+    assert.match(text, new RegExp(artifact), artifact)
+  }
+  assert.match(text, /both artifacts contain the identical 3,274-file database/i)
+  assert.match(text, /both artifacts retain the MIT license/i)
+  assert.match(text, /immediate-publisher notice basis for \*\*NOTICE_BACKED\*\*/i)
+  assert.match(text, /ToBaCCo\/CoRE\/RCSR independent chain of title was not separately established/i)
+  assert.match(text, /CC BY-NC only for the supporting information/i)
+  assert.match(text, /E\/N per-file mapping to the 796 bundled files has not been established/i)
+  assert.match(text, /no dedicated open redistribution license was found/i)
+})
+
 test('bundled fonts retain copyright notices and the complete OFL text', () => {
   const notices = read('third_party/licenses/BUNDLED-FONTS.txt')
   for (const copyright of [
