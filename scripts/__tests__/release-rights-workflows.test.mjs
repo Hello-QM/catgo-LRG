@@ -155,3 +155,84 @@ test('STT evaluates target-tag rights before every first publication mutation', 
     )
   }
 })
+
+test('STT rechecks its exact cleared commit around draft publication mutations', () => {
+  const parsed = workflow('build-stt-accel.yml')
+  const buildSteps = parsed.jobs.build.steps
+  const manifestSteps = parsed.jobs.manifest.steps
+  const buildGate = buildSteps.find(
+    (step) => step.name === 'Verify target STT release rights',
+  )
+  const manifestGate = manifestSteps.find(
+    (step) => step.name === 'Verify target STT release rights',
+  )
+  const buildPublish = buildSteps.find(
+    (step) => step.name === 'Upload to release',
+  )
+  const manifestPublish = manifestSteps.find(
+    (step) => step.name === 'Upload manifest and publish release',
+  )
+
+  for (const [jobName, gate] of [
+    ['build', buildGate],
+    ['manifest', manifestGate],
+  ]) {
+    assert.match(
+      gate.run,
+      /echo "RIGHTS_COMMIT=\$rights_commit" >> "\$GITHUB_ENV"/,
+      `${jobName} persists the exact cleared commit`,
+    )
+  }
+
+  assert.ok(buildPublish, 'build has a release publication step')
+  assert.match(
+    buildPublish.run,
+    /assert_tag_commit\(\) \{[\s\S]*git fetch --force origin\s*\\?\s*"\+refs\/tags\/\$TAG:refs\/tags\/\$TAG"[\s\S]*actual_commit=\$\(git rev-parse "\$TAG\^\{commit\}"\)[\s\S]*"\$actual_commit" != "\$RIGHTS_COMMIT"/,
+  )
+  assert.match(
+    buildPublish.run,
+    /if ! gh release view "\$TAG"[\s\S]*then\s+assert_tag_commit\s+if ! gh release create "\$TAG" --draft --latest=false/,
+    'the exact tag is freshly checked immediately before draft creation',
+  )
+  assert.match(
+    buildPublish.run,
+    /if ! gh release create[\s\S]*then[\s\S]*gh release view "\$TAG"[\s\S]*\|\| exit 1\s+fi/,
+    'a matrix create loser verifies the winning release',
+  )
+  assert.match(
+    buildPublish.run,
+    /assert_tag_commit\s+gh release upload "\$TAG"/,
+    'build rechecks the tag immediately before asset upload',
+  )
+  assert.doesNotMatch(
+    buildPublish.run,
+    /gh release edit/,
+    'matrix builds never publish the draft',
+  )
+
+  assert.ok(manifestPublish, 'manifest owns final publication')
+  assert.match(
+    manifestPublish.run,
+    /assert_tag_commit\(\) \{[\s\S]*git fetch --force origin\s*\\?\s*"\+refs\/tags\/\$TAG:refs\/tags\/\$TAG"[\s\S]*actual_commit=\$\(git rev-parse "\$TAG\^\{commit\}"\)[\s\S]*"\$actual_commit" != "\$RIGHTS_COMMIT"/,
+  )
+  const manifestUpload = manifestPublish.run.indexOf(
+    'gh release upload "$TAG" stt-accel-manifest.json --clobber',
+  )
+  const finalRecheck = manifestPublish.run.indexOf(
+    'assert_tag_commit',
+    manifestUpload + 1,
+  )
+  const publishDraft = manifestPublish.run.indexOf(
+    'gh release edit "$TAG" --draft=false',
+  )
+  assert.ok(manifestUpload >= 0, 'manifest is uploaded')
+  assert.match(
+    manifestPublish.run.slice(0, manifestUpload),
+    /assert_tag_commit\s*$/,
+    'manifest upload immediately follows an exact tag recheck',
+  )
+  assert.ok(
+    finalRecheck > manifestUpload && publishDraft > finalRecheck,
+    'draft publication follows the manifest upload and a fresh exact recheck',
+  )
+})

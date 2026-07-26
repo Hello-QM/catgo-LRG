@@ -169,17 +169,41 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --latest=false \
-              --target "$RIGHTS_COMMIT" --title "$TAG" \
-              --notes "CatGo STT GPU accelerator binaries. Each archive includes the CatGo legal and citation bundle."
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          published_commit=$(git rev-parse "$TAG^{commit}")
-          if [ "$published_commit" != "$RIGHTS_COMMIT" ]; then
-            echo "::error::STT release tag moved away from the rights-cleared source."
-            exit 1
+          set -euo pipefail
+          assert_tag_commit() {
+            git fetch --force origin \
+              "+refs/tags/$TAG:refs/tags/$TAG"
+            actual_commit=$(git rev-parse "$TAG^{commit}")
+            if [ "$actual_commit" != "$RIGHTS_COMMIT" ]; then
+              echo "::error::STT release tag moved away from the rights-cleared source."
+              exit 1
+            fi
+          }
+
+          if ! git ls-remote --exit-code --refs \
+            origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            if ! gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f ref="refs/tags/$TAG" -f sha="$RIGHTS_COMMIT" >/dev/null; then
+              # A matrix sibling may have created the exact tag first.
+              assert_tag_commit
+            fi
           fi
+          assert_tag_commit
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            assert_tag_commit
+            if ! gh release create "$TAG" --draft --latest=false \
+              --target "$RIGHTS_COMMIT" --title "$TAG" \
+              --notes "CatGo STT GPU accelerator binaries. Each archive includes the CatGo legal and citation bundle."; then
+              # A matrix sibling may have created the release first. Accept only
+              # a real winner; the exact-tag check below validates its target.
+              gh release view "$TAG" >/dev/null 2>&1 || exit 1
+            fi
+          fi
+
+          assert_tag_commit
           gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
 
   manifest:
@@ -215,6 +239,7 @@ jobs:
           git worktree add --detach "$target_rights_source" "$rights_commit"
           node scripts/verify-release-rights.mjs \
             --root "$target_rights_source"
+          echo "RIGHTS_COMMIT=$rights_commit" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -242,11 +267,25 @@ jobs:
                     open('stt-accel-manifest.json', 'w'), indent=2)
           print(open('stt-accel-manifest.json').read())
           PY
-      - name: Upload manifest
+      - name: Upload manifest and publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}  # manifest job has no checkout → tell gh the repo
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          assert_tag_commit() {
+            git fetch --force origin \
+              "+refs/tags/$TAG:refs/tags/$TAG"
+            actual_commit=$(git rev-parse "$TAG^{commit}")
+            if [ "$actual_commit" != "$RIGHTS_COMMIT" ]; then
+              echo "::error::STT release tag moved away from the rights-cleared source."
+              exit 1
+            fi
+          }
+
+          assert_tag_commit
           gh release upload "$TAG" stt-accel-manifest.json --clobber
+          if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            assert_tag_commit
+            gh release edit "$TAG" --draft=false --latest=false
+          fi
