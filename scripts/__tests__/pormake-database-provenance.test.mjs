@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, relative, resolve, sep } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -15,22 +16,19 @@ const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const DATABASE_ROOT = 'server/catgo/vendor/pormake/database'
 
 const databaseManifest = (path) => {
-  const records = []
-  const visit = (directory) => {
-    for (const entry of readdirSync(directory)) {
-      const file = join(directory, entry)
-      if (statSync(file).isDirectory()) {
-        visit(file)
-      } else {
-        records.push({
-          path: relative(resolve(ROOT, DATABASE_ROOT), file).split(sep).join('/'),
-          sha256: createHash('sha256').update(readFileSync(file)).digest('hex'),
-        })
-      }
-    }
-  }
-
-  visit(resolve(ROOT, path))
+  const trackedFiles = execFileSync('git', ['ls-files', '--', path], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).trim().split('\n').filter(Boolean)
+  const records = trackedFiles.map((file) => ({
+    path: relative(
+      resolve(ROOT, DATABASE_ROOT),
+      resolve(ROOT, file),
+    ).split(sep).join('/'),
+    sha256: createHash('sha256')
+      .update(readFileSync(resolve(ROOT, file)))
+      .digest('hex'),
+  }))
   const sortedRecords = records.sort((left, right) =>
     left.path.localeCompare(right.path),
   )

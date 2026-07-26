@@ -63,6 +63,11 @@ mofsearch = [
 [project.scripts]
 catgo = "catgo.cli:main"
 
+[tool.hatch.build]
+# PORMAKE creates topology pickles lazily at runtime. They are local caches,
+# not part of the pinned 3,274-file database snapshot or reproducible releases.
+exclude = ["/catgo/vendor/pormake/database/**/*.pickle"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["catgo"]
 # The built SPA (catgo/web/**) is a generated, git-ignored artifact copied in by

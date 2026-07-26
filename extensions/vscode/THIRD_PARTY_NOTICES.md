@@ -201,8 +201,42 @@ MIT terms for whisper.cpp.
 
 CatGo commit `5e7411ef1da98fd0139cf72e586b43f5451b94d9` records that
 the tree was copied from PORMAKE, `experimental/` was omitted, and
-`scaler.py` was changed from JAX to NumPy/SciPy. See the unresolved database
-provenance item below for a narrower caveat about the bundled data collection.
+`scaler.py` was changed from JAX to NumPy/SciPy.
+
+### PORMAKE database and RCSR-derived topology collection — notice-backed evidence
+
+- Paths: `server/catgo/vendor/pormake/database/` and
+  `server/catgo/vendor/pormake/database/topologies/RCSR_topology.zip`
+- Official PyPI project and version: `pormake 0.2.2`
+- Machine-readable evidence:
+  [`third_party/provenance/pormake-database-provenance.json`](third_party/provenance/pormake-database-provenance.json)
+- Official publisher artifacts:
+  - `pormake-0.2.2-py3-none-any.whl`
+    (SHA-256 `cdcd945ed9146781cb05154b34cc4fb283c84e0d12cd6e0bb6c31e223c293c20`):
+    https://files.pythonhosted.org/packages/c4/a5/f374f804c02b2be4d31f2f70452d5028f28753ce9a19bc664efdf36e4893/pormake-0.2.2-py3-none-any.whl
+  - `pormake-0.2.2.tar.gz`
+    (SHA-256 `d5b73897cf4f3b3828073f7ba71ece535172318e709a9a2186b925c40c37a04e`):
+    https://files.pythonhosted.org/packages/22/c2/0b8ce705072c2c7aa52bcd15c08d1ee96ef1abb5971c6c6195e827e12a25/pormake-0.2.2.tar.gz
+
+Both artifacts contain the identical 3,274-file database at
+`pormake/database`. Both artifacts retain the MIT license: the wheel has
+`pormake-0.2.2.dist-info/LICENSE.md` and the sdist has `LICENSE.md`. That
+1,064-byte text has SHA-256
+`62bf3249aed0b2105bd66c0f99283f68d97e6afac79cd5a2df083821373c1a31` and is
+byte-identical to both retained CatGo copies at
+`server/catgo/vendor/pormake/LICENSE` and
+`third_party/licenses/PORMAKE-MIT.txt`.
+
+This supplies the immediate-publisher notice basis for **NOTICE_BACKED**
+distribution evidence for the listed CatGo database path. It does not establish
+an independent chain of title for each dataset contribution. The
+ToBaCCo/CoRE/RCSR independent chain of title was not separately established;
+the source-specific caveats below remain part of the record. The audited ACS
+supporting-information terms are CC BY-NC only for the supporting information
+and are not extrapolated to the underlying ToBaCCo data. CoRE Zenodo record
+3370144 is CC BY 4.0, but an E/N per-file mapping to the 796 bundled files has not been established. The current `odf/RCSR` repository declares no license,
+and no dedicated open redistribution license was found for the audited CGD/ZIP
+collection. This is a provenance record, not a legal conclusion.
 
 ### sql.js WebAssembly binary
 
@@ -262,6 +296,20 @@ These technical mappings make no legal conclusion. Where the historical record
 does not prove the revision actually used by the original author, the immutable
 revision below is identified only as a verified audit snapshot and the external
 evidence gate remains open.
+
+The bounded pymatgen, ASE, MatterViz, and xterm.js mappings are supported by
+retained notices that provide **NOTICE_BACKED** release evidence:
+`extensions/rust/src/algorithms/ewald.rs`,
+`extensions/rust/src/cif.rs`, `extensions/rust/src/composition.rs`,
+`extensions/rust/src/crystal_nn.rs`, `extensions/rust/src/element.rs`,
+`extensions/rust/src/integrators.rs`, `extensions/rust/src/io.rs`,
+`extensions/rust/src/lattice.rs`, `extensions/rust/src/matcher.rs`,
+`extensions/rust/src/structure_matcher.rs`,
+`extensions/rust/src/voronoi_cell.rs`, `extensions/rust/src/wasm_types.rs`,
+`src/lib/structure/TerminalPanel.svelte`,
+`src/lib/xrd/atomic-scattering-params.ts`, and `src/lib/xrd/calc-xrd.ts`.
+This bounded release classification neither identifies an actual adopted
+revision nor closes either external evidence gate.
 
 ### pymatgen
 
@@ -428,32 +476,6 @@ technical source map and the replacement provenance for CatRender's remaining
 covalent-radius data. This
 historical notice does not make a compatibility, substantiality, or other legal
 conclusion, and removal does not settle those questions.
-
-### PORMAKE database and RCSR-derived topology collection
-
-- Paths: `server/catgo/vendor/pormake/database/` and
-  `server/catgo/vendor/pormake/database/topologies/RCSR_topology.zip`
-- Immediate source: the recorded PORMAKE revision above
-- Machine-readable evidence:
-  [`third_party/provenance/pormake-database-provenance.json`](third_party/provenance/pormake-database-provenance.json)
-
-The CatGo database directory is byte-identical to
-`src/pormake/database` at PORMAKE revision
-`639caad9d315ef6cb4838d0f8e44336d4a41aa7a`; the official commit archive
-SHA-256 and deterministic `bbs`, `topologies`, and whole-database manifest
-hashes are pinned in the ledger. The collection has 867 building blocks
-identified as 71 ToBaCCo plus 796 CoRE files, and 2,404 RCSR-derived CGD files
-plus a bundled ZIP.
-
-These technical matches do not close the redistribution-rights question. The
-audited ACS supporting-information terms are CC BY-NC only for the supporting
-information and are not extrapolated to its underlying ToBaCCo data. CoRE
-Zenodo record 3370144 is CC BY 4.0, but an E/N per-file mapping to the 796
-bundled files has not been established. The current `odf/RCSR` repository
-declares no license, and no dedicated open redistribution license was found for
-the audited CGD/ZIP collection. Each source therefore still requires written
-permission or exclusion; release remains **BLOCKED**. This is a provenance
-record, not a legal conclusion.
 
 ### Application icons, logos, screenshots, and QR image
 

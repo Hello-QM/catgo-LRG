@@ -30,6 +30,15 @@ const CITATION_REQUEST =
 const AGPL_SHA256 =
   '0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0'
 const FORBLAZE_IMPORT_COMMIT = 'dcb8a503245602dae82a4157de6a69ab1d795fe1'
+const PORMAKE_ARTIFACT_EVIDENCE = {
+  databaseFiles: 3274,
+  manifests: {
+    bbs: '793516ee8a627990e633633c9d97c39e339d03a26cb09c893dcccaa035801290',
+    topologies: '6d5c74c7d1647304983a39328c157e2f7701bc7821dbf68a9a97fa7b6260f595',
+    all: 'aaf45f145fccd856509542295884a7877f1cf67b36f8ae3d3cd2eda7d4aeb910',
+  },
+  licenseSha256: '62bf3249aed0b2105bd66c0f99283f68d97e6afac79cd5a2df083821373c1a31',
+}
 
 const noticeLinkTargets = (path) =>
   [
@@ -43,6 +52,28 @@ const thirdPartyLicenseTargets = (path) =>
   noticeLinkTargets(path).filter((target) =>
     /^third_party\/licenses\/[^/]+\.txt$/.test(target)
   )
+
+const archiveDatabaseManifest = ({
+  paths,
+  prefix,
+  relativeRoot = prefix,
+  readEntry,
+}) => {
+  const records = paths
+    .filter((path) => path.startsWith(`${prefix}/`) && !path.endsWith('/'))
+    .map((path) => ({
+      path: path.slice(relativeRoot.length + 1),
+      sha256: createHash('sha256').update(readEntry(path)).digest('hex'),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path))
+
+  return {
+    fileCount: records.length,
+    sha256: createHash('sha256')
+      .update(records.map(({ path, sha256 }) => `${sha256}  ${path}\n`).join(''))
+      .digest('hex'),
+  }
+}
 
 const gitFiles = () =>
   execFileSync('git', ['ls-files', '-z'], {
@@ -458,6 +489,64 @@ test('actual wheel and sdist contain exactly the canonical redistribution source
       .map((path) => path.replace(/^[^/]+\//, ''))
       .map((path) => path === 'LICENSE' ? 'license' : path)
     assert.deepEqual(selectLegal(sdistPaths), expected, 'sdist')
+
+    const wheelArchivePaths = execFileSync('unzip', ['-Z1', wheel], {
+      encoding: 'utf8',
+    }).trim().split('\n')
+    const sdistArchivePaths = execFileSync('tar', ['-tzf', sdist], {
+      encoding: 'utf8',
+    }).trim().split('\n')
+    const sdistRoot = sdistArchivePaths[0].split('/')[0]
+    const wheelExtractRoot = resolve(archiveDir, 'wheel-extracted')
+    const sdistExtractRoot = resolve(archiveDir, 'sdist-extracted')
+    mkdirSync(wheelExtractRoot)
+    mkdirSync(sdistExtractRoot)
+    execFileSync('unzip', ['-q', wheel, '-d', wheelExtractRoot])
+    execFileSync('tar', ['-xzf', sdist, '-C', sdistExtractRoot])
+    const pormakeArtifacts = [
+      {
+        label: 'wheel',
+        paths: wheelArchivePaths,
+        packageRoot: 'catgo',
+        readEntry: (path) => readFileSync(resolve(wheelExtractRoot, path)),
+      },
+      {
+        label: 'sdist',
+        paths: sdistArchivePaths,
+        packageRoot: `${sdistRoot}/catgo`,
+        readEntry: (path) => readFileSync(resolve(sdistExtractRoot, path)),
+      },
+    ]
+
+    for (const artifact of pormakeArtifacts) {
+      const database = `${artifact.packageRoot}/vendor/pormake/database`
+      assert.deepEqual(
+        archiveDatabaseManifest({ ...artifact, prefix: database }),
+        {
+          fileCount: PORMAKE_ARTIFACT_EVIDENCE.databaseFiles,
+          sha256: PORMAKE_ARTIFACT_EVIDENCE.manifests.all,
+        },
+        `${artifact.label} complete PORMAKE database`,
+      )
+      for (const directory of ['bbs', 'topologies']) {
+        assert.equal(
+          archiveDatabaseManifest({
+            ...artifact,
+            prefix: `${database}/${directory}`,
+            relativeRoot: database,
+          }).sha256,
+          PORMAKE_ARTIFACT_EVIDENCE.manifests[directory],
+          `${artifact.label} PORMAKE ${directory} manifest`,
+        )
+      }
+      assert.equal(
+        createHash('sha256')
+          .update(artifact.readEntry(`${artifact.packageRoot}/vendor/pormake/LICENSE`))
+          .digest('hex'),
+        PORMAKE_ARTIFACT_EVIDENCE.licenseSha256,
+        `${artifact.label} retained PORMAKE license`,
+      )
+    }
   } finally {
     rmSync(archiveDir, { recursive: true, force: true })
   }
