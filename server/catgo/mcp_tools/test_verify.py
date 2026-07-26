@@ -181,6 +181,23 @@ def test_R5_no_override_without_a_failure():
         assert False, "override must be refused when nothing is failing"
 
 
+def test_R6_uncertified_claim_counts_even_with_no_coverage():
+    # found by the live provenance-loop probe: with zero runnable gates, a refused
+    # claim was dropped, so the agent saw only the vaguer "unverified" message and
+    # the refusal left no trace in the session state.
+    sk = "r6"; _fresh(sk)
+    enf.postmark("catgo_catalysis", {"action": "oer"}, ok=True, session_key=sk)
+    enf.mark_verified(False, uncertified_claims=["limiting_potential"], session_key=sk)
+    dec, why = enf.precheck("catgo_workflow", {"action": "submit"}, sk)
+    assert dec == enf.FORBIDDEN and "claim:limiting_potential" in why, why
+    # and a genuinely empty verify (nothing ran, nothing refused) still does not clear
+    sk2 = "r6b"; _fresh(sk2)
+    enf.postmark("catgo_catalysis", {"action": "oer"}, ok=True, session_key=sk2)
+    enf.mark_verified(False, session_key=sk2)
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk2)[0] == enf.FORBIDDEN
+    assert enf.state(sk2)["failed"] == []
+
+
 def test_R5_no_coverage_has_an_escape_hatch():
     # a result no gate can check: nothing failed, so there is nothing to fix —
     # without the sentinel waiver the session would be blocked forever.

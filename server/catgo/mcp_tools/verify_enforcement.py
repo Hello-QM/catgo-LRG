@@ -183,9 +183,12 @@ def mark_verified(covered, failed_gates=(), failed_taxa=(), uncertified_claims=(
     A later clean verify on the fixed result clears both flags.
     """
     st = _st(session_key)
-    if not covered:
-        return
     bad = sorted(set(failed_gates) | {f"claim:{c}" for c in uncertified_claims})
+    if not covered and not bad:
+        return
+    # A refused claim counts even when NO value gate could run — that is exactly the
+    # case the verifiability layer exists for (nothing checkable, provenance absent),
+    # and dropping it here let the agent see only the vaguer "unverified" message.
     if bad:
         st["failed"] = bad
         st["failed_taxa"] = sorted(failed_taxa)
