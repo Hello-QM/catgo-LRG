@@ -39,6 +39,17 @@ NEEDS = {
     "band_gap": ["kgrid_coarse"],
     "d_band_center": ["kpoint_weights_applied", "dos_window", "nelect"],
     "energy": ["n_atoms", "xc_functional", "potcar_titels", "nelect", "kgrid"],
+    # Bader/charge partitioning depends on the PAW set and the electron count it was
+    # partitioned from; a charge without them cannot be compared to another charge.
+    "charge": ["potcar_titels", "nelect", "xc_functional"],
+    # A DOS-derived quantity is only meaningful if the integration is complete: the
+    # k-point weights must have been applied and the energy window must cover both spin
+    # channels. Both have produced recorded artefacts here (a 74 uB moment from an
+    # unweighted sum, a 73 uB moment from a truncated window).
+    "electronic_structure": ["kgrid", "kpoint_weights_applied", "dos_window", "nelect"],
+    # A partial Hessian is defined by which atoms were free; n_modes == 3*n_free is the
+    # identity that catches a POSCAR silently missing `Selective dynamics`.
+    "frequencies": ["n_free_atoms", "n_modes", "selective_dynamics_present"],
 }
 
 
@@ -74,6 +85,51 @@ def envelope(value, *, tool, action, inputs=None, unit=None, convention=None,
     return out
 
 
+def wrap_payload(text, *, tool, action, inputs=None):
+    """Envelope a tool's JSON payload at the dispatcher, so EVERY numeric tool emits
+    provenance instead of only the ones someone remembered to edit.
+
+    Why here and not in each handler: an audit of 178 numeric-returning tools across 18
+    public comp-chem agent repos found 59.6% emit no method provenance at all, and the
+    dominant cause was not ignorance but DISCARD at the payload boundary — a handler
+    builds a rich dict and the wrapper returns one float. One boundary, one fix.
+
+    Returns the enveloped JSON text, or None when there is nothing to wrap: a non-JSON
+    payload (prose report), an already-enveloped payload, or an error string. Those are
+    left untouched and counted honestly as non-emitting in our own self-audit rather
+    than papered over.
+    """
+    import json
+    stripped = (text or "").lstrip()
+    if not stripped.startswith(("{", "[")):
+        return None
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(payload, dict) and "provenance" in payload and "value" in payload:
+        return None                                  # a handler already enveloped it
+    claim = CATALYSIS_CLAIM.get(str(action)) if tool == "catgo_catalysis" else TOOL_CLAIM.get(tool)
+    env = envelope(payload, tool=tool, action=action, inputs=inputs, claim=claim,
+                   emitted_by="dispatcher")
+    return json.dumps(env, indent=2, ensure_ascii=False)
+
+
+# claim type per numeric tool family, where one applies
+TOOL_CLAIM = {
+    "catgo_energy": "energy",
+    "catgo_bader": "charge",
+    "catgo_charge": "charge",
+    "catgo_dos": "electronic_structure",
+    "catgo_cohp": "electronic_structure",
+    "catgo_freq": "frequencies",
+    "catgo_gibbs": "free_energy",
+    "catgo_thermo": "free_energy",
+    "catgo_overpot": "limiting_potential",
+    "catgo_bands": "band_gap",
+    "catgo_band": "band_gap",
+}
+
 # claim type per catgo_catalysis action, where one applies
 CATALYSIS_CLAIM = {
     "oer": "limiting_potential",
@@ -102,5 +158,14 @@ if __name__ == "__main__":
     # unregistered claim -> nothing invented
     u = envelope(1.0, tool="t", action="a", claim="something_new")
     assert "unverifiable_without" not in u and u["claim"] == "something_new"
+    # dispatcher-level wrapping
+    import json as _json
+    w = wrap_payload('{"gap_ev": 1.2}', tool="catgo_bands", action="data")
+    assert _json.loads(w)["claim"] == "band_gap" and "kgrid_coarse" in _json.loads(w)["unverifiable_without"]
+    assert _json.loads(w)["provenance"]["emitted_by"] == "dispatcher"
+    assert wrap_payload("Workflow run failed: ...", tool="catgo_energy", action="x") is None
+    assert wrap_payload("not json {", tool="catgo_energy", action="x") is None
+    assert wrap_payload(w, tool="catgo_bands", action="data") is None   # no double-wrap
     print("provenance envelope self-test OK — declares what it cannot vouch for; "
-          "None is not provenance; nothing is invented")
+          "None is not provenance; nothing is invented; dispatcher wraps JSON payloads "
+          "once and leaves prose/errors alone")

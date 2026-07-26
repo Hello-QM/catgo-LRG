@@ -561,6 +561,12 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     ok = not (result and isinstance(result[0].text, str) and
               (result[0].text.startswith("Unknown tool:") or result[0].text.startswith("Error:")))
     _verify_enf.postmark(name, arguments, ok=ok)
+    if ok and result and _verify_enf._is_numeric(name, arguments):
+        from catgo.mcp_tools import provenance as _prov
+        wrapped = _prov.wrap_payload(result[0].text, tool=name,
+                                     action=arguments.get("action"), inputs=arguments)
+        if wrapped is not None:
+            result[0] = TextContent(type="text", text=wrapped)
     if decision == _verify_enf.PROMPT and result:
         # a waived FAIL still went out — stamp the response so the override is
         # visible in the transcript rather than only in the audit list.

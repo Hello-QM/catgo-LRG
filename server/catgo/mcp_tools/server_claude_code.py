@@ -3579,6 +3579,18 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     ok = not (result and isinstance(result[0].text, str) and
               result[0].text.startswith(("Unknown tool:", f"{name} failed:", "Cannot connect")))
     _enf.postmark(name, arguments, ok=ok)
+    # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
+    # Single boundary = the same place the ecosystem audit found metadata being
+    # discarded (59.6% of 178 public tools emit none).
+    if ok and result and _enf._is_numeric(name, arguments):
+        try:
+            from . import provenance as _prov
+        except ImportError:
+            import provenance as _prov
+        wrapped = _prov.wrap_payload(result[0].text, tool=name,
+                                     action=arguments.get("action"), inputs=arguments)
+        if wrapped is not None:
+            result[0] = T(type="text", text=wrapped)
     if decision == _enf.PROMPT and result:
         # a waived FAIL still went out — stamp the response so the override is
         # visible in the transcript rather than only in the audit list.
