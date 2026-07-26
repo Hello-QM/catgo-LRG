@@ -84,6 +84,18 @@ test('proves the TestFlight attestation came from the exact successful iOS workf
     runProof.run,
     /verify-trusted-ios-workflow\.mjs[\s\S]*--source-root "\$TARGET_SOURCE"/,
   )
+  assert.match(
+    runProof.run,
+    /contents\/\.github\/workflows\/ios-build\.yml\?ref=\$run_head_sha/,
+  )
+  assert.match(
+    runProof.run,
+    /verify-trusted-ios-workflow\.mjs[\s\S]*--source-root "\$run_source"/,
+  )
+  assert.match(
+    runProof.run,
+    /verify-ios-testflight-run\.mjs[\s\S]*--run-workflow[\s\S]*ios-build\.yml/,
+  )
 })
 
 test('proves macOS signatures came from the pinned successful Tauri workflow run', () => {

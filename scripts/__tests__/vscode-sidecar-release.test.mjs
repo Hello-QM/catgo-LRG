@@ -42,6 +42,16 @@ test('sidecar publishing uploads strict SHA-256 metadata beside every binary', (
   assert.match(uploadStep, /"\$\{\{\s*matrix\.asset_name\s*\}\}\.sha256"/)
 })
 
+test('sidecar archive verification excludes the sync ownership sentinel', () => {
+  const step = workflowStep('Verify embedded legal bundle')
+  assert.match(step, /find build\/legal-bundle -type f/)
+  assert.match(
+    step,
+    /! -name ['"]\.catgo-legal-bundle-owned['"]/,
+    'the ownership sentinel is not a redistributed legal document',
+  )
+})
+
 test('pnpm is canonical and no nested npm lock can silently drift', () => {
   const rootPackage = JSON.parse(source('package.json'))
   assert.match(rootPackage.packageManager, /^pnpm@/)

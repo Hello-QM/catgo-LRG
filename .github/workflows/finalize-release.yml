@@ -203,11 +203,23 @@ jobs:
           gh api --paginate --slurp \
             "repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
             > "$jobs_json"
+          run_head_sha=$(jq -er \
+            '.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$run_json")
+          run_source=$(mktemp -d)
+          mkdir -p "$run_source/.github/workflows"
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$REPOSITORY/contents/.github/workflows/ios-build.yml?ref=$run_head_sha" \
+            > "$run_source/.github/workflows/ios-build.yml"
+          node scripts/verify-trusted-ios-workflow.mjs \
+            --source-root "$run_source"
           node scripts/verify-ios-testflight-run.mjs \
             --attestation "$attestation" \
             --run "$run_json" \
             --jobs "$jobs_json" \
-            --source-commit "$RELEASE_SOURCE_COMMIT"
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --run-workflow "$run_source/.github/workflows/ios-build.yml"
 
   promote-cloudflare:
     name: Promote verified release to Cloudflare

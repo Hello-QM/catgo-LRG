@@ -23,14 +23,49 @@ test('keeps write permission out of the build job and scopes it to attestation u
   )
 })
 
-test('binds the attestation to GITHUB_SHA and uploads it only to the matching draft release', () => {
+test('stages legal resources before every iOS build', () => {
   const buildSteps = WORKFLOW.jobs.ios.steps
+  const legal = buildSteps.findIndex(
+    (step) => step.name === 'Stage legal bundle for iOS resources',
+  )
+  const signedBuild = buildSteps.findIndex(
+    (step) => step.name === 'Build (signed device IPA)',
+  )
+  const simulatorBuild = buildSteps.findIndex(
+    (step) => step.name === 'Build (simulator, unsigned)',
+  )
+  assert.ok(legal >= 0)
+  assert.ok(legal < signedBuild)
+  assert.ok(legal < simulatorBuild)
+  assert.match(buildSteps[legal].run, /scripts\/sync-legal-bundle\.mjs/)
+})
+
+test('binds direct and trusted exact-tag backfill uploads to the release source', () => {
+  const buildSteps = WORKFLOW.jobs.ios.steps
+  assert.equal(
+    WORKFLOW.on.workflow_dispatch.inputs.exact_tag_backfill.type,
+    'boolean',
+  )
+  assert.equal(
+    WORKFLOW.on.workflow_dispatch.inputs.exact_tag_backfill.default,
+    false,
+  )
   const source = buildSteps.find(
     (step) => step.name === 'Record exact release source',
   )
   assert.ok(source)
   assert.match(source.run, /git rev-parse HEAD/)
   assert.match(source.run, /GITHUB_SHA/)
+  assert.match(source.run, /refs\/tags\/\$RELEASE_TAG/)
+  assert.match(source.run, /ALLOW_EXACT_TAG_BACKFILL/)
+  assert.match(source.run, /refs\/heads\/\$DEFAULT_BRANCH/)
+  assert.match(source.run, /V146_TAG/)
+  assert.match(source.run, /V146_SOURCE_COMMIT/)
+  assert.equal(source.env.V146_TAG, 'v1.4.6')
+  assert.equal(
+    source.env.V146_SOURCE_COMMIT,
+    '06c02979b9e917011a63dcbfb09aaad7cfb9430d',
+  )
   assert.match(source.run, /exit 1/)
 
   const testFlightUpload = buildSteps.find(
@@ -49,6 +84,8 @@ test('binds the attestation to GITHUB_SHA and uploads it only to the matching dr
   assert.match(run, /"sourceCommit"/)
   assert.match(run, /GITHUB_RUN_ID/)
   assert.match(run, /"accepted"/)
+  assert.match(run, /RELEASE_SOURCE_COMMIT/)
+  assert.match(run, /commits\/\$RELEASE_TAG/)
   assert.match(run, /gh api[\s\S]*\.draft/)
   assert.match(run, /gh release upload "\$RELEASE_TAG"[\s\S]*--clobber/)
   assert.doesNotMatch(run, /\$\{\{\s*inputs\.release_tag\s*\}\}/)

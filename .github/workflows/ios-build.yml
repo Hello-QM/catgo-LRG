@@ -28,10 +28,15 @@ on:
         type: boolean
         default: false
       release_tag:
-        description: 'Required for TestFlight; run the workflow from this same tag so GITHUB_SHA matches it (for example, v1.4.6)'
+        description: 'Exact release tag to build and upload (for example, v1.4.6)'
         type: string
         required: false
         default: ''
+      exact_tag_backfill:
+        description: 'Run the trusted main workflow while building the exact release tag source'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   ios:
@@ -73,15 +78,34 @@ jobs:
       - name: Record exact release source
         id: release_source
         env:
+          ALLOW_EXACT_TAG_BACKFILL: ${{ inputs.exact_tag_backfill }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           REQUIRE_EVENT_SHA: ${{ inputs.upload }}
+          V146_SOURCE_COMMIT: 06c02979b9e917011a63dcbfb09aaad7cfb9430d
+          V146_TAG: v1.4.6
         run: |
           set -euo pipefail
           source_commit=$(git rev-parse HEAD)
-          if [ "$REQUIRE_EVENT_SHA" = "true" ] && [ "$source_commit" != "$GITHUB_SHA" ]; then
-            echo "::error::For a TestFlight upload, dispatch this workflow from the exact release tag so GITHUB_SHA matches the checked-out tag commit."
-            exit 1
+          if [ "$REQUIRE_EVENT_SHA" = "true" ]; then
+            tag_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+            if [ "$source_commit" != "$tag_commit" ]; then
+              echo "::error::Checked-out source is not the requested release tag."
+              exit 1
+            fi
+            if [ "$source_commit" != "$GITHUB_SHA" ] &&
+               { [ "$ALLOW_EXACT_TAG_BACKFILL" != "true" ] ||
+                 [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ] ||
+                 [ "$RELEASE_TAG" != "$V146_TAG" ] ||
+                 [ "$source_commit" != "$V146_SOURCE_COMMIT" ]; }; then
+              echo "::error::TestFlight source differs from GITHUB_SHA outside a trusted default-branch exact-tag backfill."
+              exit 1
+            fi
           fi
           echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Stage legal bundle for iOS resources
+        run: node scripts/sync-legal-bundle.mjs
 
       - name: Select Xcode 26 (iOS 26 SDK)
         # App Store Connect now rejects uploads built with the iOS 18.5 SDK —
@@ -323,10 +347,14 @@ jobs:
     permissions:
       contents: write
     env:
+      ALLOW_EXACT_TAG_BACKFILL: ${{ inputs.exact_tag_backfill }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_SOURCE_COMMIT: ${{ needs.ios.outputs.source_commit }}
       REPOSITORY: ${{ github.repository }}
+      V146_SOURCE_COMMIT: 06c02979b9e917011a63dcbfb09aaad7cfb9430d
+      V146_TAG: v1.4.6
     steps:
       - name: Confirm matching release is a draft
         run: |
@@ -336,8 +364,17 @@ jobs:
             exit 1
           fi
           if ! [[ "$RELEASE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
-             [ "$RELEASE_SOURCE_COMMIT" != "$GITHUB_SHA" ]; then
-            echo "::error::TestFlight source is not the exact GITHUB_SHA."
+             [ "$RELEASE_SOURCE_COMMIT" != \
+               "$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')" ]; then
+            echo "::error::TestFlight source is not the exact release tag commit."
+            exit 1
+          fi
+          if [ "$RELEASE_SOURCE_COMMIT" != "$GITHUB_SHA" ] &&
+             { [ "$ALLOW_EXACT_TAG_BACKFILL" != "true" ] ||
+               [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ] ||
+               [ "$RELEASE_TAG" != "$V146_TAG" ] ||
+               [ "$RELEASE_SOURCE_COMMIT" != "$V146_SOURCE_COMMIT" ]; }; then
+            echo "::error::Untrusted TestFlight exact-tag backfill context."
             exit 1
           fi
           draft=$(gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.draft')
@@ -352,7 +389,7 @@ jobs:
           attestation="catgo-ios-testflight-${RELEASE_TAG}.json"
           jq -n \
             --arg releaseTag "$RELEASE_TAG" \
-            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceCommit "$RELEASE_SOURCE_COMMIT" \
             --arg githubRunId "$GITHUB_RUN_ID" \
             '{
               "schemaVersion": 1,

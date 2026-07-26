@@ -3,6 +3,7 @@ import {
   cpSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,10 +13,21 @@ import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { RELEASE_TRUST_POLICY } from '../release-trust-policy.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-trusted-ios-workflow.mjs')
 const IOS_WORKFLOW = resolve(ROOT, '.github/workflows/ios-build.yml')
+const V146_IOS_WORKFLOW_SHA256 =
+  '52d711337b1a5376d14c22201ce581510e6950d86086ec8cd7f0f5ee5d62d4b0'
+
+test('keeps the immutable v1.4.6 iOS workflow in the trusted allowlist', () => {
+  assert.ok(
+    RELEASE_TRUST_POLICY.iosBuildWorkflowSha256s.includes(
+      V146_IOS_WORKFLOW_SHA256,
+    ),
+  )
+})
 
 function verify(sourceRoot) {
   return spawnSync(
@@ -60,4 +72,3 @@ test('rejects changed or symlinked iOS workflow source', async (t) => {
     }
   })
 })
-
