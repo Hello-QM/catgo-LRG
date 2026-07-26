@@ -837,7 +837,7 @@ jobs:
             if aws s3api head-object \
                 --bucket "$R2_BUCKET" \
                 --key "$key" > /dev/null 2>"$error_log"; then
-              aws s3 cp "s3://$R2_BUCKET/$key" "$output"
+              aws s3 cp "s3://$R2_BUCKET/$key" "$output" > /dev/null
               sha256sum "$output" | cut -d ' ' -f 1
             elif grep -Eqi '404|Not Found|NoSuchKey' "$error_log"; then
               printf 'absent'
