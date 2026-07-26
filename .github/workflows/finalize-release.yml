@@ -623,6 +623,49 @@ jobs:
             fail "Cloudflare promotion failed critical-section postflight."
           trap - ERR
 
+  attest-finalization:
+    name: Attest committed release finalization
+    needs: [validate, promote-cloudflare, publication-intent, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
+      EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Create finalization attestation
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg sourceCommit "$EXPECTED_SOURCE_COMMIT" \
+            --arg assetSnapshot "$EXPECTED_ASSET_SNAPSHOT" \
+            --arg githubRunId "$GITHUB_RUN_ID" \
+            '{
+              schemaVersion: 1,
+              releaseTag: $releaseTag,
+              sourceCommit: $sourceCommit,
+              assetSnapshot: $assetSnapshot,
+              githubRunId: $githubRunId
+            }' > catgo-release-finalization.json
+          jq -e \
+            '.schemaVersion == 1 and
+             (.releaseTag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+             (.sourceCommit | test("^[0-9a-f]{40}$")) and
+             (.assetSnapshot | test("^[0-9a-f]{64}$")) and
+             (.githubRunId | test("^[1-9][0-9]*$"))' \
+            catgo-release-finalization.json > /dev/null
+
+      - name: Upload finalization attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: catgo-release-finalization
+          path: catgo-release-finalization.json
+          if-no-files-found: error
+          retention-days: 30
+
   compensate-finalization-failure:
     name: Compensate failed release finalization
     needs: [validate, promote-cloudflare, publication-intent, publish]

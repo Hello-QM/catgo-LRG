@@ -159,6 +159,35 @@ test('globally serializes finalization across release tags', () => {
   assert.equal(current.concurrency['cancel-in-progress'], false)
 })
 
+test('emits a finalization attestation only after the reversible commit succeeds', () => {
+  const current = workflow()
+  const attestation = current.jobs['attest-finalization']
+
+  assert.deepEqual(attestation.needs, [
+    'validate',
+    'promote-cloudflare',
+    'publication-intent',
+    'publish',
+  ])
+  assert.deepEqual(attestation.permissions, {
+    actions: 'read',
+    contents: 'read',
+  })
+  const create = stepNamed(attestation, 'Create finalization attestation')
+  assert.match(create.run, /schemaVersion: 1/)
+  assert.match(create.run, /releaseTag/)
+  assert.match(create.run, /sourceCommit/)
+  assert.match(create.run, /assetSnapshot/)
+  assert.match(create.run, /githubRunId/)
+  assert.match(create.run, /catgo-release-finalization\.json/)
+  const upload = attestation.steps.find((step) =>
+    String(step.uses ?? '').startsWith('actions/upload-artifact@'),
+  )
+  assert.equal(upload.with.name, 'catgo-release-finalization')
+  assert.equal(upload.with.path, 'catgo-release-finalization.json')
+  assert.equal(upload.with['if-no-files-found'], 'error')
+})
+
 test('independently compensates every failed finalization path after validation', () => {
   const current = workflow()
   const cleanup = current.jobs['compensate-finalization-failure']
