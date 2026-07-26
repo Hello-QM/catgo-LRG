@@ -32,8 +32,13 @@ test('manual promotion is explicit, serialized, and fails when R2 credentials ar
   assert.equal(current.concurrency['cancel-in-progress'], false)
   assert.deepEqual(current.permissions, {
     actions: 'read',
-    contents: 'read',
+    contents: 'write',
   })
+  assert.doesNotMatch(SOURCE, /gh release (?:create|edit|upload)/)
+  assert.doesNotMatch(
+    SOURCE,
+    /gh api --method (?:POST|PATCH|DELETE)[\s\S]*releases\//,
+  )
 
   const credentials = stepNamed(
     current.jobs.mirror.steps,

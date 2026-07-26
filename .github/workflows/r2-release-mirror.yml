@@ -83,7 +83,9 @@ concurrency:
 
 permissions:
   actions: read
-  contents: read
+  # GitHub hides draft releases from tokens without push-equivalent access.
+  # This workflow never mutates GitHub releases; tests enforce that boundary.
+  contents: write
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

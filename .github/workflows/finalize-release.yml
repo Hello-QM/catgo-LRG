@@ -23,7 +23,9 @@ jobs:
     timeout-minutes: 30
     permissions:
       actions: read
-      contents: read
+      # GitHub hides draft releases from tokens without push-equivalent access.
+      # This job remains mutation-free; tests prohibit release write commands.
+      contents: write
     outputs:
       asset_snapshot: ${{ steps.draft.outputs.asset_snapshot }}
       source_commit: ${{ steps.source.outputs.commit }}

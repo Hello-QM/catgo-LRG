@@ -365,7 +365,7 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   assert.match(mutation.run, /post_source_commit/)
 })
 
-test('keeps release write permission out of validation and Cloudflare promotion', () => {
+test('grants draft visibility only where needed and keeps validation mutation-free', () => {
   const current = workflow()
   assert.deepEqual(current.permissions, {
     actions: 'read',
@@ -373,10 +373,18 @@ test('keeps release write permission out of validation and Cloudflare promotion'
   })
   assert.deepEqual(current.jobs.validate.permissions, {
     actions: 'read',
-    contents: 'read',
+    contents: 'write',
   })
   assert.deepEqual(current.jobs['promote-cloudflare'].permissions, {
     actions: 'write',
     contents: 'read',
   })
+  const validationRun = current.jobs.validate.steps
+    .map((step) => step.run ?? '')
+    .join('\n')
+  assert.doesNotMatch(validationRun, /gh release (?:create|edit|upload)/)
+  assert.doesNotMatch(
+    validationRun,
+    /gh api --method (?:POST|PATCH|DELETE)[\s\S]*releases\//,
+  )
 })
