@@ -35,13 +35,19 @@ function main(sourceRoot) {
   const actual = createHash('sha256')
     .update(readFileSync(workflowPath))
     .digest('hex')
-  const approved = RELEASE_TRUST_POLICY.iosBuildWorkflowSha256
-  if (typeof approved !== 'string' || !/^[0-9a-f]{64}$/.test(approved)) {
-    throw new Error('Trusted release policy has no approved iOS workflow hash')
-  }
-  if (actual !== approved) {
+  const approved = RELEASE_TRUST_POLICY.iosBuildWorkflowSha256s
+  if (
+    !Array.isArray(approved) ||
+    approved.length === 0 ||
+    approved.some((digest) => !/^[0-9a-f]{64}$/.test(digest))
+  ) {
     throw new Error(
-      `Target iOS workflow hash ${actual} does not match trusted hash ${approved}`,
+      'Trusted release policy has no approved iOS workflow hash allowlist',
+    )
+  }
+  if (!approved.includes(actual)) {
+    throw new Error(
+      `Target iOS workflow hash ${actual} is not in the trusted allowlist`,
     )
   }
   process.stdout.write(`[ios-workflow] verified ${actual}\n`)

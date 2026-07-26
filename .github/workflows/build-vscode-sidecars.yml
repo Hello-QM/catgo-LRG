@@ -131,7 +131,11 @@ jobs:
               echo "::error::${{ matrix.asset_name }} is missing embedded legal/$rel"
               exit 1
             fi
-          done < <(find build/legal-bundle -type f | sort)
+          done < <(
+            find build/legal-bundle -type f \
+              ! -name '.catgo-legal-bundle-owned' |
+              sort
+          )
 
       - name: Generate SHA-256 checksum
         run: |

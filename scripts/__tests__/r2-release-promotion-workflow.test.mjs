@@ -140,6 +140,18 @@ test('uses trusted default-branch verifiers and verifies the attested iOS workfl
     validate.run,
     /verify-trusted-ios-workflow\.mjs[\s\S]*--source-root "\$target_source"/,
   )
+  assert.match(
+    validate.run,
+    /contents\/\.github\/workflows\/ios-build\.yml\?ref=\$run_head_sha/,
+  )
+  assert.match(
+    validate.run,
+    /verify-trusted-ios-workflow\.mjs[\s\S]*--source-root "\$run_source"/,
+  )
+  assert.match(
+    validate.run,
+    /verify-ios-testflight-run\.mjs[\s\S]*--run-workflow[\s\S]*ios-build\.yml/,
+  )
 })
 
 test('only explicit promotion mutates root and writes index before latest commit marker', () => {
