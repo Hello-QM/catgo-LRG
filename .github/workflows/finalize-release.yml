@@ -355,15 +355,27 @@ jobs:
             exit 1
           fi
 
+  publication-intent:
+    name: Persist GitHub publication intent
+    needs: [validate, promote-cloudflare]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publish_attempted: ${{ steps.intent.outputs.publish_attempted }}
+    steps:
+      - name: Record durable GitHub publication intent
+        id: intent
+        run: echo "publish_attempted=true" >> "$GITHUB_OUTPUT"
+
   publish:
     name: Publish verified release
-    needs: [validate, promote-cloudflare]
+    needs: [validate, promote-cloudflare, publication-intent]
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: write
-    outputs:
-      publish_attempted: ${{ steps.publish-intent.outputs.publish_attempted }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
@@ -378,10 +390,6 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-
-      - name: Record durable GitHub publication intent
-        id: publish-intent
-        run: echo "publish_attempted=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish with atomic identity recheck and rollback
         run: |
@@ -617,7 +625,7 @@ jobs:
 
   compensate-finalization-failure:
     name: Compensate failed release finalization
-    needs: [validate, promote-cloudflare, publish]
+    needs: [validate, promote-cloudflare, publication-intent, publish]
     if: >-
       always() &&
       needs.validate.result == 'success' &&
@@ -632,7 +640,7 @@ jobs:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
       EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
-      PUBLISH_ATTEMPTED: ${{ needs.publish.outputs.publish_attempted }}
+      PUBLISH_ATTEMPTED: ${{ needs.publication-intent.outputs.publish_attempted }}
       PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}

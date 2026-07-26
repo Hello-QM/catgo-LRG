@@ -110,7 +110,11 @@ test('promotes and verifies Cloudflare before granting GitHub release visibility
     actions: 'write',
     contents: 'read',
   })
-  assert.deepEqual(publish.needs, ['validate', 'promote-cloudflare'])
+  assert.deepEqual(publish.needs, [
+    'validate',
+    'promote-cloudflare',
+    'publication-intent',
+  ])
   assert.equal(
     promote.outputs.promotion_id,
     '${{ steps.promotion.outputs.promotion_id }}',
@@ -162,6 +166,7 @@ test('independently compensates every failed finalization path after validation'
   assert.deepEqual(cleanup.needs, [
     'validate',
     'promote-cloudflare',
+    'publication-intent',
     'publish',
   ])
   assert.match(cleanup.if, /always\(\)/)
@@ -196,19 +201,18 @@ test('independently compensates every failed finalization path after validation'
 
 test('preflight, publication, and postflight revalidate Cloudflare in one rollback-protected step', () => {
   const current = workflow()
+  const intent = current.jobs['publication-intent']
   const publish = current.jobs.publish
   assert.deepEqual(publish.permissions, {
     actions: 'write',
     contents: 'write',
   })
+  assert.deepEqual(intent.needs, ['validate', 'promote-cloudflare'])
   assert.equal(
-    publish.outputs.publish_attempted,
-    '${{ steps.publish-intent.outputs.publish_attempted }}',
+    intent.outputs.publish_attempted,
+    '${{ steps.intent.outputs.publish_attempted }}',
   )
-  const publishIntent = publish.steps.find(
-    (step) => step.id === 'publish-intent',
-  )
-  assert.ok(publishIntent)
+  const publishIntent = intent.steps.find((step) => step.id === 'intent')
   assert.match(publishIntent.run, /publish_attempted=true/)
 
   const mutationSteps = publish.steps.filter((step) =>
@@ -220,7 +224,6 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
     mutation.name,
     'Publish with atomic identity recheck and rollback',
   )
-  assert.ok(publish.steps.indexOf(publishIntent) < publish.steps.indexOf(mutation))
   assert.doesNotMatch(mutation.run, /publish_attempted=/)
   assert.match(mutation.run, /trap rollback ERR/)
   assert.match(
