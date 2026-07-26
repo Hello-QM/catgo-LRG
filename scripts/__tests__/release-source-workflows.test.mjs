@@ -132,6 +132,15 @@ test('Android release signing verifies validity and the approved signer identity
   assert.match(signing.run, /apksigner"\s+verify\s+--verbose\s+--print-certs/)
   assert.match(signing.run, /ANDROID_EXPECTED_SIGNER_SHA256/)
   assert.match(signing.run, /ACTUAL_SIGNER_SHA256/)
+  assert.match(signing.run, /certificate SHA-256 digest:/)
+  assert.match(signing.run, /digest = \$NF/)
+  assert.match(signing.run, /sort -u/)
+  assert.match(signing.run, /SIGNER_SHA256_DIGESTS\[@\]/)
+  assert.doesNotMatch(
+    signing.run,
+    /Signer #1 certificate SHA-256 digest:/,
+    'signer parsing must support current and legacy apksigner labels',
+  )
   assert.match(signing.run, /exit 1/)
   assert.doesNotMatch(
     signing.run,

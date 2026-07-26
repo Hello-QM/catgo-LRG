@@ -230,13 +230,22 @@ jobs:
           fi
           VERIFY_OUTPUT=$("${BT}apksigner" verify --verbose --print-certs "${OUT}")
           printf '%s\n' "$VERIFY_OUTPUT"
-          ACTUAL_SIGNER_SHA256=$(printf '%s\n' "$VERIFY_OUTPUT" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print $2; exit}')
-          ACTUAL_SIGNER_SHA256=$(printf '%s' "$ACTUAL_SIGNER_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
-          EXPECTED_SIGNER_SHA256=$(printf '%s' "$ANDROID_EXPECTED_SIGNER_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
-          if [ -z "$ACTUAL_SIGNER_SHA256" ]; then
-            echo "::error::apksigner did not report the signer certificate SHA-256 digest"
+          mapfile -t SIGNER_SHA256_DIGESTS < <(
+            printf '%s\n' "$VERIFY_OUTPUT" |
+              awk -F': ' '/certificate SHA-256 digest:/ {
+                digest = $NF
+                gsub(/[[:space:]:]/, "", digest)
+                print tolower(digest)
+              }' |
+              sort -u
+          )
+          if [ "${#SIGNER_SHA256_DIGESTS[@]}" -ne 1 ] ||
+             ! [[ "${SIGNER_SHA256_DIGESTS[0]:-}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::apksigner must report exactly one signer certificate SHA-256 digest"
             exit 1
           fi
+          ACTUAL_SIGNER_SHA256="${SIGNER_SHA256_DIGESTS[0]}"
+          EXPECTED_SIGNER_SHA256=$(printf '%s' "$ANDROID_EXPECTED_SIGNER_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
           if [ "$ACTUAL_SIGNER_SHA256" != "$EXPECTED_SIGNER_SHA256" ]; then
             echo "::error::Android signer certificate SHA-256 does not match repository policy"
             exit 1
