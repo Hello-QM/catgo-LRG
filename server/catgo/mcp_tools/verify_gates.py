@@ -38,6 +38,12 @@ def _skip(gate, cls, needs):
             "detail": f"inputs absent: {needs} (declared, not silently dropped)"}
 
 
+def _na(gate, cls, why):
+    """Gate is inapplicable to this run type. SKIP, never PASS — a criterion that does
+    not apply must not be reported as a criterion that was met."""
+    return {"gate": gate, "taxon": cls, "status": "SKIP", "detail": f"not applicable: {why}"}
+
+
 # ---- A1 PAW / electron-count reference consistency --------------------------
 def gate_paw_consistency(ads_titels, bare_titels):
     """Same element must use one POTCAR TITEL across ads/bare pair (D-592).
@@ -96,11 +102,35 @@ def gate_zpe_completeness(ladder):
 
 
 # ---- C1/C2 convergence: force-based, never the string -----------------------
-def gate_force_convergence(fmax, ediffg):
+def gate_force_convergence(fmax, ediffg, ibrion=None, nsw=None):
     """Force-based only. 'reached required accuracy' can be STALE (a restart appends to the
     same OUTCAR, so the old flag survives while the tail energy is garbage): 8 dirs carried
-    a false converged flag; Cu3Al_CO cached E=-90530 eV."""
-    crit = abs(ediffg)
+    a false converged flag; Cu3Al_CO cached E=-90530 eV.
+
+    Two applicability rules, both learned from running this on 120 real VASP dirs on
+    Shaheen (D-035), where the gate fired 117/117 — a 100% fire rate is a broken gate,
+    not a discovery:
+
+    1. EDIFFG must be PRESENT. It used to default to -0.02 when the INCAR did not set it
+       (VASP itself falls back to EDIFF*10), so the gate judged every run against a
+       criterion nobody chose — a fabricated threshold, the exact failure mode this
+       project exists to catch. Absent EDIFFG is now a declared SKIP.
+    2. A run that does not relax has no force criterion. IBRION < 0 (single point) or
+       NSW < 1 means the forces are an output, not a convergence target — MLIP training
+       sets are deliberately full of displaced and defective geometries with large
+       forces. Judging those by a relaxation criterion is meaningless.
+
+    A positive EDIFFG is an ENERGY criterion, not a force one; the gate declines it too."""
+    if ibrion is not None and float(ibrion) < 0:
+        return _na("force_convergence", "C1", f"IBRION={ibrion} is a single point, not a relaxation")
+    if nsw is not None and float(nsw) < 1:
+        return _na("force_convergence", "C1", f"NSW={nsw}: no ionic steps requested")
+    if ediffg is None:
+        return _skip("force_convergence", "C1", ("ediffg",))
+    if float(ediffg) >= 0:
+        return _na("force_convergence", "C1",
+                   f"EDIFFG={ediffg} is an energy criterion; no force target was set")
+    crit = abs(float(ediffg))
     return _v("force_convergence", fmax is not None and fmax <= crit,
               f"Fmax={fmax} vs crit={crit} (string flags ignored)", "C1")
 
@@ -425,7 +455,7 @@ _SPEC = [
     ("nelect_consistency",      "A1", ("nelect_ads", "nelect_bare", "zval_adsorbate"), lambda r: gate_nelect_consistency(r["nelect_ads"], r["nelect_bare"], r["zval_adsorbate"])),
     ("gas_thermo_completeness", "A3", ("ladder",),                               lambda r: gate_gas_thermo_completeness(r["ladder"])),
     ("zpe_completeness",        "B",  ("ladder",),                               lambda r: gate_zpe_completeness(r["ladder"])),
-    ("force_convergence",       "C1", ("fmax",),                                 lambda r: gate_force_convergence(r["fmax"], r.get("ediffg", -0.02))),
+    ("force_convergence",       "C1", ("fmax", "ediffg"),                       lambda r: gate_force_convergence(r["fmax"], r["ediffg"], r.get("ibrion"), r.get("nsw"))),
     ("energy_physical",         "C1", ("energy", "n_atoms"),                     lambda r: gate_energy_physical(r["energy"], r["n_atoms"])),
     ("opt_converged_flag",      "C2", ("opt_conv",),                             lambda r: gate_opt_converged_flag(r["opt_conv"])),
     ("products_exist",          "C3", ("products_found", "products_expected"),   lambda r: gate_products_exist(r["products_found"], r["products_expected"])),
@@ -683,6 +713,131 @@ def harvest_consistency(rows, key_fields, value_field, tol=1e-6):
     else:
         out.append(_skip("hv_variational_bound", "HV", ("geometry_hash+energy ×≥2 recipes",)))
 
+    return out
+
+
+# ===========================================================================
+# Input-side pre-submission gates (D-035). These check INCAR/KPOINTS/POTCAR
+# BEFORE sbatch, so they save compute instead of explaining a wasted run — and,
+# unlike the output-side gates, their coverage does not depend on what a pipeline
+# chooses to emit: the agent is writing these files, so the fields are always there.
+# Specs and cited blast radii: analysis/NEW_GATE_SPECS_2026-07-25.md section 4.
+# ===========================================================================
+
+_TAG_RE = None  # set lazily; stdlib re imported at call site to keep the module import-light
+
+
+def _incar_tags(text):
+    """INCAR -> {TAG: value}, plus the lines that carry more than one assignment."""
+    import re
+    tags, multi = {}, []
+    for raw in text.splitlines():
+        line = raw.split("#")[0].split("!")[0].strip()
+        if not line:
+            continue
+        pairs = re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=]*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*\s*=|$)",
+                           line)
+        if len(pairs) > 1:
+            multi.append((raw.strip(), [k.upper() for k, _ in pairs]))
+        for k, v in pairs:
+            tags[k.upper()] = v.strip()
+    return tags, multi
+
+
+def _as_float(tags, key):
+    try:
+        return float(str(tags[key]).split()[0])
+    except (KeyError, ValueError, IndexError):
+        return None
+
+
+def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
+    """Pre-submission audit. Returns verdicts in the same shape as audit()."""
+    out = []
+    tags, multi = _incar_tags(incar_text)
+
+    # P1 — one assignment per line, but ONLY on the build where it matters. The
+    # vasp.6.4.2-cp build parses only the FIRST tag on a line and drops the rest to
+    # their defaults with no warning (ai-emlp-iface D-78: a whole campaign ran with
+    # IVDW=0 and ISPIN=1 because they shared a line with ALGO). Stock VASP parses
+    # multi-tag lines correctly, so firing on them is over-firing: measured on 5624
+    # real INCARs it flagged 569 files (10%), most of which never touched that build.
+    # Undeclared binary is therefore a SKIP naming what is missing — the same
+    # "no provenance, no verdict" rule the output-side layer uses.
+    cp_build = binary is not None and ("cp" in str(binary).lower())
+    if not multi:
+        out.append(_v("in_one_tag_per_line", True, f"{len(tags)} tags, one per line", "P1"))
+    elif binary is None:
+        out.append(_skip("in_one_tag_per_line", "P1", ("binary",)))
+    elif cp_build:
+        out.append(_v("in_one_tag_per_line", False,
+                      f"{len(multi)} line(s) carry >1 tag and binary={binary!r} is a cp "
+                      f"build: only the first is applied: {[m[1] for m in multi][:3]}", "P1"))
+    else:
+        out.append(_na("in_one_tag_per_line", "P1",
+                       f"{len(multi)} multi-tag line(s), but binary={binary!r} parses them"))
+
+    # P4 — KSPACING silently wins over an explicit KPOINTS file.
+    if "KSPACING" in tags and kpoints_text:
+        out.append(_v("in_kspacing_vs_kpoints", False,
+                      f"KSPACING={tags['KSPACING']} present AND a KPOINTS file exists — "
+                      f"VASP uses KSPACING and ignores the file", "P4"))
+    elif "KSPACING" in tags:
+        out.append(_v("in_kspacing_vs_kpoints", True,
+                      f"KSPACING={tags['KSPACING']}, no KPOINTS file (consistent)", "P4"))
+    else:
+        out.append(_skip("in_kspacing_vs_kpoints", "P4", ("KSPACING",)))
+
+    # P19 — an optimiser with no step budget optimises nothing and exits COMPLETED
+    # (ai-strain D-131: VTST NEB with IBRION=3 POTIM=0 IOPT=3 and no NSW line -> every
+    # image frozen at its IDPP start, barriers 3-5 eV too high).
+    ibrion, nsw = _as_float(tags, "IBRION"), _as_float(tags, "NSW")
+    if ibrion is None:
+        out.append(_skip("in_nsw_for_optimizer", "P19", ("IBRION",)))
+    elif ibrion < 0:
+        out.append(_na("in_nsw_for_optimizer", "P19", f"IBRION={ibrion:g} is a single point"))
+    else:
+        out.append(_v("in_nsw_for_optimizer", nsw is not None and nsw >= 1,
+                      f"IBRION={ibrion:g} with NSW={'absent' if nsw is None else f'{nsw:g}'} "
+                      f"(default 0 = zero ionic steps)", "P19"))
+
+    # P2 — LMAXMIX must reach the valence l (d -> 4, f -> 6), else the d/f density is
+    # not fully mixed and SCF settles in a spurious spin state that still reports
+    # convergence (ai-plasma D-41: false PDS +0.85 eV).
+    if titels:
+        out.append(gate_lmaxmix_covers_valence(titels, _as_float(tags, "LMAXMIX")))
+    else:
+        out.append(_skip("lmaxmix_covers_valence", "P2", ("titels",)))
+
+    # P21 — a non-magnetic species initialised with a moment can converge to a spurious
+    # state (ai-xmat D-27: MAGMOM=64*1.0 on Cu with AMIX_MAG=0.8 -> 49.06 eV above the
+    # true ground state). Only decidable when the species list is known.
+    nonmag = {"Cu", "Ag", "Au", "Zn", "Cd", "Sn", "Pd", "Al", "Mg", "Ca", "Si", "Ga"}
+    if titels and "MAGMOM" in tags:
+        els = {t.split()[1].split("_")[0] for t in titels if len(t.split()) >= 2}
+        magnetic_possible = els - nonmag
+        # MAGMOM uses `N*value` repeat syntax — the multiplicity is a COUNT, not a
+        # moment. Reading "64*1.0" as a 64 uB moment would flag every clean file.
+        moments = []
+        for chunk in str(tags["MAGMOM"]).split():
+            piece = chunk.split("*")[-1]
+            try:
+                moments.append(abs(float(piece)))
+            except ValueError:
+                pass
+        ok = bool(magnetic_possible) or not any(m > 1e-9 for m in moments)
+        out.append(_v("in_nonmagnetic_magmom_zero", ok,
+                      f"MAGMOM={tags['MAGMOM']!r} on an all-non-magnetic species set "
+                      f"{sorted(els)}" if not ok
+                      else f"species {sorted(els)} may carry moments", "P21"))
+    else:
+        out.append(_skip("in_nonmagnetic_magmom_zero", "P21", ("titels", "MAGMOM")))
+
+    # P17 — an INCAR patched by sed/awk can end up with no ALGO line at all, which
+    # deadlocks or crawls on submit (ai-screen D-086).
+    missing = [k for k in ("ALGO", "ENCUT", "EDIFF") if k not in tags]
+    out.append(_v("in_required_keys_present", not missing,
+                  f"INCAR missing {missing}" if missing else "ALGO/ENCUT/EDIFF present", "P17"))
     return out
 
 
