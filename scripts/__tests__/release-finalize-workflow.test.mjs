@@ -203,8 +203,13 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   })
   assert.equal(
     publish.outputs.publish_attempted,
-    '${{ steps.publish.outputs.publish_attempted }}',
+    '${{ steps.publish-intent.outputs.publish_attempted }}',
   )
+  const publishIntent = publish.steps.find(
+    (step) => step.id === 'publish-intent',
+  )
+  assert.ok(publishIntent)
+  assert.match(publishIntent.run, /publish_attempted=true/)
 
   const mutationSteps = publish.steps.filter((step) =>
     /gh release edit/.test(step.run ?? ''),
@@ -215,11 +220,8 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
     mutation.name,
     'Publish with atomic identity recheck and rollback',
   )
-  assert.equal(mutation.id, 'publish')
-  assert.match(
-    mutation.run,
-    /publish_attempted=true[\s\S]*gh release edit "\$RELEASE_TAG"/,
-  )
+  assert.ok(publish.steps.indexOf(publishIntent) < publish.steps.indexOf(mutation))
+  assert.doesNotMatch(mutation.run, /publish_attempted=/)
   assert.match(mutation.run, /trap rollback ERR/)
   assert.match(
     mutation.run,

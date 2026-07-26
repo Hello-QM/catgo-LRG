@@ -363,7 +363,7 @@ jobs:
       actions: write
       contents: write
     outputs:
-      publish_attempted: ${{ steps.publish.outputs.publish_attempted }}
+      publish_attempted: ${{ steps.publish-intent.outputs.publish_attempted }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
@@ -379,11 +379,13 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
+      - name: Record durable GitHub publication intent
+        id: publish-intent
+        run: echo "publish_attempted=true" >> "$GITHUB_OUTPUT"
+
       - name: Publish with atomic identity recheck and rollback
-        id: publish
         run: |
           set -Eeuo pipefail
-          echo "publish_attempted=false" >> "$GITHUB_OUTPUT"
           verify_cloudflare_promotion() {
             receipt=$(mktemp)
             manifest=$(mktemp)
@@ -591,7 +593,6 @@ jobs:
           verify_cloudflare_promotion ||
             fail "Cloudflare promotion failed critical-section preflight."
 
-          echo "publish_attempted=true" >> "$GITHUB_OUTPUT"
           gh release edit "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
             --draft=false \
