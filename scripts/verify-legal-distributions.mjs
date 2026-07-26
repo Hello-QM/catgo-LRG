@@ -47,6 +47,13 @@ const PACKAGE_ARCHIVE_WORKFLOWS = new Set([
   'vsix-publish.yml',
 ])
 
+// Internal attestations cross workflow boundaries but are not end-user
+// distributions. Keep them explicit so upload-artifact cannot silently turn a
+// new workflow into an unclassified publisher.
+const INTERNAL_ARTIFACT_WORKFLOWS = new Set([
+  'finalize-release.yml',
+])
+
 const DISTRIBUTION_MARKER =
   /upload-artifact|gh release upload|action-gh-release|tauri-action|gh-action-pypi-publish|vsce publish|ovsx publish|build-push-action|wrangler-action|aws s3 sync/
 
@@ -213,6 +220,7 @@ function verifyDiscovery() {
   const owned = new Set([
     ...APPLICATION_WORKFLOWS,
     ...PACKAGE_ARCHIVE_WORKFLOWS,
+    ...INTERNAL_ARTIFACT_WORKFLOWS,
   ])
   assert.deepEqual(
     discovered.filter((name) => !owned.has(name)),
@@ -222,7 +230,7 @@ function verifyDiscovery() {
   for (const expected of owned) {
     assert.ok(
       discovered.includes(expected),
-      `${expected}: declared distribution workflow no longer publishes`,
+      `${expected}: declared artifact workflow no longer emits its expected publication marker`,
     )
   }
 }
@@ -366,6 +374,7 @@ function main() {
 
   const report = {
     classes: CLASSES,
+    internalArtifactWorkflows: [...INTERNAL_ARTIFACT_WORKFLOWS].sort(),
     acknowledgement: ACKNOWLEDGEMENT,
     requiredFiles: legalBundleSources().length + 1,
     verificationLevel: 'configuration-contracts',

@@ -330,6 +330,9 @@ test('release verifier validates configuration contracts for every application d
 
   const report = JSON.parse(result.stdout)
   assert.deepEqual(report.classes, DISTRIBUTION_CLASSES)
+  assert.deepEqual(report.internalArtifactWorkflows, [
+    'finalize-release.yml',
+  ])
   assert.equal(report.acknowledgement, ACK)
   assert.equal(report.requiredFiles, REQUIRED_FILES.length)
   assert.equal(report.verificationLevel, 'configuration-contracts')
