@@ -10,6 +10,7 @@ const RIGHTS_COMMAND = 'node scripts/verify-release-rights.mjs'
 
 const RELEASE_JOBS = {
   'android-build.yml': ['android'],
+  'build-stt-accel.yml': ['build', 'manifest'],
   'build-vscode-sidecars.yml': ['build'],
   'deploy-cloudflare.yml': [
     'deploy-app',
@@ -123,4 +124,34 @@ test('R2 evaluates rights from the target release instead of the default branch'
     targetGate.run,
     /rights_commit=\$\(git rev-parse "\$tag\^\{commit\}"\)[\s\S]*node scripts\/verify-release-rights\.mjs[\s\S]*--root "\$target_rights_source"/,
   )
+})
+
+test('STT evaluates target-tag rights before every first publication mutation', () => {
+  const parsed = workflow('build-stt-accel.yml')
+
+  for (const jobName of ['build', 'manifest']) {
+    const steps = parsed.jobs[jobName].steps
+    const gate = steps.findIndex(
+      (step) =>
+        typeof step.run === 'string' &&
+        step.run.includes(RIGHTS_COMMAND),
+    )
+    const publication = steps.findIndex(publishes)
+
+    assert.notEqual(gate, -1, `build-stt-accel.yml:${jobName} has a rights gate`)
+    assert.ok(
+      gate < publication,
+      `build-stt-accel.yml:${jobName} gates its first publication mutation`,
+    )
+    assert.match(
+      steps[gate].run,
+      /git worktree add --detach "\$target_rights_source" "\$rights_commit"/,
+      `build-stt-accel.yml:${jobName} checks the resolved target source`,
+    )
+    assert.match(
+      steps[gate].run,
+      /node scripts\/verify-release-rights\.mjs[\s\S]*--root "\$target_rights_source"/,
+      `build-stt-accel.yml:${jobName} verifies the target source root`,
+    )
+  }
 })

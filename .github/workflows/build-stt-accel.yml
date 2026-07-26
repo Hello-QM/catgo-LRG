@@ -39,9 +39,8 @@ jobs:
     name: ${{ matrix.key }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Stage canonical legal bundle
-        run: node scripts/sync-legal-bundle.mjs
+        with:
+          fetch-depth: 0
 
       - name: Resolve tag
         shell: bash
@@ -49,6 +48,43 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
         run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Verify target STT release rights
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SOURCE_COMMIT: ${{ github.sha }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if git fetch --force origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
+            rights_commit=$(git rev-parse "$tag^{commit}")
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            rights_commit="$EVENT_SOURCE_COMMIT"
+            git cat-file -e "$rights_commit^{commit}"
+          else
+            echo "::error::The pushed STT tag could not be resolved."
+            exit 1
+          fi
+          target_rights_source=$(mktemp -d)
+          rmdir "$target_rights_source"
+          cleanup() {
+            git worktree remove --force \
+              "$target_rights_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_rights_source" "$rights_commit"
+          node scripts/verify-release-rights.mjs \
+            --root "$target_rights_source"
+          cleanup
+          trap - EXIT
+          git checkout --detach "$rights_commit"
+          echo "RIGHTS_COMMIT=$rights_commit" >> "$GITHUB_ENV"
+
+      - name: Stage canonical legal bundle
+        run: node scripts/sync-legal-bundle.mjs
 
       - name: Resolve pinned whisper.cpp revision
         shell: bash
@@ -135,14 +171,50 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --latest=false --title "$TAG" \
+            || gh release create "$TAG" --latest=false \
+              --target "$RIGHTS_COMMIT" --title "$TAG" \
               --notes "CatGo STT GPU accelerator binaries. Each archive includes the CatGo legal and citation bundle."
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          published_commit=$(git rev-parse "$TAG^{commit}")
+          if [ "$published_commit" != "$RIGHTS_COMMIT" ]; then
+            echo "::error::STT release tag moved away from the rights-cleared source."
+            exit 1
+          fi
           gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
 
   manifest:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
+      - name: Verify target STT release rights
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          rights_commit=$(git rev-parse "$tag^{commit}")
+          target_rights_source=$(mktemp -d)
+          rmdir "$target_rights_source"
+          cleanup() {
+            git worktree remove --force \
+              "$target_rights_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_rights_source" "$rights_commit"
+          node scripts/verify-release-rights.mjs \
+            --root "$target_rights_source"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -153,7 +225,6 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          TAG="${INPUT_TAG:-$REF_NAME}"
           BASE="https://github.com/$REPO/releases/download/$TAG"
           python3 - "$BASE" <<'PY'
           import json, sys, glob, os
@@ -178,4 +249,4 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          gh release upload "${INPUT_TAG:-$REF_NAME}" stt-accel-manifest.json --clobber
+          gh release upload "$TAG" stt-accel-manifest.json --clobber
