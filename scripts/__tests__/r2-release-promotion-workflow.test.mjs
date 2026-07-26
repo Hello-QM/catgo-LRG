@@ -111,6 +111,16 @@ test('binds draft promotion to the finalizer source and asset snapshot before up
     assert.match(step.run, /EXPECTED_SOURCE_COMMIT/)
     assert.match(step.run, /EXPECTED_ASSET_SNAPSHOT/)
     assert.match(step.run, /git rev-parse "\$tag\^\{commit\}"/)
+    assert.match(
+      step.run,
+      /gh release view "\$tag"[\s\S]*--json databaseId/,
+    )
+    assert.match(
+      step.run,
+      /gh api "repos\/\$REPOSITORY\/releases\/\$release_id"/,
+    )
+    assert.match(step.run, /\.tag_name[\s\S]*\$tag/)
+    assert.doesNotMatch(step.run, /releases\/tags\/\$tag/)
     assert.match(step.run, /\.draft/)
     assert.match(step.run, /asset_snapshot/)
   }
