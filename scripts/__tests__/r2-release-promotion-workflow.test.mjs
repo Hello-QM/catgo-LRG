@@ -27,6 +27,8 @@ test('manual promotion is explicit, serialized, and fails when R2 credentials ar
   assert.equal(inputs.expected_source_commit.required, false)
   assert.equal(inputs.expected_asset_snapshot.required, false)
   assert.equal(inputs.promotion_id.required, false)
+  assert.match(current.concurrency.group, /r2-root-mutation/)
+  assert.match(current.concurrency.group, /inputs\.rollback_root/)
   assert.equal(current.concurrency['cancel-in-progress'], false)
   assert.deepEqual(current.permissions, {
     actions: 'read',
@@ -40,6 +42,28 @@ test('manual promotion is explicit, serialized, and fails when R2 credentials ar
   assert.match(credentials.run, /root_action/)
   assert.match(credentials.run, /promot/i)
   assert.match(credentials.run, /exit 1/)
+})
+
+test('rollback resolution avoids release APIs, tag fetches, and rights gates', () => {
+  const steps = workflow().jobs.mirror.steps
+  const resolveTag = stepNamed(steps, 'Resolve tag')
+  const rights = stepNamed(
+    steps,
+    'Verify target release rights before any R2 mutation',
+  )
+  const rootResolution = resolveTag.run.indexOf(
+    '[ "$EVENT_NAME" = "workflow_dispatch" ]',
+  )
+  const releaseQuery = resolveTag.run.indexOf('gh api --paginate')
+
+  assert.ok(rootResolution >= 0)
+  assert.ok(releaseQuery > rootResolution)
+  const rollbackSkip = rights.run.indexOf(
+    '[ "$ROOT_ACTION" = "rollback_root" ]',
+  )
+  const tagFetch = rights.run.indexOf('git fetch --force origin')
+  assert.ok(rollbackSkip >= 0)
+  assert.ok(tagFetch > rollbackSkip)
 })
 
 test('keeps AWS credentials out of job-wide environment and scopes them to AWS steps', () => {
@@ -119,13 +143,21 @@ test('only explicit promotion mutates root and writes index before latest commit
   const promote = stepNamed(steps, 'Back up and promote Cloudflare root')
   assert.doesNotMatch(sync.run, /s3:\/\/\$R2_BUCKET\/(?:index\.html|latest\.json)/)
   assert.match(promote.if, /inputs\.promote_root/)
+  const receipt = promote.run.indexOf(
+    '"s3://$R2_BUCKET/$receipt_key"',
+  )
   const index = promote.run.indexOf(
     'aws s3 cp index.html "s3://$R2_BUCKET/index.html"',
   )
   const latest = promote.run.indexOf(
     'aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json"',
   )
+  assert.ok(receipt >= 0)
   assert.ok(index >= 0)
+  assert.ok(
+    receipt < index,
+    'durable recovery receipt must exist before root mutation',
+  )
   assert.ok(latest > index, 'latest.json is the final root write')
   assert.doesNotMatch(promote.run, /latest_app_tag/)
 })

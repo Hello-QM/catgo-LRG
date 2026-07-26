@@ -362,6 +362,8 @@ jobs:
     permissions:
       actions: write
       contents: write
+    outputs:
+      publish_attempted: ${{ steps.publish.outputs.publish_attempted }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
@@ -378,8 +380,10 @@ jobs:
           fetch-depth: 0
 
       - name: Publish with atomic identity recheck and rollback
+        id: publish
         run: |
           set -Eeuo pipefail
+          echo "publish_attempted=false" >> "$GITHUB_OUTPUT"
           verify_cloudflare_promotion() {
             receipt=$(mktemp)
             manifest=$(mktemp)
@@ -587,6 +591,7 @@ jobs:
           verify_cloudflare_promotion ||
             fail "Cloudflare promotion failed critical-section preflight."
 
+          echo "publish_attempted=true" >> "$GITHUB_OUTPUT"
           gh release edit "$RELEASE_TAG" \
             --repo "$REPOSITORY" \
             --draft=false \
@@ -617,7 +622,7 @@ jobs:
       needs.validate.result == 'success' &&
       needs.publish.result != 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 300
     permissions:
       actions: write
       contents: write
@@ -626,6 +631,7 @@ jobs:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
       EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+      PUBLISH_ATTEMPTED: ${{ needs.publish.outputs.publish_attempted }}
       PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}
@@ -635,7 +641,7 @@ jobs:
           set -euo pipefail
           promotion_title="R2 promote $RELEASE_TAG [$PROMOTION_ID]"
           promotion_run_id=
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 540); do
             promotion_run_id=$(
               gh run list \
                 --repo "$REPOSITORY" \
@@ -646,34 +652,43 @@ jobs:
                 --jq ".[] |
                   select(.displayTitle == \"$promotion_title\") |
                   .databaseId" |
-                head -n 1
+                head -n 1 ||
+                true
             )
             [ -n "$promotion_run_id" ] && break
-            sleep 2
+            sleep 10
           done
-          if [ -z "$promotion_run_id" ]; then
-            echo "No R2 promotion run was dispatched; no public root to restore."
-            exit 0
-          fi
 
           # The promotion job may have lost its API response while the
           # dispatched workflow continued. Resolve the durable remote result.
-          gh run watch "$promotion_run_id" \
-            --repo "$REPOSITORY" \
-            --interval 15 || true
           promotion_result=$(mktemp)
-          gh run view "$promotion_run_id" \
-            --repo "$REPOSITORY" \
-            --json status,conclusion,headBranch \
-            > "$promotion_result"
+          promotion_terminal=false
           promotion_succeeded=false
-          if jq -e \
-              --arg branch "$DEFAULT_BRANCH" \
-              '.status == "completed" and
-               .conclusion == "success" and
-               .headBranch == $branch' \
-              "$promotion_result" > /dev/null; then
-            promotion_succeeded=true
+          if [ -n "$promotion_run_id" ]; then
+            for attempt in $(seq 1 360); do
+              if gh run view "$promotion_run_id" \
+                   --repo "$REPOSITORY" \
+                   --json status,conclusion,headBranch \
+                   > "$promotion_result"; then
+                if jq -e '.status == "completed"' \
+                    "$promotion_result" > /dev/null; then
+                  promotion_terminal=true
+                  break
+                fi
+              fi
+              sleep 15
+            done
+            if [ "$promotion_terminal" != "true" ]; then
+              echo "::error::R2 promotion did not reach a confirmed terminal state."
+              exit 1
+            fi
+            if jq -e \
+                --arg branch "$DEFAULT_BRANCH" \
+                '.conclusion == "success" and
+                 .headBranch == $branch' \
+                "$promotion_result" > /dev/null; then
+              promotion_succeeded=true
+            fi
           fi
           if [ "$promotion_succeeded" != "true" ]; then
             receipt_status=$(
@@ -684,7 +699,11 @@ jobs:
                 "https://dl.catgo-ucsd.org/promotion-receipts/$PROMOTION_ID.json?compensation=$PROMOTION_ID"
             )
             if [ "$receipt_status" = "404" ]; then
-              echo "R2 promotion did not commit a receipt; its in-workflow compensation owns any partial mutation."
+              if [ -z "$promotion_run_id" ]; then
+                echo "::error::Could not resolve the dispatched R2 promotion or its durable recovery receipt."
+                exit 1
+              fi
+              echo "Terminal R2 promotion did not persist a recovery receipt; no root mutation began."
               exit 0
             fi
             if [ "$receipt_status" != "200" ]; then
@@ -696,20 +715,27 @@ jobs:
 
           release_state=$(mktemp)
           github_draft_confirmed=false
-          for attempt in $(seq 1 20); do
-            if gh api \
-                 "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
-                 > "$release_state"; then
-              if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
-                github_draft_confirmed=true
-                break
+          if [ "$PUBLISH_ATTEMPTED" != "true" ]; then
+            # The only GitHub visibility mutation is below the step output
+            # marker. A skipped/checkout/preflight failure is therefore known
+            # to leave the release in its already-validated draft state.
+            github_draft_confirmed=true
+          else
+            for attempt in $(seq 1 20); do
+              if gh api \
+                   "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                   > "$release_state"; then
+                if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
+                  github_draft_confirmed=true
+                  break
+                fi
+                gh release edit "$RELEASE_TAG" \
+                  --repo "$REPOSITORY" \
+                  --draft=true || true
               fi
-              gh release edit "$RELEASE_TAG" \
-                --repo "$REPOSITORY" \
-                --draft=true || true
-            fi
-            sleep 3
-          done
+              sleep 3
+            done
+          fi
           if [ "$github_draft_confirmed" != "true" ]; then
             echo "::error::Could not confirm GitHub draft state; refusing to create a split release by rolling back only Cloudflare."
             exit 1

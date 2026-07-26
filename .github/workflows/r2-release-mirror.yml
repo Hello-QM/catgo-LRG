@@ -75,7 +75,10 @@ on:
         default: ''
 
 concurrency:
-  group: r2-release-mirror
+  group: >-
+    ${{ (inputs.promote_root || inputs.rollback_root) &&
+        'r2-root-mutation' ||
+        format('r2-release-mirror-{0}', github.run_id) }}
   cancel-in-progress: false
 
 permissions:
@@ -155,25 +158,29 @@ jobs:
           ROOT_ACTION: ${{ steps.creds.outputs.root_action }}
         run: |
           set -euo pipefail
-          latest_app_tag=$(
-            gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
-              --jq '.[] |
-                select(.draft == false and .prerelease == false) |
-                .tag_name |
-                select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
-              sort -V |
-              tail -n 1
-          )
-          if [ -z "$latest_app_tag" ] &&
-             ! { [ "$EVENT_NAME" = "workflow_dispatch" ] &&
-                 [ "$ROOT_ACTION" != "none" ] &&
-                 [ -n "$REQUESTED_TAG" ]; }; then
-            echo "No published CatGo app release found." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
+          root_request=false
           if [ "$EVENT_NAME" = "workflow_dispatch" ] &&
              [ "$ROOT_ACTION" != "none" ]; then
+            root_request=true
+          fi
+          latest_app_tag=
+          if [ "$root_request" != "true" ]; then
+            latest_app_tag=$(
+              gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
+                --jq '.[] |
+                  select(.draft == false and .prerelease == false) |
+                  .tag_name |
+                  select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+                sort -V |
+                tail -n 1
+            )
+            if [ -z "$latest_app_tag" ]; then
+              echo "No published CatGo app release found." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+
+          if [ "$root_request" = "true" ]; then
             if [ -z "$REQUESTED_TAG" ] ||
                ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
                ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]] ||
@@ -209,6 +216,10 @@ jobs:
           ROOT_ACTION: ${{ steps.creds.outputs.root_action }}
         run: |
           set -euo pipefail
+          if [ "$ROOT_ACTION" = "rollback_root" ]; then
+            echo "Rollback uses the exact promotion receipt and backup hashes; release-rights publication gates do not block safe restoration."
+            exit 0
+          fi
           tag="$MIRROR_TAG"
           git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
           if [ "$ROOT_ACTION" = "none" ]; then
@@ -863,6 +874,14 @@ jobs:
           node scripts/verify-release-promotion-receipt.mjs \
             "${receipt_args[@]}"
 
+          # Durable recovery marker: publish the fully verified receipt while
+          # the public root is still untouched. A cancelled runner can then
+          # always be reconciled by the independent finalizer compensator.
+          aws s3 cp \
+            "$work/receipt.json" \
+            "s3://$R2_BUCKET/$receipt_key" \
+            --content-type application/json \
+            --cache-control 'no-store'
           echo "backup_ready=true" >> "$GITHUB_OUTPUT"
           root_mutated=true
           aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
@@ -872,11 +891,6 @@ jobs:
           aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json" \
             --content-type application/json \
             --cache-control 'public, max-age=300'
-          aws s3 cp \
-            "$work/receipt.json" \
-            "s3://$R2_BUCKET/$receipt_key" \
-            --content-type application/json \
-            --cache-control 'no-store'
           echo "root_published=true" >> "$GITHUB_OUTPUT"
           trap - ERR
           rm -rf "$work"

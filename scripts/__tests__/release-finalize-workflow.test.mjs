@@ -174,6 +174,12 @@ test('independently compensates every failed finalization path after validation'
   const run = cleanup.steps.map((step) => step.run ?? '').join('\n')
   assert.match(run, /promotion_title=/)
   assert.match(run, /gh run view "\$promotion_run_id"/)
+  assert.match(run, /promotion_terminal=false/)
+  assert.match(run, /\.status == "completed"/)
+  assert.doesNotMatch(
+    run,
+    /No R2 promotion run was dispatched;[\s\S]*exit 0/,
+  )
   assert.match(run, /promotion-receipts\/\$PROMOTION_ID\.json/)
   assert.match(run, /write-out '%\{http_code\}'/)
   assert.match(
@@ -195,6 +201,10 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
     actions: 'write',
     contents: 'write',
   })
+  assert.equal(
+    publish.outputs.publish_attempted,
+    '${{ steps.publish.outputs.publish_attempted }}',
+  )
 
   const mutationSteps = publish.steps.filter((step) =>
     /gh release edit/.test(step.run ?? ''),
@@ -204,6 +214,11 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   assert.equal(
     mutation.name,
     'Publish with atomic identity recheck and rollback',
+  )
+  assert.equal(mutation.id, 'publish')
+  assert.match(
+    mutation.run,
+    /publish_attempted=true[\s\S]*gh release edit "\$RELEASE_TAG"/,
   )
   assert.match(mutation.run, /trap rollback ERR/)
   assert.match(

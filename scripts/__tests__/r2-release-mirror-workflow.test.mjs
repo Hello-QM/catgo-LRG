@@ -137,7 +137,7 @@ test('keeps triggers but resolves only validated CatGo app releases', () => {
   assert.match(WORKFLOW, /sort -V/)
   assert.match(WORKFLOW, /startsWith\(github\.event\.release\.tag_name, 'v'\)/)
   assert.doesNotMatch(WORKFLOW, /repos\/\$\{\{ github\.repository \}\}\/releases\/latest/)
-  assert.match(WORKFLOW, /group: r2-release-mirror/)
+  assert.match(WORKFLOW, /r2-release-mirror-\{0\}/)
 })
 
 test('never interpolates event or output tags into secrets-bearing shell', () => {
