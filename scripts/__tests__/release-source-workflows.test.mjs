@@ -170,6 +170,9 @@ test('Windows release publishers disable CRLF conversion before checkout', () =>
 test('desktop workflow can backfill only Windows from an exact release tag', () => {
   const parsed = workflow('tauri-build.yml')
   const dispatch = parsed.on.workflow_dispatch
+  const guard = parsed.jobs.build.steps.find(
+    (step) => step.name === 'Reject unsafe manual release matrix',
+  )
 
   assert.equal(dispatch.inputs.release_tag.type, 'string')
   assert.equal(dispatch.inputs.release_tag.required, false)
@@ -177,6 +180,13 @@ test('desktop workflow can backfill only Windows from an exact release tag', () 
   assert.equal(dispatch.inputs.windows_only.default, false)
   assert.match(String(parsed.jobs.build.strategy.matrix), /inputs\.windows_only/)
   assert.match(String(parsed.jobs.build.strategy.matrix), /windows-latest/)
+  assert.ok(guard)
+  assert.equal(
+    guard.if,
+    "github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && !inputs.windows_only",
+  )
+  assert.match(guard.run, /Windows-only/)
+  assert.match(guard.run, /exit 1/)
 })
 
 test('path-filtered release workflows watch the shared source verifier', () => {

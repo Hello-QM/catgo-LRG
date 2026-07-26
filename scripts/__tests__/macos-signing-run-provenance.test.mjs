@@ -11,23 +11,35 @@ import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { RELEASE_TRUST_POLICY } from '../release-trust-policy.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-macos-signing-run.mjs')
 const TRUSTED_WORKFLOW = resolve(ROOT, '.github/workflows/tauri-build.yml')
 const SOURCE_COMMIT = 'a'.repeat(40)
-const RUN_ID = '123456789'
+const V146_SOURCE_COMMIT = '06c02979b9e917011a63dcbfb09aaad7cfb9430d'
+const RUN_ID = '30209332584'
 const MACOS_JOB = 'Build (macOS (Apple Silicon))'
 const REQUIRED_STEPS = [
   'Verify macOS release signatures',
   'Upload macOS signing attestation',
 ]
+const V146_TAURI_WORKFLOW_SHA256 =
+  '18ede0be37b3bcda404f174ecb407382516f2d3efbb532d09a026f3d9ac9b208'
 
-function successfulJob() {
+test('keeps the immutable v1.4.6 Tauri workflow in the trusted allowlist', () => {
+  assert.ok(
+    RELEASE_TRUST_POLICY.tauriReleaseWorkflowSha256s.includes(
+      V146_TAURI_WORKFLOW_SHA256,
+    ),
+  )
+})
+
+function successfulJob(sourceCommit = SOURCE_COMMIT) {
   return {
     id: 987654321,
     run_id: Number(RUN_ID),
-    head_sha: SOURCE_COMMIT,
+    head_sha: sourceCommit,
     name: MACOS_JOB,
     status: 'completed',
     conclusion: 'success',
@@ -42,10 +54,11 @@ function successfulJob() {
 
 function fixture(overrides = {}) {
   const root = mkdtempSync(resolve(tmpdir(), 'catgo-macos-run-'))
+  const sourceCommit = overrides.sourceCommit ?? SOURCE_COMMIT
   const attestation = {
     schemaVersion: 1,
     releaseTag: 'v1.4.6',
-    sourceCommit: SOURCE_COMMIT,
+    sourceCommit,
     githubRunId: RUN_ID,
     signer: 'Developer ID Application: CatGo Project (ABCDEFGHIJ)',
     teamIdentifier: 'ABCDEFGHIJ',
@@ -58,7 +71,7 @@ function fixture(overrides = {}) {
     event: 'push',
     status: 'completed',
     conclusion: 'success',
-    head_sha: SOURCE_COMMIT,
+    head_sha: sourceCommit,
     ...overrides.run,
   }
   const jobs = overrides.jobs ?? {
@@ -71,6 +84,7 @@ function fixture(overrides = {}) {
     run: resolve(root, 'run.json'),
     jobs: resolve(root, 'jobs.json'),
     targetWorkflow: resolve(root, 'tauri-build.yml'),
+    sourceCommit,
   }
   writeFileSync(paths.attestation, `${JSON.stringify(attestation)}\n`)
   writeFileSync(paths.run, `${JSON.stringify(run)}\n`)
@@ -94,12 +108,78 @@ function verify(paths) {
       '--jobs',
       paths.jobs,
       '--source-commit',
-      SOURCE_COMMIT,
+      paths.sourceCommit,
       '--target-workflow',
       paths.targetWorkflow,
     ],
     { cwd: ROOT, encoding: 'utf8' },
   )
+}
+
+function knownV146PartialFailure(overrides = {}) {
+  const windows = {
+    id: 2,
+    run_id: Number(RUN_ID),
+    head_sha: V146_SOURCE_COMMIT,
+    name: 'Build (Windows)',
+    status: 'completed',
+    conclusion: 'failure',
+    steps: [
+      { name: 'Set up job', status: 'completed', conclusion: 'success' },
+      {
+        name: 'Checkout repository',
+        status: 'completed',
+        conclusion: 'success',
+      },
+      {
+        name: 'Verify release rights',
+        status: 'completed',
+        conclusion: 'failure',
+      },
+      {
+        name: 'Build and upload Tauri release',
+        status: 'completed',
+        conclusion: 'skipped',
+      },
+      {
+        name: 'Post Checkout repository',
+        status: 'completed',
+        conclusion: 'success',
+      },
+      {
+        name: 'Complete job',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    ],
+  }
+  const linux = {
+    id: 3,
+    run_id: Number(RUN_ID),
+    head_sha: V146_SOURCE_COMMIT,
+    name: 'Build (Linux)',
+    status: 'completed',
+    conclusion: 'success',
+    steps: [],
+  }
+  const jobs = [
+    successfulJob(V146_SOURCE_COMMIT),
+    overrides.windows ?? windows,
+    overrides.linux ?? linux,
+  ]
+  return {
+    sourceCommit: V146_SOURCE_COMMIT,
+    attestation: {
+      releaseTag: 'v1.4.6',
+      ...(overrides.attestation ?? {}),
+    },
+    run: {
+      event: 'push',
+      conclusion: 'failure',
+      ...(overrides.run ?? {}),
+    },
+    jobs: { total_count: jobs.length, jobs },
+  }
 }
 
 function withFixture(overrides, assertion) {
@@ -121,6 +201,52 @@ test('accepts the exact successful macOS release job from the pinned Tauri workf
   }
 })
 
+test('accepts only the known v1.4.6 Windows rights preflight matrix failure', () => {
+  withFixture(knownV146PartialFailure(), (result) => {
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+  })
+})
+
+test('rejects mutations of the known v1.4.6 partial-failure envelope', async (t) => {
+  const base = knownV146PartialFailure()
+  const windows = base.jobs.jobs[1]
+  const linux = base.jobs.jobs[2]
+  const cases = [
+    knownV146PartialFailure({
+      windows: { ...windows, name: 'Build (Windows forged)' },
+    }),
+    knownV146PartialFailure({
+      windows: {
+        ...windows,
+        steps: windows.steps.map((step) =>
+          step.conclusion === 'failure'
+            ? { ...step, name: 'Build and upload Tauri release' }
+            : step,
+        ),
+      },
+    }),
+    knownV146PartialFailure({
+      linux: { ...linux, conclusion: 'failure' },
+    }),
+    knownV146PartialFailure({
+      attestation: { releaseTag: 'v1.4.7' },
+    }),
+    knownV146PartialFailure({
+      run: { event: 'workflow_dispatch' },
+    }),
+    knownV146PartialFailure({
+      run: { head_sha: 'b'.repeat(40) },
+    }),
+  ]
+  for (const [index, candidate] of cases.entries()) {
+    await t.test(String(index), () => {
+      withFixture(candidate, (result) => {
+        assert.notEqual(result.status, 0)
+      })
+    })
+  }
+})
+
 test('rejects a run id, workflow path, source commit, or result outside the attestation', async (t) => {
   const failures = [
     [{ run: { id: 111111111 } }, /run id.*attestation/i],
@@ -129,7 +255,10 @@ test('rejects a run id, workflow path, source commit, or result outside the atte
       /workflow.*tauri-build\.yml/i,
     ],
     [{ run: { head_sha: 'b'.repeat(40) } }, /head_sha.*source commit/i],
-    [{ run: { conclusion: 'failure' } }, /conclusion.*success/i],
+    [
+      { run: { conclusion: 'failure' } },
+      /success or match the exact v1\.4\.6/i,
+    ],
     [{ run: { event: 'schedule' } }, /push or workflow_dispatch/i],
   ]
   for (const [index, [overrides, message]] of failures.entries()) {

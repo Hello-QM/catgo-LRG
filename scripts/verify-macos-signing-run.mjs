@@ -11,6 +11,12 @@ const RUN_ID_PATTERN = /^[1-9]\d*$/
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 const TAURI_WORKFLOW_PATH = '.github/workflows/tauri-build.yml'
 const MACOS_JOB_NAME = 'Build (macOS (Apple Silicon))'
+const LINUX_JOB_NAME = 'Build (Linux)'
+const WINDOWS_JOB_NAME = 'Build (Windows)'
+const V146_TAG = 'v1.4.6'
+const V146_SOURCE_COMMIT = '06c02979b9e917011a63dcbfb09aaad7cfb9430d'
+const V146_RUN_ID = '30209332584'
+const V146_WINDOWS_FAILURE_STEP = 'Verify release rights'
 const REQUIRED_STEPS = [
   'Verify macOS release signatures',
   'Upload macOS signing attestation',
@@ -76,13 +82,19 @@ function readJsonFile(path, kind) {
 }
 
 function verifyWorkflowHash(path) {
-  const approved = RELEASE_TRUST_POLICY.tauriReleaseWorkflowSha256
-  if (typeof approved !== 'string' || !SHA256_PATTERN.test(approved)) {
-    throw new Error('Trusted release policy has no valid Tauri workflow SHA-256')
+  const approved = RELEASE_TRUST_POLICY.tauriReleaseWorkflowSha256s
+  if (
+    !Array.isArray(approved) ||
+    approved.length === 0 ||
+    approved.some((digest) => !SHA256_PATTERN.test(digest))
+  ) {
+    throw new Error(
+      'Trusted release policy has no valid Tauri workflow SHA-256 allowlist',
+    )
   }
   const contents = readRegularFile(path, 'Target Tauri workflow', 512 * 1024)
   const actual = createHash('sha256').update(contents).digest('hex')
-  if (actual !== approved) {
+  if (!approved.includes(actual)) {
     throw new Error(
       'Target Tauri workflow SHA-256 does not match the trusted release policy',
     )
@@ -130,6 +142,85 @@ function verifyMacosJob(jobs, runId, sourceCommit) {
   for (const name of REQUIRED_STEPS) verifySuccessfulStep(job, name)
 }
 
+function verifyKnownV146WindowsPreflightFailure({
+  attestation,
+  run,
+  jobs,
+  runId,
+  sourceCommit,
+}) {
+  if (
+    attestation.releaseTag !== V146_TAG ||
+    sourceCommit !== V146_SOURCE_COMMIT ||
+    runId !== V146_RUN_ID ||
+    run.event !== 'push' ||
+    run.status !== 'completed' ||
+    run.conclusion !== 'failure'
+  ) {
+    return false
+  }
+
+  const expectedNames = [MACOS_JOB_NAME, LINUX_JOB_NAME, WINDOWS_JOB_NAME]
+  if (
+    jobs.length !== expectedNames.length ||
+    expectedNames.some(
+      (name) => jobs.filter((job) => job?.name === name).length !== 1,
+    )
+  ) {
+    throw new Error(
+      'Known v1.4.6 partial failure must contain exactly the macOS, Linux, and Windows jobs',
+    )
+  }
+  for (const job of jobs) {
+    if (
+      job.status !== 'completed' ||
+      String(job.run_id) !== runId ||
+      job.head_sha !== sourceCommit
+    ) {
+      throw new Error(
+        'Known v1.4.6 partial-failure job identity does not match the release run',
+      )
+    }
+  }
+
+  verifyMacosJob(jobs, runId, sourceCommit)
+  const linux = jobs.find((job) => job.name === LINUX_JOB_NAME)
+  if (linux.conclusion !== 'success') {
+    throw new Error('Known v1.4.6 Linux release job must complete with success')
+  }
+
+  const windows = jobs.find((job) => job.name === WINDOWS_JOB_NAME)
+  if (windows.conclusion !== 'failure') {
+    throw new Error('Known v1.4.6 Windows release job must be the failed job')
+  }
+  const failedSteps = jobs.flatMap((job) =>
+    (job.steps ?? []).filter((step) => step?.conclusion === 'failure'),
+  )
+  if (
+    failedSteps.length !== 1 ||
+    failedSteps[0].name !== V146_WINDOWS_FAILURE_STEP ||
+    failedSteps[0].status !== 'completed'
+  ) {
+    throw new Error(
+      'Known v1.4.6 run must fail only at the Windows release-rights preflight',
+    )
+  }
+  const failureIndex = windows.steps.findIndex(
+    (step) => step?.name === V146_WINDOWS_FAILURE_STEP,
+  )
+  for (const step of windows.steps.slice(failureIndex + 1)) {
+    const allowedEpilogue =
+      (step.name?.startsWith('Post ') || step.name === 'Complete job') &&
+      step.conclusion === 'success'
+    if (step.conclusion !== 'skipped' && !allowedEpilogue) {
+      throw new Error(
+        'Known v1.4.6 Windows build and upload steps after the preflight must be skipped',
+      )
+    }
+  }
+  return true
+}
+
 function verifyRunProvenance({
   attestationPath,
   runPath,
@@ -168,20 +259,29 @@ function verifyRunProvenance({
       'GitHub Actions run event must be push or workflow_dispatch',
     )
   }
-  if (
-    run.status !== 'completed' ||
-    run.conclusion !== 'success'
-  ) {
-    throw new Error(
-      'GitHub Actions run must be completed with conclusion success',
-    )
+  if (run.status !== 'completed') {
+    throw new Error('GitHub Actions run must be completed')
   }
   if (run.head_sha !== sourceCommit) {
     throw new Error(
       'GitHub Actions run head_sha does not match the source commit',
     )
   }
-  verifyMacosJob(jobs, attestation.githubRunId, sourceCommit)
+  if (run.conclusion === 'success') {
+    verifyMacosJob(jobs, attestation.githubRunId, sourceCommit)
+  } else if (
+    !verifyKnownV146WindowsPreflightFailure({
+      attestation,
+      run,
+      jobs,
+      runId: attestation.githubRunId,
+      sourceCommit,
+    })
+  ) {
+    throw new Error(
+      'GitHub Actions run must complete with success or match the exact v1.4.6 Windows rights-preflight exception',
+    )
+  }
   return { runId: attestation.githubRunId, sourceCommit }
 }
 

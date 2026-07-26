@@ -45,6 +45,13 @@ jobs:
         shell: bash -el {0}
 
     steps:
+      - name: Reject unsafe manual release matrix
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && !inputs.windows_only
+        shell: bash
+        run: |
+          echo "::error::Exact-tag release backfills are Windows-only."
+          exit 1
+
       - name: Free disk space (Linux)
         if: runner.os == 'Linux'
         run: |
