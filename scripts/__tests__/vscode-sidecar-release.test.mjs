@@ -47,7 +47,7 @@ test('sidecar archive verification excludes the sync ownership sentinel', () => 
   assert.match(step, /find build\/legal-bundle -type f/)
   assert.match(
     step,
-    /pyi-archive_viewer[\s\S]*\|\s*tr ['"]\\\\['"] ['"]\/['"]/,
+    /pyi-archive_viewer -b -l[\s\S]*\|\s*tr ['"]\\\\['"] ['"]\/['"]/,
     'Windows archive paths must be normalized before exact legal checks',
   )
   assert.match(

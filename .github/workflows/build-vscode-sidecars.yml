@@ -124,7 +124,7 @@ jobs:
       - name: Verify embedded legal bundle
         run: |
           set -euo pipefail
-          pyi-archive_viewer -l "${{ matrix.asset_name }}" |
+          pyi-archive_viewer -b -l "${{ matrix.asset_name }}" |
             tr '\\' '/' > sidecar-archive.lst
           while IFS= read -r file; do
             rel="${file#build/legal-bundle/}"
