@@ -1,0 +1,70 @@
+Bundled font notices
+====================
+
+The following notices apply to font files under `src/lib/fonts/`. The common
+SIL Open Font License 1.1 text is in `OFL-1.1.txt`.
+
+Geist
+-----
+
+Files: `Geist-Variable.woff2`
+Source: https://github.com/vercel/geist-font
+
+Copyright 2024 The Geist Project Authors
+(https://github.com/vercel/geist-font)
+
+License: SIL Open Font License 1.1. A source-specific copy is also retained as
+`src/lib/fonts/Geist-OFL.txt`.
+
+Cascadia Code
+-------------
+
+Files: `CascadiaCode-Regular.woff2`, `CascadiaCode-Bold.woff2`
+Source: https://github.com/microsoft/cascadia-code
+
+Copyright (c) 2019 - Present, Microsoft Corporation,
+with Reserved Font Name Cascadia Code.
+
+The embedded name table in the bundled files also states:
+
+© 2020 Microsoft Corporation. All Rights Reserved.
+
+Cascadia Code is a trademark of the Microsoft group of companies.
+
+License: SIL Open Font License 1.1.
+
+Fira Code
+---------
+
+Files: `FiraCode-Regular.woff2`, `FiraCode-Bold.woff2`
+Source: https://github.com/tonsky/FiraCode
+
+Copyright 2014-2021 The Fira Code Project Authors
+(https://github.com/tonsky/FiraCode)
+
+Fira Mono is a trademark of The Mozilla Corporation.
+
+License: SIL Open Font License 1.1.
+
+JetBrains Mono
+--------------
+
+Files: `JetBrainsMono-Regular.woff2`, `JetBrainsMono-Bold.woff2`
+Source: https://github.com/JetBrains/JetBrainsMono
+
+Copyright 2020 The JetBrains Mono Project Authors
+(https://github.com/JetBrains/JetBrainsMono)
+
+JetBrains Mono is a trademark of JetBrains s.r.o.
+
+License: SIL Open Font License 1.1.
+
+Source Code Pro
+---------------
+
+Files: `SourceCodePro-400.woff2`, `SourceCodePro-700.woff2`
+Source: https://github.com/adobe-fonts/source-code-pro
+
+© 2023 Adobe (http://www.adobe.com/), with Reserved Font Name ‘Source’
+
+License: SIL Open Font License 1.1.

@@ -19,12 +19,27 @@ on:
       - 'src/**'
       - 'server/**'
       - 'static/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'third_party/provenance/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
+      - 'scripts/verify-release-rights.mjs'
+      - 'scripts/verify-release-source.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'vite.desktop.config.ts'
       - 'vite.shared.ts'
       - 'svelte.config.js'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Upload the bundle to this release tag; empty builds a workflow artifact only'
+        type: string
+        required: false
+        default: ''
 
 env:
   CARGO_NET_RETRY: "10"
@@ -41,6 +56,24 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-source.mjs
 
       - uses: pnpm/action-setup@v4
 
@@ -94,6 +127,9 @@ jobs:
       - name: Build frontend
         run: pnpm run deploy:build
 
+      - name: Verify legal retention for distribution pipelines
+        run: pnpm legal:verify
+
       - name: Create HPC bundle
         run: |
           BUNDLE_DIR="catgo-hpc-bundle"
@@ -105,12 +141,24 @@ jobs:
           # Copy server (Python backend)
           cp -r server "$BUNDLE_DIR/server"
 
+          # Copy the complete canonical redistribution bundle.
+          cp -r build/legal-bundle "$BUNDLE_DIR/legal"
+
           # Remove __pycache__ and .pyc files
           find "$BUNDLE_DIR/server" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
           find "$BUNDLE_DIR/server" -name "*.pyc" -delete 2>/dev/null || true
 
           # Create tarball
-          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server
+          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server legal
+
+          tar tzf catgo-hpc-bundle.tar.gz > hpc-archive.lst
+          while IFS= read -r file; do
+            rel="${file#build/legal-bundle/}"
+            if ! grep -Fq "legal/$rel" hpc-archive.lst; then
+              echo "::error::HPC bundle is missing legal/$rel"
+              exit 1
+            fi
+          done < <(find build/legal-bundle -type f | sort)
 
           echo "Bundle contents:"
           tar tzf catgo-hpc-bundle.tar.gz | head -20
@@ -124,10 +172,11 @@ jobs:
           path: catgo-hpc-bundle.tar.gz
           retention-days: 90
 
-      # Attach to release when triggered by a tag
+      # Attach to a release for tag pushes or an explicitly versioned manual run.
       - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
           files: catgo-hpc-bundle.tar.gz
           draft: true

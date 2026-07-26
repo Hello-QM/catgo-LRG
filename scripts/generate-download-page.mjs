@@ -8,6 +8,11 @@ import {
 import { basename, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import {
+  classifyDownloadAsset,
+  comparePlatformDownloads,
+} from './download-asset-classifier.mjs'
+
 export const TESTFLIGHT_URL = 'https://testflight.apple.com/join/FdHup5Hz'
 
 const PLATFORM_META = {
@@ -46,14 +51,6 @@ const PLATFORM_META = {
     noteZh: '通过 Apple TestFlight 安装公开测试版。',
     noteEn: 'Install the public beta through Apple TestFlight.',
   },
-}
-
-const FORMAT_PRIORITY = {
-  windows: ['EXE', 'MSI'],
-  macos: ['DMG'],
-  linux: ['DEB', 'RPM', 'AppImage'],
-  android: ['APK'],
-  ios: ['TestFlight'],
 }
 
 function escapeHtml(value) {
@@ -108,60 +105,6 @@ function formatBytes(bytes) {
   return `${(bytes / 1_000_000_000).toFixed(2)} GB`
 }
 
-function formatForAsset(name) {
-  if (/\.msi$/i.test(name)) return 'MSI'
-  if (/\.exe$/i.test(name)) return 'EXE'
-  if (/\.dmg$/i.test(name)) return 'DMG'
-  if (/\.deb$/i.test(name)) return 'DEB'
-  if (/\.rpm$/i.test(name)) return 'RPM'
-  if (/\.appimage$/i.test(name)) return 'AppImage'
-  if (/\.apk$/i.test(name)) return 'APK'
-  return null
-}
-
-function platformForAsset(name, format) {
-  if (!format) return null
-  if (!/^CatGo(?:[_-]|$)/i.test(name)) return null
-  if (
-    (format === 'EXE' || format === 'MSI')
-    && /(?:^|[_-])(?:x64|x86_64)(?:[_-]|\.)/i.test(name)
-  ) {
-    return 'windows'
-  }
-  if (
-    format === 'DMG'
-    && /(?:^|[_-])(?:aarch64|arm64)(?:[_-]|\.)/i.test(name)
-  ) {
-    return 'macos'
-  }
-  if (format === 'DEB' || format === 'RPM' || format === 'AppImage') {
-    return /(?:^|[._-])(?:amd64|x86_64)(?:[._-])/i.test(name)
-      ? 'linux'
-      : null
-  }
-  if (
-    format === 'APK'
-    && /(?:^|[_-])android(?:[_-]|\.)/i.test(name)
-    && /(?:^|[_-])universal(?:[_-]|\.)/i.test(name)
-  ) {
-    return 'android'
-  }
-  return null
-}
-
-function architectureForAsset(platform, name) {
-  if (platform === 'windows') {
-    return /arm64|aarch64/i.test(name) ? 'ARM64' : 'x64'
-  }
-  if (platform === 'macos') {
-    return /x64|x86_64/i.test(name) ? 'Intel' : 'Apple Silicon'
-  }
-  if (platform === 'linux') {
-    return /aarch64|arm64/i.test(name) ? 'ARM64' : 'amd64'
-  }
-  return 'Universal'
-}
-
 function normalizeAsset(asset, tag, baseUrl) {
   if (
     !asset
@@ -172,27 +115,14 @@ function normalizeAsset(asset, tag, baseUrl) {
   ) {
     throw new Error('Every release asset must have a non-empty name and size')
   }
-  const format = formatForAsset(asset.name)
-  const platform = platformForAsset(asset.name, format)
+  const classification = classifyDownloadAsset(asset.name)
   return {
     name: asset.name,
     size: asset.size,
     sizeLabel: formatBytes(asset.size),
-    format,
-    platform,
-    architecture: platform
-      ? architectureForAsset(platform, asset.name)
-      : null,
+    ...classification,
     url: `${baseUrl}/${encodePathSegment(tag)}/${encodePathSegment(asset.name)}`,
   }
-}
-
-function compareDownloads(platform, left, right) {
-  const priority = FORMAT_PRIORITY[platform]
-  const leftRank = priority.indexOf(left.format)
-  const rightRank = priority.indexOf(right.format)
-  if (leftRank !== rightRank) return leftRank - rightRank
-  return left.name.localeCompare(right.name)
 }
 
 export function buildReleaseModel({ assets, tag, baseUrl }) {
@@ -220,15 +150,7 @@ export function buildReleaseModel({ assets, tag, baseUrl }) {
   const other = []
 
   for (const asset of normalizedAssets) {
-    const isSecondary =
-      /\.sig$/i.test(asset.name)
-      || /\.json$/i.test(asset.name)
-      || /\.vsix$/i.test(asset.name)
-      || /\.ipa$/i.test(asset.name)
-      || /\.tar\.(?:gz|xz|zst)$/i.test(asset.name)
-      || /^catgo-server-/i.test(asset.name)
-
-    if (asset.platform && !isSecondary) {
+    if (asset.userFacing) {
       platforms[asset.platform].downloads.push(asset)
     } else {
       other.push(asset)
@@ -238,7 +160,7 @@ export function buildReleaseModel({ assets, tag, baseUrl }) {
   for (const [key, platform] of Object.entries(platforms)) {
     if (key === 'ios') continue
     platform.downloads.sort((left, right) =>
-      compareDownloads(key, left, right),
+      comparePlatformDownloads(key, left, right),
     )
     platform.preferred = platform.downloads[0] ?? null
     platform.available = platform.preferred !== null

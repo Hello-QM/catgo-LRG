@@ -37,6 +37,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -147,6 +150,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -264,6 +270,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

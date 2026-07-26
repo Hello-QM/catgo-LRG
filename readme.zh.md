@@ -17,7 +17,7 @@
 <p align="center">
 
 [![Tests](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml/badge.svg)](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml)
-[![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
 
 </p>
 
@@ -379,7 +379,13 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 
 **CatRender** 是 CatGo 的 Rust/WASM 分子 SVG 渲染器。它以忠实复现为目标移植自 [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender)；后者的技术脉络还包括 [xyz2svg](https://github.com/briling/xyz2svg)。CatRender 在此基础上增加了 CatGo 的交互控制和导出集成。
 
-如果 CatGo 对论文工作有贡献，请引用 ChemRxiv 预印本：
+CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明下列致谢并使用首选的 ChemRxiv 引用。
+
+```
+This work used CatGo (https://catgo-ucsd.org).
+```
+
+首选 ChemRxiv 引用如下：
 
 ```bibtex
 @misc{liu2026catgo,
@@ -393,7 +399,7 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 }
 ```
 
-软件版本的引用信息见 [`citation.cff`](citation.cff) 和 Zenodo 存档 [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425)。项目采用 [GNU AGPL-3.0-or-later](license)。
+软件版本的规范引用信息见 [`CITATION.cff`](CITATION.cff) 和 Zenodo 存档 [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425)。该请求不构成 AGPL 许可的附加条件。第三方材料保留其各自的条款；请见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ---
 

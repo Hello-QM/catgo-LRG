@@ -55,6 +55,23 @@ const msg_args = { // generic placeholder arguments for all messages
 } as const
 
 const mock_vscode = vi.hoisted(() => ({
+  EventEmitter: class<T> {
+    private listeners: Array<(event: T) => void> = []
+    readonly event = (listener: (event: T) => void) => {
+      this.listeners.push(listener)
+      return {
+        dispose: () => {
+          this.listeners = this.listeners.filter((item) => item !== listener)
+        },
+      }
+    }
+    fire(event: T) {
+      for (const listener of [...this.listeners]) listener(event)
+    }
+    dispose() {
+      this.listeners = []
+    }
+  },
   window: {
     showInformationMessage: vi.fn(),
     showErrorMessage: vi.fn(),
@@ -171,6 +188,13 @@ describe(`CatGo Extension`, () => {
     html: ``,
   }
   const mock_context = { extensionUri: { fsPath: `/test` }, subscriptions: [] }
+  const parse_catgo_data = (html: string): Record<string, unknown> => {
+    const serialized = html.match(
+      /window\.catgoData=(\{[\s\S]*?\})(?=\s*<\/script>)/,
+    )?.[1]
+    if (!serialized) throw new Error(`Missing window.catgoData assignment`)
+    return JSON.parse(serialized)
+  }
 
   test.each([
     [`test.gz`, true],
@@ -285,12 +309,10 @@ describe(`CatGo Extension`, () => {
     )
 
     expect(html).toContain(`<!DOCTYPE html>`)
-    expect(html).toContain(JSON.stringify(webview_data_with_theme))
+    expect(parse_catgo_data(html)).toMatchObject(webview_data_with_theme)
 
     // Step 5: Verify the exact data structure that would be sent to webview
-    const parsed_data = JSON.parse(
-      html.match(/catgoData=(\{[\s\S]*?\})(?=\s*<\/script>)/)?.[1] ?? `{}`,
-    )
+    const parsed_data = parse_catgo_data(html) as typeof webview_data_with_theme
     expect(parsed_data.type).toBe(`trajectory`)
     expect(parsed_data.data.filename).toBe(ase_filename)
     expect(parsed_data.data.is_base64).toBe(true)
@@ -360,7 +382,7 @@ describe(`CatGo Extension`, () => {
     expect(html).toContain(`default-src 'none'`)
     expect(html).toContain(`script-src 'nonce-`)
     expect(html).toMatch(/nonce="[a-zA-Z0-9]{8,32}"/)
-    expect(html).toContain(JSON.stringify(webview_data))
+    expect(parse_catgo_data(html)).toMatchObject(webview_data)
     expect(html).toContain(`catgo-app`)
   })
 
@@ -959,7 +981,8 @@ describe(`CatGo Extension`, () => {
       } as const
       const html = create_html(mock_webview, mock_context, data)
 
-      expect(html).toContain(JSON.stringify(data))
+      expect(parse_catgo_data(html)).toMatchObject(data)
+      if (payload.includes(`<`)) expect(html).not.toContain(payload)
       if (payload.includes(`<script>`)) {
         expect(html).not.toMatch(
           new RegExp(

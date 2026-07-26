@@ -4,7 +4,7 @@
   "homepage": "https://github.com/Hello-QM/catgo-LRG",
   "repository": "https://github.com/Hello-QM/catgo-LRG",
   "license": "AGPL-3.0-or-later",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "bugs": "https://github.com/Hello-QM/catgo-LRG/issues",
@@ -93,6 +93,7 @@
     "@types/three": "^0.181.0",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.0.6",
+    "@vscode/vsce": "^3.9.2",
     "@webgpu/types": "^0.1.70",
     "concurrently": "^9.2.1",
     "d3-time-format": "^4.1.0",
@@ -217,7 +218,11 @@
   },
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "CITATION.cff",
+    "THIRD_PARTY_NOTICES.md",
+    "third_party/licenses",
+    "third_party/provenance"
   ],
   "pnpm": {
     "overrides": {
@@ -235,17 +240,19 @@
   },
   "scripts": {
     "prepare": "svelte-kit sync || true",
+    "legal:sync": "node scripts/sync-legal-bundle.mjs",
+    "legal:verify": "node scripts/verify-legal-distributions.mjs",
     "build:doc-chunks": "node scripts/build-doc-chunks.js",
     "build:agent": "node scripts/build-agent-sidecar.mjs",
     "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
+    "docs:build": "pnpm legal:sync && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "desktop:dev": "node scripts/predev.mjs && vite --config vite.desktop.config.ts",
     "build:wasm": "node scripts/build-wasm.mjs",
     "verify:wasm": "node scripts/verify-wasm-artifacts.mjs",
-    "desktop:build": "pnpm build:wasm && vite build --config vite.desktop.config.ts",
-    "deploy:build": "pnpm build:wasm && VITE_STATIC_ONLY=true vite build --config vite.desktop.config.ts",
+    "desktop:build": "pnpm legal:sync && pnpm build:wasm && vite build --config vite.desktop.config.ts",
+    "deploy:build": "pnpm legal:sync && pnpm build:wasm && VITE_STATIC_ONLY=true vite build --config vite.desktop.config.ts",
     "build:connect": "pnpm build:wasm && vite build --config vite.desktop.config.ts",
     "setup": "node scripts/setup.mjs",
     "setup:check": "node scripts/setup.mjs --check",
@@ -267,6 +274,7 @@
     "bundle:windows": "pnpm backend:build:windows && pnpm tauri:build:windows",
     "bundle:mac-arm": "pnpm backend:build:mac-arm && pnpm tauri:build:mac-arm",
     "vitest": "vitest",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:node": "pnpm legal:sync && node --test scripts/__tests__/*.test.mjs workers/downloads/index.test.mjs"
   }
 }

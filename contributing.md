@@ -140,3 +140,20 @@ Wait for me to approve before editing.
   scoped to one engine help reviewers route the work.
 
 Thanks again — happy hacking!
+
+---
+
+## Licensing of contributions
+
+- Contributors must have the right to submit their work to CatGo.
+- Third-party code must retain its original notices; copying it into CatGo does
+  not relicense third-party code.
+- Accepting a pull request does not by itself prove copyright assignment.
+- Before accepting a contribution, maintainers may require a separate
+  contributor agreement so the project has the right to license and enforce its
+  code.
+- Contributions to CatGo are accepted under AGPL-3.0-or-later.
+- CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
+  please include “This work used CatGo (https://catgo-ucsd.org).” and the
+  preferred citation in CITATION.cff. This request is not an additional
+  condition of the AGPL license.

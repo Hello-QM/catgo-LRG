@@ -160,7 +160,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let atom_grad_str = cfg_f(&cfg, "atom_gradient_strength", 1.0);
     let fog_on = cfg_b(&cfg, "fog", false);
     let fog_strength = cfg_f(&cfg, "fog_strength", 0.8);
-    let bond_orders = cfg_b(&cfg, "bond_orders", false) || inp.style.perceive_orders;
+    let bond_orders = cfg_b(&cfg, "bond_orders", false);
     let background = cfg_color(&cfg, "background", "#ffffff");
     let transparent = cfg_b(&cfg, "transparent", false);
     let padding = cfg_f(&cfg, "padding", 20.0);
@@ -231,30 +231,9 @@ pub fn render_svg(inp: &RenderInput) -> String {
         &inp.bonds
     };
 
-    // OpenBabel-style bond-order perception (opt-in). Rebuilds orders on a
-    // local copy so the input borrow stays immutable. perceive.rs handles
-    // single/double/triple + aromatic(=1.5). See plan 2026-05-21.
-    let perceived_owned: Vec<crate::types::Bond>;
-    let raw_bonds: &[crate::types::Bond] = if inp.style.perceive_orders {
-        let z: Vec<u32> = inp.atoms.iter().map(|a| s2n(&a.el)).collect();
-        let xyz: Vec<[f64; 3]> = inp.atoms.iter().map(|a| a.xyz).collect();
-        let pairs: Vec<(usize, usize)> =
-            raw_bonds.iter().map(|b| (b.i, b.j)).collect();
-        let mut orders: Vec<f64> = raw_bonds.iter().map(|b| b.order).collect();
-        crate::perceive::perceive_bond_orders(&z, &xyz, &pairs, &mut orders);
-        perceived_owned = raw_bonds
-            .iter()
-            .zip(orders.iter())
-            .map(|(b, &o)| crate::types::Bond { i: b.i, j: b.j, order: o, ts: b.ts, nci: b.nci })
-            .collect();
-        &perceived_owned
-    } else {
-        raw_bonds
-    };
-
     // Bond-length sanity filter (opt-in): drop bonds far longer than the sum
     // of covalent radii — removes spurious over-long bonds from distance-based
-    // connectivity. Uses the perceive.rs covalent-radius table.
+    // connectivity.
     let pruned_owned: Vec<crate::types::Bond>;
     let raw_bonds: &[crate::types::Bond] = if inp.style.prune_long_bonds {
         let factor = cfg_f(&cfg, "bond_prune_factor", 1.3);
@@ -293,8 +272,10 @@ pub fn render_svg(inp: &RenderInput) -> String {
                     (d[0].powi(2) + d[1].powi(2) + d[2].powi(2)).sqrt()
                 };
                 let max = factor
-                    * (crate::perceive::covalent_rad(s2n(&inp.atoms[b.i].el))
-                        + crate::perceive::covalent_rad(s2n(&inp.atoms[b.j].el)));
+                    * (crate::element_data::covalent_radius(&inp.atoms[b.i].el)
+                        .unwrap_or(1.6)
+                        + crate::element_data::covalent_radius(&inp.atoms[b.j].el)
+                            .unwrap_or(1.6));
                 len <= max
             })
             .cloned()
@@ -2052,6 +2033,20 @@ mod tests {
     }
 
     #[test]
+    fn prune_long_bonds_keeps_iodine_pair_with_generated_radius() {
+        let on = render(
+            r#"{"atoms":[{"el":"I","xyz":[0,0,0]},{"el":"I","xyz":[3,0,0]}],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
+        );
+        assert_eq!(
+            on.matches("<line").count(),
+            1,
+            "iodine bond below 1.3 times the generated covalent-radius sum must survive"
+        );
+    }
+
+    #[test]
     fn hide_cross_cell_drops_boundary_bond() {
         // Cubic 3 Å cell. Two C: [0.1,0,0] and [2.9,0,0]. The i–j vector is
         // -2.8 Å → fractional ≈ -0.933 → round = -1 ≠ 0 → cross-cell. The
@@ -2715,29 +2710,22 @@ mod tests {
     }
 
     #[test]
-    fn perceive_orders_renders_benzene_aromatic() {
-        // 6 carbons in a planar hexagon, explicit bonds, perceive_orders on.
-        // Aromatic strokes use width 0.7·bw — assert the multi/aromatic stroke
-        // width appears (single bonds use full bw). With perception ON, every
-        // C-C bond becomes aromatic (1.5) so the thinner aromatic stroke shows.
+    fn legacy_perceive_orders_key_does_not_override_supplied_orders() {
         let s = render(
             r#"{"atoms":[
                 {"el":"C","xyz":[1.39,0,0]},{"el":"C","xyz":[0.695,1.203,0]},
                 {"el":"C","xyz":[-0.695,1.203,0]},{"el":"C","xyz":[-1.39,0,0]},
                 {"el":"C","xyz":[-0.695,-1.203,0]},{"el":"C","xyz":[0.695,-1.203,0]}],
-                "bonds":[{"i":0,"j":1},{"i":1,"j":2},{"i":2,"j":3},
-                         {"i":3,"j":4},{"i":4,"j":5},{"i":5,"j":0}],
+                "bonds":[{"i":0,"j":1,"order":1},{"i":1,"j":2,"order":1},
+                         {"i":2,"j":3,"order":1},{"i":3,"j":4,"order":1},
+                         {"i":4,"j":5,"order":1},{"i":5,"j":0,"order":1}],
                 "style":{"preset":"default","auto_orient":false,"perceive_orders":true}}"#,
         );
-        // aromatic ring-side bonds emit a SECOND offset line per bond (the
-        // inner aromatic line). A plain single-bond benzene emits 6 <line>;
-        // aromatic emits more. Assert > 6 bond lines.
-        let lines = s.matches("<line").count();
-        assert!(lines > 6, "perceived aromatic benzene should add inner lines, got {lines}");
+        assert_eq!(s.matches("<line").count(), 6);
     }
 
     #[test]
-    fn perceive_orders_off_keeps_single() {
+    fn supplied_single_orders_stay_single() {
         let s = render(
             r#"{"atoms":[
                 {"el":"C","xyz":[1.39,0,0]},{"el":"C","xyz":[0.695,1.203,0]},

@@ -9,6 +9,14 @@ on:
       - 'server/**'
       - 'src/**'
       - 'extensions/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'third_party/provenance/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
+      - 'scripts/verify-release-rights.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
   pull_request:
@@ -16,6 +24,14 @@ on:
       - 'Dockerfile'
       - 'docker/**'
       - 'server/**'
+      - 'license'
+      - 'CITATION.cff'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'third_party/licenses/**'
+      - 'third_party/provenance/**'
+      - 'scripts/sync-legal-bundle.mjs'
+      - 'scripts/verify-legal-distributions.mjs'
+      - 'scripts/verify-release-rights.mjs'
   workflow_dispatch:
 
 env:
@@ -31,6 +47,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

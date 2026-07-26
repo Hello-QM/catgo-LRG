@@ -106,8 +106,6 @@ class CatRenderState {
   // PBC ghost wrap-images: dim, bondless partner atoms across neighbour cells
   // for boundary atoms (RT12). Periodic structures only.
   pbc_wrap = $state(false)
-  // OpenBabel-style auto bond-order perception (molecular only — not slabs).
-  perceive_orders = $state<boolean>(false)
   // Drop bonds far longer than the covalent-radii sum (removes spurious
   // over-long bonds from distance-based connectivity).
   prune_long_bonds = $state<boolean>(false)

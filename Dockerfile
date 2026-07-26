@@ -118,6 +118,7 @@ COPY server ./server
 
 # Built frontend + Caddy config
 COPY --from=builder /app/build-desktop ./build-desktop
+COPY --from=builder /app/build/legal-bundle /usr/share/doc/catgo
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 COPY docker/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh

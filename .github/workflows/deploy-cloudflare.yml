@@ -17,6 +17,14 @@ on:
       - "extensions/catrender-wasm/**"
       - "extensions/rust-wasm/**"
       - "static/**"
+      - "license"
+      - "CITATION.cff"
+      - "THIRD_PARTY_NOTICES.md"
+      - "third_party/licenses/**"
+      - "third_party/provenance/**"
+      - "scripts/sync-legal-bundle.mjs"
+      - "scripts/verify-legal-distributions.mjs"
+      - "scripts/verify-release-rights.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "vite.desktop.config.ts"
@@ -52,6 +60,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
@@ -64,6 +75,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm docs:build
+
+      - name: Verify legal retention for static deployments
+        run: pnpm legal:verify
 
       - name: Inject cache headers
         run: |
@@ -88,6 +102,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.90.1'
           command: deploy --config wrangler.docs.toml
 
   deploy-app:
@@ -96,6 +111,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
 
       - uses: pnpm/action-setup@v4
         with:
@@ -151,6 +169,9 @@ jobs:
       - name: Build static SPA (VITE_STATIC_ONLY=true)
         run: pnpm deploy:build
 
+      - name: Verify legal retention for static deployments
+        run: pnpm legal:verify
+
       - name: Inject cache + isolation headers
         run: |
           # Remove the dev-only _redirects shipped under build-desktop/;
@@ -189,6 +210,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.90.1'
           command: deploy --config wrangler.app.toml
 
   deploy-downloads:
@@ -198,6 +220,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
@@ -206,4 +231,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.90.1'
           command: deploy --config wrangler.downloads.toml

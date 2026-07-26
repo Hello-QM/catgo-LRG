@@ -10,6 +10,11 @@ import { mock_vscode } from './tests/vscode-mock'
 const __dirname = fileURLToPath(new URL(`.`, import.meta.url))
 
 export default defineConfig(({ mode }) => ({
+  // wasm-bindgen-rayon's threaded glue imports child worker chunks. Vite's
+  // default IIFE worker output cannot code-split, so emit module workers.
+  worker: {
+    format: `es`,
+  },
   plugins: [
     mode === `test`
       ? { // just ignore svelte files in test mode
