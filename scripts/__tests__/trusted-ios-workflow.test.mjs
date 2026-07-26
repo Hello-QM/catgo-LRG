@@ -20,11 +20,21 @@ const VERIFIER = resolve(ROOT, 'scripts/verify-trusted-ios-workflow.mjs')
 const IOS_WORKFLOW = resolve(ROOT, '.github/workflows/ios-build.yml')
 const V146_IOS_WORKFLOW_SHA256 =
   '52d711337b1a5376d14c22201ce581510e6950d86086ec8cd7f0f5ee5d62d4b0'
+const V146_RECOVERY_WORKFLOW_SHA256 =
+  'e84523cf386246dd5d2d8a1c8193b419d684f7e623abd7081b52549a85788156'
 
 test('keeps the immutable v1.4.6 iOS workflow in the trusted allowlist', () => {
   assert.ok(
     RELEASE_TRUST_POLICY.iosBuildWorkflowSha256s.includes(
       V146_IOS_WORKFLOW_SHA256,
+    ),
+  )
+})
+
+test('keeps the in-flight v1.4.6 recovery workflow trusted', () => {
+  assert.ok(
+    RELEASE_TRUST_POLICY.iosBackfillWorkflowSha256s.includes(
+      V146_RECOVERY_WORKFLOW_SHA256,
     ),
   )
 })

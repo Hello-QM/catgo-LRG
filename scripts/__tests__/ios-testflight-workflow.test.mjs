@@ -9,6 +9,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const PATH = resolve(ROOT, '.github/workflows/ios-build.yml')
 const SOURCE = readFileSync(PATH, 'utf8')
 const WORKFLOW = loadYaml(SOURCE)
+const ANDROID_WORKFLOW = loadYaml(
+  readFileSync(resolve(ROOT, '.github/workflows/android-build.yml'), 'utf8'),
+)
 
 test('keeps write permission out of the build job and scopes it to attestation upload', () => {
   const build = WORKFLOW.jobs.ios
@@ -38,6 +41,31 @@ test('stages legal resources before every iOS build', () => {
   assert.ok(legal < signedBuild)
   assert.ok(legal < simulatorBuild)
   assert.match(buildSteps[legal].run, /scripts\/sync-legal-bundle\.mjs/)
+})
+
+test('mobile archive checks exclude only the legal-sync ownership sentinel', () => {
+  const cases = [
+    [
+      WORKFLOW.jobs.ios.steps.find(
+        (step) => step.name === 'Verify legal bundle in iOS artifacts',
+      ),
+      2,
+    ],
+    [
+      ANDROID_WORKFLOW.jobs.android.steps.find(
+        (step) => step.name === 'Verify legal bundle in APK/AAB',
+      ),
+      1,
+    ],
+  ]
+  for (const [step, expectedCount] of cases) {
+    assert.ok(step)
+    assert.equal(
+      [...step.run.matchAll(/! -name ['"]\.catgo-legal-bundle-owned['"]/g)]
+        .length,
+      expectedCount,
+    )
+  }
 })
 
 test('binds direct and trusted exact-tag backfill uploads to the release source', () => {

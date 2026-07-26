@@ -271,7 +271,11 @@ jobs:
                 echo "::error::$ipa is missing legal/$rel"
                 exit 1
               fi
-            done < <(find build/legal-bundle -type f | sort)
+            done < <(
+              find build/legal-bundle -type f \
+                ! -name '.catgo-legal-bundle-owned' |
+                sort
+            )
             inspected=$((inspected + 1))
           done < <(find src-tauri/gen/apple/build -type f -name '*.ipa' -print0)
           while IFS= read -r -d '' app; do
@@ -281,7 +285,11 @@ jobs:
                 echo "::error::$app is missing legal/$rel"
                 exit 1
               fi
-            done < <(find build/legal-bundle -type f | sort)
+            done < <(
+              find build/legal-bundle -type f \
+                ! -name '.catgo-legal-bundle-owned' |
+                sort
+            )
             inspected=$((inspected + 1))
           done < <(find src-tauri/gen/apple/build -type d -name '*.app' -print0)
           if [ "$inspected" -eq 0 ]; then
