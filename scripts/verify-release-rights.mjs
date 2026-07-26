@@ -34,6 +34,29 @@ function machineReadableLedgers(provenanceRoot) {
   return ledgers.sort()
 }
 
+function requiredProvenanceDirectory(path, label) {
+  let stat
+  try {
+    stat = lstatSync(path)
+  } catch {
+    throw new Error(`${label}: provenance directory is missing`)
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${label}: symlinked provenance directory is not permitted`)
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${label}: provenance path must be a directory`)
+  }
+}
+
+function provenanceDirectory(root) {
+  const thirdParty = resolve(root, 'third_party')
+  requiredProvenanceDirectory(thirdParty, 'third_party')
+  const provenance = resolve(thirdParty, 'provenance')
+  requiredProvenanceDirectory(provenance, 'third_party/provenance')
+  return provenance
+}
+
 function safeRelativePath(root, value, label) {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`${label}: path must be a non-empty string`)
@@ -91,7 +114,7 @@ function verifyNoticeBacked(root, ledger, record) {
 }
 
 export function verifyReleaseRights(root = ROOT) {
-  const provenanceRoot = resolve(root, 'third_party/provenance')
+  const provenanceRoot = provenanceDirectory(root)
   const ledgers = machineReadableLedgers(provenanceRoot)
   if (ledgers.length === 0) {
     throw new Error('No machine-readable provenance ledger was found')

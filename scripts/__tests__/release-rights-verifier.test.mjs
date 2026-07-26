@@ -246,6 +246,42 @@ test('blocks nested machine-readable provenance ledgers', () => {
   }
 })
 
+test('rejects a symlinked third_party directory before reading external ledgers', () => {
+  const root = fixture({})
+  const external = mkdtempSync(resolve(tmpdir(), 'catgo-external-rights-'))
+  const thirdParty = resolve(root, 'third_party')
+  rmSync(thirdParty, { recursive: true, force: true })
+  writeFixture(external, 'provenance/external-clearance.json', '{ malformed')
+  symlinkSync(external, thirdParty, 'dir')
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'symlinked third_party must fail closed')
+    assert.match(result.stderr, /third_party.*symlink/i)
+    assert.doesNotMatch(result.stderr, /unexpected token/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(external, { recursive: true, force: true })
+  }
+})
+
+test('rejects a symlinked provenance directory before reading external ledgers', () => {
+  const root = fixture({})
+  const external = mkdtempSync(resolve(tmpdir(), 'catgo-external-rights-'))
+  const provenance = resolve(root, 'third_party/provenance')
+  rmSync(provenance, { recursive: true, force: true })
+  writeFixture(external, 'external-clearance.json', '{ malformed')
+  symlinkSync(external, provenance, 'dir')
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'symlinked provenance must fail closed')
+    assert.match(result.stderr, /provenance.*symlink/i)
+    assert.doesNotMatch(result.stderr, /unexpected token/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(external, { recursive: true, force: true })
+  }
+})
+
 test('rejects symlinked provenance instead of following external clearance', () => {
   const root = fixture({})
   const outside = resolve(root, 'outside-cleared.json')
