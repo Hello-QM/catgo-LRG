@@ -84,7 +84,19 @@ jobs:
           set -euo pipefail
           release_json=$(mktemp)
           trap 'rm -f "$release_json"' EXIT
-          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+          release_id=$(gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Could not resolve release database id for $RELEASE_TAG."
+            exit 1
+          fi
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          if [ "$(jq -r '.tag_name' "$release_json")" != "$RELEASE_TAG" ]; then
+            echo "::error::Release database id is no longer bound to $RELEASE_TAG."
+            exit 1
+          fi
           if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
             echo "::error::Release $RELEASE_TAG is not a draft."
             exit 1
@@ -552,16 +564,20 @@ jobs:
             release_state=$(mktemp)
             for attempt in $(seq 1 20); do
               if gh api \
-                   "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                   "repos/$REPOSITORY/releases/$release_id" \
                    > "$release_state"; then
+                if [ "$(jq -r '.tag_name' "$release_state")" != "$RELEASE_TAG" ]; then
+                  echo "::error::Release database id is no longer bound to $RELEASE_TAG."
+                  break
+                fi
                 if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
                   github_draft_confirmed=true
                   break
                 fi
                 echo "::warning::Restoring $RELEASE_TAG to draft state."
-                gh release edit "$RELEASE_TAG" \
-                  --repo "$REPOSITORY" \
-                  --draft=true || true
+                gh api --method PATCH \
+                  "repos/$REPOSITORY/releases/$release_id" \
+                  -F draft=true > /dev/null || true
               fi
               sleep 3
             done
@@ -590,6 +606,13 @@ jobs:
               sha256sum |
               cut -d ' ' -f 1
           }
+          release_id=$(gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            fail "Could not resolve release database id for $RELEASE_TAG."
+          fi
           trap rollback ERR
 
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
@@ -604,7 +627,9 @@ jobs:
             fail "Release tag moved after validation."
 
           release_json=$(mktemp)
-          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          [ "$(jq -r '.tag_name' "$release_json")" = "$RELEASE_TAG" ] ||
+            fail "Release database id is no longer bound to $RELEASE_TAG."
           [ "$(jq -r '.draft' "$release_json")" = "true" ] ||
             fail "Release is no longer a draft."
           actual_snapshot=$(snapshot < "$release_json")
@@ -613,13 +638,15 @@ jobs:
           verify_cloudflare_promotion ||
             fail "Cloudflare promotion failed critical-section preflight."
 
-          gh release edit "$RELEASE_TAG" \
-            --repo "$REPOSITORY" \
-            --draft=false \
-            --latest
+          gh api --method PATCH \
+            "repos/$REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -f make_latest=true > /dev/null
 
           post_json=$(mktemp)
-          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$post_json"
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$post_json"
+          [ "$(jq -r '.tag_name' "$post_json")" = "$RELEASE_TAG" ] ||
+            fail "Published release database id is no longer bound to $RELEASE_TAG."
           post_draft=$(jq -r '.draft' "$post_json")
           [ "$post_draft" = "false" ] ||
             fail "Published release remained a draft."
@@ -787,17 +814,29 @@ jobs:
             # to leave the release in its already-validated draft state.
             github_draft_confirmed=true
           else
+            release_id=$(gh release view "$RELEASE_TAG" \
+              --repo "$REPOSITORY" \
+              --json databaseId \
+              --jq '.databaseId')
+            if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Could not resolve release database id for $RELEASE_TAG."
+              exit 1
+            fi
             for attempt in $(seq 1 20); do
               if gh api \
-                   "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                   "repos/$REPOSITORY/releases/$release_id" \
                    > "$release_state"; then
+                if [ "$(jq -r '.tag_name' "$release_state")" != "$RELEASE_TAG" ]; then
+                  echo "::error::Release database id is no longer bound to $RELEASE_TAG."
+                  break
+                fi
                 if [ "$(jq -r '.draft' "$release_state")" = "true" ]; then
                   github_draft_confirmed=true
                   break
                 fi
-                gh release edit "$RELEASE_TAG" \
-                  --repo "$REPOSITORY" \
-                  --draft=true || true
+                gh api --method PATCH \
+                  "repos/$REPOSITORY/releases/$release_id" \
+                  -F draft=true > /dev/null || true
               fi
               sleep 3
             done

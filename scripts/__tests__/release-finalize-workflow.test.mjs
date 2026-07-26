@@ -58,6 +58,35 @@ test('executes only trusted default-branch verifiers against a detached target w
   )
 })
 
+test('resolves the draft release database id before REST reads', () => {
+  const current = workflow()
+  const draft = stepNamed(current.jobs.validate, 'Confirm release is a draft')
+  const publish = current.jobs.publish.steps
+    .map((step) => step.run ?? '')
+    .join('\n')
+
+  assert.match(
+    draft.run,
+    /gh release view "\$RELEASE_TAG"[\s\S]*--json databaseId/,
+  )
+  assert.match(
+    draft.run,
+    /gh api "repos\/\$REPOSITORY\/releases\/\$release_id"/,
+  )
+  assert.match(draft.run, /\.tag_name[\s\S]*\$RELEASE_TAG/)
+  assert.doesNotMatch(draft.run, /releases\/tags\/\$RELEASE_TAG/)
+  assert.match(
+    publish,
+    /gh release view "\$RELEASE_TAG"[\s\S]*--json databaseId/,
+  )
+  assert.match(
+    publish,
+    /gh api "repos\/\$REPOSITORY\/releases\/\$release_id"/,
+  )
+  assert.match(publish, /\.tag_name[\s\S]*\$RELEASE_TAG/)
+  assert.doesNotMatch(publish, /releases\/tags\/\$RELEASE_TAG/)
+})
+
 test('proves the TestFlight attestation came from the exact successful iOS workflow run', () => {
   const validate = workflow().jobs.validate
   const attestation = stepNamed(validate, 'Verify TestFlight acceptance')
@@ -235,7 +264,15 @@ test('independently compensates every failed finalization path after validation'
   assert.match(run, /write-out '%\{http_code\}'/)
   assert.match(
     run,
-    /gh api[\s\\]*"repos\/\$REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/,
+    /gh release view "\$RELEASE_TAG"[\s\S]*--json databaseId/,
+  )
+  assert.match(
+    run,
+    /gh api[\s\\]*"repos\/\$REPOSITORY\/releases\/\$release_id"/,
+  )
+  assert.match(
+    run,
+    /gh api --method PATCH[\s\S]*"repos\/\$REPOSITORY\/releases\/\$release_id"[\s\S]*-F draft=true/,
   )
   assert.match(
     run,
@@ -261,11 +298,10 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   const publishIntent = intent.steps.find((step) => step.id === 'intent')
   assert.match(publishIntent.run, /publish_attempted=true/)
 
-  const mutationSteps = publish.steps.filter((step) =>
-    /gh release edit/.test(step.run ?? ''),
+  const mutation = stepNamed(
+    publish,
+    'Publish with atomic identity recheck and rollback',
   )
-  assert.equal(mutationSteps.length, 1)
-  const mutation = mutationSteps[0]
   assert.equal(
     mutation.name,
     'Publish with atomic identity recheck and rollback',
@@ -274,15 +310,20 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   assert.match(mutation.run, /trap rollback ERR/)
   assert.match(
     mutation.run,
-    /gh release edit "\$RELEASE_TAG"[\s\S]*--draft=false[\s\S]*--latest/,
+    /gh api --method PATCH[\s\S]*"repos\/\$REPOSITORY\/releases\/\$release_id"[\s\S]*-F draft=false[\s\S]*-f make_latest=true/,
   )
   assert.match(
     mutation.run,
-    /gh release edit "\$RELEASE_TAG"[\s\S]*--draft=true/,
+    /gh api --method PATCH[\s\S]*"repos\/\$REPOSITORY\/releases\/\$release_id"[\s\S]*-F draft=true/,
+  )
+  assert.doesNotMatch(mutation.run, /gh release edit/)
+  assert.match(
+    mutation.run,
+    /gh release view "\$RELEASE_TAG"[\s\S]*--json databaseId/,
   )
   assert.match(
     mutation.run,
-    /gh api "repos\/\$REPOSITORY\/releases\/tags\/\$RELEASE_TAG"/,
+    /gh api "repos\/\$REPOSITORY\/releases\/\$release_id"/,
   )
   assert.doesNotMatch(mutation.run, /if \[ "\$published" = "true" \]/)
   assert.match(
@@ -299,7 +340,7 @@ test('preflight, publication, and postflight revalidate Cloudflare in one rollba
   ) ?? []
   assert.ok(cloudflareChecks.length >= 3)
   const firstCloudflare = mutation.run.indexOf('verify_cloudflare_promotion')
-  const publishIndex = mutation.run.indexOf('--draft=false')
+  const publishIndex = mutation.run.indexOf('-F draft=false')
   const lastCloudflare = mutation.run.lastIndexOf('verify_cloudflare_promotion')
   assert.ok(firstCloudflare >= 0 && firstCloudflare < publishIndex)
   assert.ok(lastCloudflare > publishIndex)

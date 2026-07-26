@@ -471,7 +471,19 @@ jobs:
             exit 1
           fi
           release_json=$(mktemp)
-          gh api "repos/$REPOSITORY/releases/tags/$tag" > "$release_json"
+          release_id=$(gh release view "$tag" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Could not resolve release database id for $tag."
+            exit 1
+          fi
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          if [ "$(jq -r '.tag_name' "$release_json")" != "$tag" ]; then
+            echo "::error::Release database id is no longer bound to $tag."
+            exit 1
+          fi
           if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
             echo "::error::Promotion target must remain a draft release."
             exit 1
@@ -687,7 +699,19 @@ jobs:
             exit 1
           fi
           release_json=$(mktemp)
-          gh api "repos/$REPOSITORY/releases/tags/$tag" > "$release_json"
+          release_id=$(gh release view "$tag" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Could not resolve release database id for $tag."
+            exit 1
+          fi
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          if [ "$(jq -r '.tag_name' "$release_json")" != "$tag" ]; then
+            echo "::error::Release database id is no longer bound to $tag."
+            exit 1
+          fi
           if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
             echo "::error::Promotion target stopped being a draft."
             exit 1
