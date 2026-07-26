@@ -641,7 +641,9 @@ jobs:
       EXPECTED_ASSET_SNAPSHOT: ${{ needs.validate.outputs.asset_snapshot }}
       EXPECTED_SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
       PUBLISH_ATTEMPTED: ${{ needs.publication-intent.outputs.publish_attempted }}
-      PROMOTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      PROMOTION_ID: >-
+        ${{ needs.promote-cloudflare.outputs.promotion_id ||
+            format('{0}-{1}', github.run_id, github.run_attempt) }}
       RELEASE_TAG: ${{ inputs.tag }}
       REPOSITORY: ${{ github.repository }}
     steps:

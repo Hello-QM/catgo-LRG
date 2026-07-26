@@ -176,6 +176,11 @@ test('independently compensates every failed finalization path after validation'
     actions: 'write',
     contents: 'write',
   })
+  assert.match(
+    cleanup.env.PROMOTION_ID,
+    /needs\.promote-cloudflare\.outputs\.promotion_id/,
+  )
+  assert.match(cleanup.env.PROMOTION_ID, /github\.run_attempt/)
   const run = cleanup.steps.map((step) => step.run ?? '').join('\n')
   assert.match(run, /promotion_title=/)
   assert.match(run, /gh run view "\$promotion_run_id"/)
