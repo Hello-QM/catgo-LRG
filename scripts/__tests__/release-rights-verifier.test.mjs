@@ -11,6 +11,7 @@ import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { verifyReleaseRights } from '../verify-release-rights.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const VERIFIER = resolve(ROOT, 'scripts/verify-release-rights.mjs')
@@ -29,6 +30,12 @@ function fixture(ledgers) {
   return root
 }
 
+function writeFixture(root, path, contents) {
+  const target = resolve(root, path)
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(target, contents)
+}
+
 function verify(root) {
   return spawnSync(
     process.execPath,
@@ -37,7 +44,7 @@ function verify(root) {
   )
 }
 
-test('accepts release only when every provenance ledger is explicitly CLEARED', () => {
+test('accepts a CLEARED provenance ledger', () => {
   const root = fixture({
     'approved.json': {
       schemaVersion: 1,
@@ -46,9 +53,118 @@ test('accepts release only when every provenance ledger is explicitly CLEARED', 
     },
   })
   try {
+    assert.deepEqual(verifyReleaseRights(root), [
+      { ledger: 'approved.json', status: 'CLEARED' },
+    ])
     const result = verify(root)
     assert.equal(result.status, 0, result.stderr || result.stdout)
-    assert.match(result.stdout, /CLEARED.*1.*ledger/i)
+    assert.match(result.stdout, /VERIFIED: 1 ledger/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('accepts NOTICE_BACKED only with regular included notice files', () => {
+  const root = fixture({
+    'open-source.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+      coveredPaths: ['src/component.js'],
+    },
+  })
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'src/component.js', 'export {}\n')
+  try {
+    assert.deepEqual(verifyReleaseRights(root), [
+      { ledger: 'open-source.json', status: 'NOTICE_BACKED' },
+    ])
+    const result = verify(root)
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.match(result.stdout, /VERIFIED: 1 ledger/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED ledgers without noticeFiles or coveredPaths', () => {
+  const root = fixture({
+    'missing-notices.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      coveredPaths: ['src/component.js'],
+    },
+    'missing-covered-paths.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+    },
+  })
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'src/component.js', 'export {}\n')
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'incomplete notice evidence must fail closed')
+    assert.match(result.stderr, /missing-notices\.json.*noticeFiles/i)
+    assert.match(result.stderr, /missing-covered-paths\.json.*coveredPaths/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED ledgers with missing, absolute, or traversal notice files', () => {
+  const root = fixture({
+    'missing-file.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/missing.txt'],
+      coveredPaths: ['src/component.js'],
+    },
+    'absolute-file.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['/tmp/component-MIT.txt'],
+      coveredPaths: ['src/component.js'],
+    },
+    'traversal-file.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/../component-MIT.txt'],
+      coveredPaths: ['src/component.js'],
+    },
+  })
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'src/component.js', 'export {}\n')
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'unsafe notice paths must fail closed')
+    assert.match(result.stderr, /missing-file\.json.*missing\.txt/i)
+    assert.match(result.stderr, /absolute-file\.json.*absolute/i)
+    assert.match(result.stderr, /traversal-file\.json.*traversal/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED ledgers with symlinked notice files', () => {
+  const root = fixture({
+    'linked-notice.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+      coveredPaths: ['src/component.js'],
+    },
+  })
+  const outside = resolve(root, 'outside-MIT.txt')
+  const linked = resolve(root, 'third_party/licenses/component-MIT.txt')
+  writeFixture(root, 'src/component.js', 'export {}\n')
+  writeFileSync(outside, 'MIT\n')
+  mkdirSync(dirname(linked), { recursive: true })
+  symlinkSync(outside, linked)
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'symlinked notice evidence must fail closed')
+    assert.match(result.stderr, /linked-notice\.json.*symlink/i)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -82,12 +198,22 @@ test('blocks release when provenance status is missing or unrecognized', () => {
       schemaVersion: 1,
       releaseStatus: 'REVIEW_REQUIRED',
     },
+    'excluded.json': {
+      schemaVersion: 1,
+      releaseStatus: 'EXCLUDED',
+    },
+    'unsupported.json': {
+      schemaVersion: 1,
+      releaseStatus: 'SOMEDAY',
+    },
   })
   try {
     const result = verify(root)
     assert.notEqual(result.status, 0, 'unknown rights must fail closed')
     assert.match(result.stderr, /missing-status\.json.*UNKNOWN/)
     assert.match(result.stderr, /review-required\.json.*REVIEW_REQUIRED/)
+    assert.match(result.stderr, /excluded\.json.*EXCLUDED/)
+    assert.match(result.stderr, /unsupported\.json.*SOMEDAY/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
