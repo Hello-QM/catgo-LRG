@@ -21,7 +21,7 @@ const IOS_WORKFLOW = resolve(ROOT, '.github/workflows/ios-build.yml')
 const V146_IOS_WORKFLOW_SHA256 =
   '52d711337b1a5376d14c22201ce581510e6950d86086ec8cd7f0f5ee5d62d4b0'
 const V146_RECOVERY_WORKFLOW_SHA256 =
-  'e84523cf386246dd5d2d8a1c8193b419d684f7e623abd7081b52549a85788156'
+  'c51f8a60b68a86c3fdf672efd47f87c0e2e878d11eda5f424de80151518341c2'
 
 test('keeps the immutable v1.4.6 iOS workflow in the trusted allowlist', () => {
   assert.ok(
@@ -31,7 +31,7 @@ test('keeps the immutable v1.4.6 iOS workflow in the trusted allowlist', () => {
   )
 })
 
-test('keeps the in-flight v1.4.6 recovery workflow trusted', () => {
+test('keeps the current v1.4.6 recovery workflow trusted', () => {
   assert.ok(
     RELEASE_TRUST_POLICY.iosBackfillWorkflowSha256s.includes(
       V146_RECOVERY_WORKFLOW_SHA256,
