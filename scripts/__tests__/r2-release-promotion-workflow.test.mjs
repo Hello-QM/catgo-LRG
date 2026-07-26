@@ -210,9 +210,12 @@ test('reconciles the versioned tag prefix to the exact validated asset inventory
     workflow().jobs.mirror.steps,
     'Sync versioned release to R2',
   )
-  assert.match(
-    sync.run,
-    /aws s3 sync dist\/ "s3:\/\/\$R2_BUCKET\/\$tag\/" --delete/,
+  assert.deepEqual(
+    sync.run.match(/^aws s3 sync .+$/gm),
+    [
+      'aws s3 sync dist/ "s3://$R2_BUCKET/$tag/" --delete',
+      'aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"',
+    ],
   )
 })
 
@@ -228,6 +231,14 @@ test('verifies public root metadata only after the latest.json commit marker', (
   assert.match(verify.run, /\.requiredAssets\[\]\.name/)
   assert.match(verify.run, /curl[\s\S]*--output "\$asset_path"/)
   assert.match(verify.run, /--assets-dir "\$assets_dir"/)
+  const headProbe = verify.run.indexOf("method: 'HEAD'")
+  const fullDownload = verify.run.indexOf('--output "$asset_path"')
+  assert.ok(headProbe >= 0, 'required assets must be size-probed first')
+  assert.ok(
+    headProbe < fullDownload,
+    'HEAD availability checks must precede multi-gigabyte downloads',
+  )
+  assert.match(verify.run, /headers\.get\('content-length'\)/)
   assert.doesNotMatch(verify.run, /(?:--head|-I)[\s\S]*http_code/)
 })
 

@@ -746,6 +746,10 @@ jobs:
           set -euo pipefail
           tag="$MIRROR_TAG"
           aws s3 sync dist/ "s3://$R2_BUCKET/$tag/" --delete
+          # R2 can race a same-key upload and --delete operation within one
+          # concurrent sync. Reconcile once without deletion so every source
+          # object is guaranteed to be the final operation for its key.
+          aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"
 
       - name: Back up and promote Cloudflare root
         id: promote
@@ -951,6 +955,45 @@ jobs:
           assets_dir=$(mktemp -d)
           trap 'rm -rf "$assets_dir"; rm -f "$receipt" "$manifest" "$index_page"' EXIT
           verified=false
+          probe_required_assets() {
+            RECEIPT_PATH=$1 node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const receipt = JSON.parse(
+            readFileSync(process.env.RECEIPT_PATH, 'utf8'),
+          )
+          const base = process.env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '')
+          const tag = process.env.MIRROR_TAG
+          const promotionId = process.env.PROMOTION_ID
+          for (const asset of receipt.requiredAssets) {
+            if (
+              typeof asset.name !== 'string' ||
+              !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(asset.name) ||
+              !Number.isSafeInteger(asset.size) ||
+              asset.size < 0
+            ) {
+              throw new Error('Invalid required asset metadata')
+            }
+            const url =
+              `${base}/${encodeURIComponent(tag)}/` +
+              `${encodeURIComponent(asset.name)}` +
+              `?promotion=${encodeURIComponent(promotionId)}`
+            const response = await fetch(url, {
+              method: 'HEAD',
+              headers: { 'Cache-Control': 'no-cache' },
+            })
+            const contentLength = Number(
+              response.headers.get('content-length'),
+            )
+            if (response.status !== 200 || contentLength !== asset.size) {
+              throw new Error(
+                `Required asset is unavailable or has the wrong size: ` +
+                `${asset.name} (${response.status}, ${contentLength})`,
+              )
+            }
+          }
+          NODE
+          }
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error \
                 --header 'Cache-Control: no-cache' \
@@ -975,6 +1018,7 @@ jobs:
                  '.schemaVersion == 2 and
                   (.requiredAssets | type == "array")' \
                  "$receipt" > /dev/null &&
+               probe_required_assets "$receipt" &&
                grep -Fq "$MIRROR_TAG" "$index_page" &&
                rm -rf "$assets_dir" &&
                mkdir "$assets_dir"; then
