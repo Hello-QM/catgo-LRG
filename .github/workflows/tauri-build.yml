@@ -5,6 +5,17 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Exact existing release tag to backfill (for example v1.4.6).'
+        type: string
+        required: false
+        default: ''
+      windows_only:
+        description: 'Build only Windows; intended for an exact-tag backfill.'
+        type: boolean
+        required: false
+        default: false
 
 env:
   CARGO_NET_RETRY: "10"
@@ -20,30 +31,14 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            backend_target: x86_64-pc-windows-msvc
-            name: Windows
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            backend_target: aarch64-apple-darwin
-            name: macOS (Apple Silicon)
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            backend_target: x86_64-unknown-linux-gnu
-            name: Linux
-            # Ship .deb + .rpm. AppImage (linuxdeploy) still excluded: it needs
-            # FUSE and hangs 20+ min on GitHub runners. Tauri v2's RPM bundler is
-            # pure-Rust (no rpmbuild), so .rpm builds fine and covers Fedora/RHEL.
-            bundles: deb rpm
+      matrix: ${{ fromJSON(inputs.windows_only && '{"include":[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","backend_target":"x86_64-pc-windows-msvc","name":"Windows"}]}' || '{"include":[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","backend_target":"x86_64-pc-windows-msvc","name":"Windows"},{"platform":"macos-latest","target":"aarch64-apple-darwin","backend_target":"aarch64-apple-darwin","name":"macOS (Apple Silicon)"},{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","backend_target":"x86_64-unknown-linux-gnu","name":"Linux","bundles":"deb rpm"}]}') }}
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.name }})
 
     env:
       NODE_OPTIONS: --max-old-space-size=6144
+      CATGO_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
 
     defaults:
       run:
@@ -64,10 +59,14 @@ jobs:
           sudo docker image prune --all --force 2>/dev/null || true
           echo "Disk after:"; df -h /
 
+      - name: Preserve release evidence bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.ref }}
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
           fetch-depth: 0
 
       - name: Verify release rights
@@ -75,30 +74,36 @@ jobs:
 
       - name: Verify release version
         env:
-          RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+          RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
         run: node scripts/verify-release-version.mjs
 
       - name: Verify release source
         env:
-          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
         run: node scripts/verify-release-source.mjs
 
       - name: Verify tag event source identity
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.CATGO_RELEASE_TAG != ''
+        env:
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
         run: |
           set -euo pipefail
           head_commit=$(git rev-parse HEAD^{commit})
-          tag_commit=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")
-          if [ "$head_commit" != "$GITHUB_SHA" ] ||
+          tag_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "::error::Checkout does not match the requested release tag."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] &&
              [ "$tag_commit" != "$GITHUB_SHA" ]; then
-            echo "::error::Tag moved after this workflow was triggered; refusing release."
+            echo "::error::Tag moved after this workflow was triggered."
             exit 1
           fi
 
       - name: Preflight macOS release signing
-        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -265,7 +270,7 @@ jobs:
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Build Tauri app (no release)
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: env.CATGO_RELEASE_TAG == ''
         uses: tauri-apps/tauri-action@v0.6
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
@@ -273,7 +278,7 @@ jobs:
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
 
       - name: Build and upload Tauri release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: env.CATGO_RELEASE_TAG != ''
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -312,8 +317,8 @@ jobs:
           # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'CatGo ${{ github.ref_name }}'
+          tagName: ${{ env.CATGO_RELEASE_TAG }}
+          releaseName: 'CatGo ${{ env.CATGO_RELEASE_TAG }}'
           releaseBody: |
             ## CatGo — AI-driven workbench for computational materials science
 
@@ -364,10 +369,10 @@ jobs:
 
       - name: Verify macOS release signatures
         id: macos_signing
-        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
           REPOSITORY: ${{ github.repository }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
@@ -497,10 +502,10 @@ jobs:
           echo "attestation=$attestation" >> "$GITHUB_OUTPUT"
 
       - name: Upload macOS signing attestation
-        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
           REPOSITORY: ${{ github.repository }}
           ATTESTATION_PATH: ${{ steps.macos_signing.outputs.attestation }}
         run: |
@@ -510,18 +515,18 @@ jobs:
             --clobber
 
       - name: Finalize canonical v1.4.6 release body
-        if: startsWith(github.ref, 'refs/tags/') && github.ref_name == 'v1.4.6'
+        if: env.CATGO_RELEASE_TAG == 'v1.4.6'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ensure-v1.4.6-release-body.sh "$GITHUB_REF_NAME"
+        run: bash scripts/ensure-v1.4.6-release-body.sh "$CATGO_RELEASE_TAG"
 
       - name: Upload canonical legal bundle to release
-        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
+        if: runner.os == 'Linux' && env.CATGO_RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           tar czf catgo-legal-bundle.tar.gz -C build/legal-bundle .
           tar tzf catgo-legal-bundle.tar.gz
-          tag="${GITHUB_REF_NAME}"
+          tag="${CATGO_RELEASE_TAG}"
           gh release upload "$tag" catgo-legal-bundle.tar.gz --clobber

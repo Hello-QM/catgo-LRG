@@ -53,6 +53,10 @@ jobs:
         shell: bash -el {0}
 
     steps:
+      - name: Preserve release evidence bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:

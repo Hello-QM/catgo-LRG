@@ -168,6 +168,28 @@ test("the repository's notice-backed provenance ledgers are both release-verifia
   assert.match(result.stdout, /VERIFIED: 2 ledgers/i)
 })
 
+test('release-evidence text bytes are pinned to LF on every checkout platform', () => {
+  const attributes = readFileSync(resolve(ROOT, '.gitattributes'), 'utf8')
+  for (const pattern of [
+    '/THIRD_PARTY_NOTICES.md text eol=lf',
+    '/server/catgo/vendor/pormake/LICENSE text eol=lf',
+    '/server/catgo/vendor/pormake/database/**/*.cgd text eol=lf',
+    '/server/catgo/vendor/pormake/database/**/*.xyz text eol=lf',
+    '/server/catgo/vendor/pormake/database/**/*.txt text eol=lf',
+    '/server/catgo/vendor/pormake/database/**/*.zip -text',
+    '/third_party/licenses/*.txt text eol=lf',
+    '/extensions/rust/src/**/*.rs text eol=lf',
+    '/src/lib/structure/TerminalPanel.svelte text eol=lf',
+    '/src/lib/xrd/*.ts text eol=lf',
+  ]) {
+    assert.match(
+      attributes,
+      new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+      `${pattern} must remain checkout-stable`,
+    )
+  }
+})
+
 test('blocks NOTICE_BACKED when covered bytes no longer match release evidence', () => {
   const root = fixture({})
   writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')

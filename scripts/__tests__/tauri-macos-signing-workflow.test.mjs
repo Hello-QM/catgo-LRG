@@ -9,7 +9,7 @@ import { load as loadYaml } from 'js-yaml'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WORKFLOW_PATH = resolve(ROOT, '.github/workflows/tauri-build.yml')
 const RELEASE_MACOS_CONDITION =
-  "runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')"
+  "runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''"
 const REQUIRED_SIGNING_SECRETS = [
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
@@ -39,35 +39,36 @@ test('branch dispatch is smoke-only while tag push or dispatch publishes exact s
   const smoke = stepNamed(steps, 'Build Tauri app (no release)')
   const release = stepNamed(steps, 'Build and upload Tauri release')
 
-  assert.equal(current.on.workflow_dispatch?.inputs?.release, undefined)
+  assert.equal(current.on.workflow_dispatch.inputs.release_tag.type, 'string')
+  assert.equal(current.on.workflow_dispatch.inputs.windows_only.type, 'boolean')
   assert.ok(sourceGate)
   assert.equal(
     sourceGate.env.RELEASE_SOURCE_TAG,
-    "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}",
+    "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}",
   )
   assert.equal(
     sourceGate.env.RELEASE_SOURCE_REQUIRE_TAG,
-    "${{ startsWith(github.ref, 'refs/tags/') }}",
+    "${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}",
   )
   assert.ok(eventIdentity)
-  assert.equal(eventIdentity.if, "startsWith(github.ref, 'refs/tags/')")
+  assert.equal(eventIdentity.if, "env.CATGO_RELEASE_TAG != ''")
   assert.match(eventIdentity.run, /git rev-parse HEAD\^\{commit\}/)
-  assert.match(eventIdentity.run, /git rev-parse "refs\/tags\/\$GITHUB_REF_NAME\^\{commit\}"/)
+  assert.match(eventIdentity.run, /git rev-parse "refs\/tags\/\$RELEASE_TAG\^\{commit\}"/)
   assert.match(eventIdentity.run, /GITHUB_SHA/)
 
   assert.ok(smoke)
   assert.equal(
     smoke.if,
-    "!startsWith(github.ref, 'refs/tags/')",
+    "env.CATGO_RELEASE_TAG == ''",
   )
   assert.deepEqual(Object.keys(smoke.with).sort(), ['args'])
 
   assert.ok(release)
   assert.equal(
     release.if,
-    "startsWith(github.ref, 'refs/tags/')",
+    "env.CATGO_RELEASE_TAG != ''",
   )
-  assert.equal(release.with.tagName, '${{ github.ref_name }}')
+  assert.equal(release.with.tagName, '${{ env.CATGO_RELEASE_TAG }}')
   assert.equal(release.with.releaseDraft, true)
 })
 
