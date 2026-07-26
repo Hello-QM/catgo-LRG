@@ -7,7 +7,7 @@
     "name": "CatGo Team",
     "email": "catgo@example.com"
   },
-  "license": "LicenseRef-CatGo-Noncommercial-1.0",
+  "license": "AGPL-3.0-or-later",
   "publish": false,
   "keywords": ["visualization", "charge", "oxidation"],
   "catgo": {

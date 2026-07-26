@@ -314,7 +314,7 @@ test('marks generated chgdiff and catrender npm manifests private', (t) => {
     assert.equal(result.status, 0)
     const manifest = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'))
     assert.equal(manifest.private, true, target)
-    assert.equal(manifest.license, 'LicenseRef-CatGo-Noncommercial-1.0', target)
+    assert.equal(manifest.license, 'AGPL-3.0-or-later', target)
   }
 })
 
@@ -343,7 +343,7 @@ test('hardens Ferrox scalar, legacy, and threaded generated npm manifests', (t) 
     assert.equal(manifest.private, true, generated[index])
     assert.equal(
       manifest.license,
-      'LicenseRef-CatGo-Noncommercial-1.0',
+      'AGPL-3.0-or-later',
       generated[index],
     )
   }

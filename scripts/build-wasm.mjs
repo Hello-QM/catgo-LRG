@@ -303,7 +303,7 @@ function hardenGeneratedPackage(target) {
   if (!existsSync(packagePath)) return
   const manifest = JSON.parse(readFileSync(packagePath, 'utf8'))
   manifest.private = true
-  manifest.license = 'LicenseRef-CatGo-Noncommercial-1.0'
+  manifest.license = 'AGPL-3.0-or-later'
   writeFileSync(packagePath, `${JSON.stringify(manifest, null, 2)}\n`)
 }
 

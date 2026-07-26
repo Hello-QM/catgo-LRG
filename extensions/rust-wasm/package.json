@@ -3,7 +3,7 @@
   "version": "0.0.4",
   "type": "module",
   "description": "WASM bindings for ferrox (high-performance crystallography). Dual wasm-pack artifacts: pkg-scalar (portable SIMD, single thread) + pkg-threaded (threads+SIMD+Rayon); pkg/ is a copy of pkg-scalar for legacy imports.",
-  "license": "SEE LICENSE IN license",
+  "license": "AGPL-3.0-or-later",
   "main": "./pkg/ferrox.js",
   "module": "./pkg/ferrox.js",
   "types": "./pkg/ferrox.d.ts",

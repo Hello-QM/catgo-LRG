@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   cpSync,
   existsSync,
@@ -21,6 +22,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
+const AGPL_ID = 'AGPL-3.0-or-later'
+const AGPL_SHA256 =
+  '0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0'
 const CUSTOM_LICENSE = 'LicenseRef-CatGo-Noncommercial-1.0'
 const FORBLAZE_IMPORT_COMMIT = 'dcb8a503245602dae82a4157de6a69ab1d795fe1'
 
@@ -192,11 +196,11 @@ test('internal first-party manifests cannot be accidentally published', () => {
   ]) {
     const plugin = JSON.parse(read(file))
     assert.equal(plugin.publish, false, file)
-    assert.equal(plugin.license, CUSTOM_LICENSE, file)
+    assert.equal(plugin.license, AGPL_ID, file)
   }
 
   const dosProject = section('extensions/dos-analysis/pyproject.toml', 'project')
-  assert.match(dosProject, /^license = "LicenseRef-CatGo-Noncommercial-1\.0"$/m)
+  assert.match(dosProject, /^license = "AGPL-3\.0-or-later"$/m)
   assert.match(dosProject, /"Private :: Do Not Upload"/)
   const dosDistribution = section(
     'extensions/dos-analysis/pyproject.toml',
@@ -235,16 +239,11 @@ test('separately licensed third-party manifests retain semantic license fields',
   }
 })
 
-test('root license prohibits unauthorized commercial use', () => {
-  const text = read('license')
-  assert.match(text, /CatGo Noncommercial Research License 1\.0/)
-  assert.match(text, /prior written permission/i)
-  assert.match(text, /for-profit entity/i)
-  assert.match(text, /terminates automatically/i)
-  assert.match(text, /injunctive relief/i)
-  assert.match(text, /THIRD_PARTY_NOTICES\.md/)
-  assert.match(text, new RegExp(ACK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-  assert.match(text, new RegExp(DOI.replaceAll('.', '\\.')))
+test('root license is the canonical GNU AGPL v3 text', () => {
+  const bytes = readFileSync(resolve(ROOT, 'license'))
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), AGPL_SHA256)
+  assert.match(bytes.toString('utf8'), /GNU AFFERO GENERAL PUBLIC LICENSE/)
+  assert.doesNotMatch(bytes.toString('utf8'), /CatGo Noncommercial Research License/)
 })
 
 test('canonical citation file contains mandatory citation data', () => {
@@ -267,37 +266,18 @@ test('commercial license page repeats the enforceable entry points', () => {
   assert.match(text, /historical releases/i)
 })
 
-const customNpm = [
-  'package.json',
-  'extensions/rust-wasm/package.json',
-  'extensions/vscode/package.json',
-]
-const customCargo = [
-  ['crates/catgo-graph/Cargo.toml', '../../license'],
-  ['extensions/catrender-wasm/Cargo.toml', '../../license'],
-  ['extensions/chgdiff-wasm/Cargo.toml', '../../license'],
-  ['extensions/rust/Cargo.toml', '../../license'],
-  ['src-tauri/Cargo.toml', '../license'],
-  ['src-tauri/plugins/tauri-plugin-bg-grace/Cargo.toml', '../../../license'],
-  ['src-tauri/plugins/tauri-plugin-ios-speech/Cargo.toml', '../../../license'],
-  ['tools/cube-processor/Cargo.toml', '../../license'],
-]
-
-test('first-party manifests resolve to the custom license', () => {
-  for (const file of customNpm) {
-    assert.equal(JSON.parse(read(file)).license, 'SEE LICENSE IN license', file)
+test('first-party manifests declare AGPL-3.0-or-later', () => {
+  for (const file of ['package.json', 'extensions/rust-wasm/package.json',
+    'extensions/vscode/package.json']) {
+    assert.equal(JSON.parse(read(file)).license, AGPL_ID, file)
   }
-  const pyproject = read('server/pyproject.toml')
-  assert.match(pyproject, /^license = "LicenseRef-CatGo-Noncommercial-1\.0"$/m)
-  assert.match(pyproject, /^license-files = \["LICENSE"\]$/m)
-  for (const [file, relative] of customCargo) {
-    const text = read(file)
-    assert.match(
-      text,
-      new RegExp(`^license-file = "${relative.replaceAll('.', '\\.')}"$`, 'm'),
-      file,
-    )
-    assert.doesNotMatch(text, /^license = /m, file)
+  assert.match(read('server/pyproject.toml'), /^license = "AGPL-3\.0-or-later"$/m)
+  assert.match(read('extensions/dos-analysis/pyproject.toml'),
+    /^license = "AGPL-3\.0-or-later"$/m)
+  for (const file of manifestInventory.explicitInternalFirstParty
+    .filter((path) => path.endsWith('Cargo.toml'))) {
+    assert.match(section(file, 'package'),
+      /^license = "AGPL-3\.0-or-later"$/m, file)
   }
 })
 
@@ -540,14 +520,14 @@ test('Python wheel configuration force-includes the redistribution bundle', () =
   )
 })
 
-test('example plugins declare the CatGo custom license', () => {
+test('example plugins declare AGPL-3.0-or-later', () => {
   for (const file of [
     'examples/plugins/charge-coloring/catgo-plugin.json',
     'examples/plugins/lennard-jones-calculator/catgo-plugin.json',
   ]) {
     assert.equal(
       JSON.parse(read(file)).license,
-      'LicenseRef-CatGo-Noncommercial-1.0',
+      AGPL_ID,
       file,
     )
   }
@@ -605,14 +585,9 @@ test('contribution guides disclose the relicensing authority requirement', () =>
   assert.match(chinese, /不得削弱或抵触.*非商业条款/)
 })
 
-test('active first-party surfaces contain no stale AGPL grant', () => {
+test('active non-package surfaces retain their documented terms', () => {
   const active = new Set([
-    ...manifestInventory.publishableFirstParty,
-    ...manifestInventory.explicitInternalFirstParty,
-    ...licenseClaimInventory.activeFirstParty,
-    'server/LICENSE',
-    'extensions/rust-wasm/license',
-    'extensions/vscode/license',
+    ...licenseClaimInventory.activeFirstParty.filter((file) => file !== 'license'),
     'extensions/rust-wasm/CITATION.cff',
     'extensions/vscode/CITATION.cff',
     'server/CITATION.cff',

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "catgo-dos"
 version = "0.1.0"
 description = "Electronic structure DOS analysis library for VASP HDF5 output"
-license = "LicenseRef-CatGo-Noncommercial-1.0"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.9"
 classifiers = [
     "Private :: Do Not Upload",
