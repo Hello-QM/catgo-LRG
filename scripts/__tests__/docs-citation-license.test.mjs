@@ -11,6 +11,15 @@ const CITATION_REQUEST =
   'If CatGo contributes to your work, please acknowledge and cite it as ' +
   'described below. This request is not an additional condition of ' +
   'AGPL-3.0-or-later.'
+const ENGLISH_FOOTER =
+  'CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your ' +
+  'work, please include “This work used CatGo (https://catgo-ucsd.org).” and ' +
+  'the preferred citation in CITATION.cff. This request is not an additional ' +
+  'condition of the AGPL license.'
+const CHINESE_FOOTER =
+  'CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明 ' +
+  '“This work used CatGo (https://catgo-ucsd.org).”并引用 CITATION.cff ' +
+  '中的首选文献；该请求不构成 AGPL 许可的附加条件。'
 
 test('active documentation footers request citation without adding AGPL conditions', () => {
   const config = read('docs/.vitepress/config.ts')
@@ -23,11 +32,12 @@ test('active documentation footers request citation without adding AGPL conditio
     /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i)
 
   const [chinese, english] = footerMessages
+  assert.equal(chinese, CHINESE_FOOTER)
+  assert.equal(english, ENGLISH_FOOTER)
   for (const message of footerMessages) {
-    assert.match(message, /AGPL-3\.0-or-later/)
+    assert.match(message, new RegExp(escapeRegExp(ACK)))
+    assert.match(message, /CITATION\.cff/)
   }
-  assert.match(chinese, /不构成.*附加条件/)
-  assert.match(english, /not an additional condition/i)
 })
 
 test('CITATION.cff carries the exact non-binding citation request', () => {
@@ -36,8 +46,12 @@ test('CITATION.cff carries the exact non-binding citation request', () => {
 
   assert.ok(message, 'CITATION.cff must define the CFF 1.2 message field')
   assert.equal(message, CITATION_REQUEST)
-  assert.match(cff, /^license: AGPL-3\.0-or-later$/m)
-  assert.match(cff, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
+  assert.match(cff, new RegExp(
+    `^cff-version: 1\\.2\\.0\\nmessage: ${escapeRegExp(CITATION_REQUEST)}\\n` +
+    'version: 1\\.4\\.6\\ntitle: CatGo\\nlicense: AGPL-3\\.0-or-later\\n' +
+    'license-url: https://github\\.com/Hello-QM/catgo-LRG/blob/main/license$',
+    'm',
+  ))
   assert.match(cff, /^\s+doi: 10\.26434\/chemrxiv\.15002984\/v1$/m)
 })
 

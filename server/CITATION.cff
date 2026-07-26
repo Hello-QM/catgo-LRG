@@ -3,12 +3,12 @@ message: If CatGo contributes to your work, please acknowledge and cite it as de
 version: 1.4.6
 title: CatGo
 license: AGPL-3.0-or-later
+license-url: https://github.com/Hello-QM/catgo-LRG/blob/main/license
 authors:
   - family-names: Li
     given-names: Wanlu
     affiliation: University of California, San Diego
     email: gul026@ucsd.edu
-license-url: https://github.com/Hello-QM/catgo-LRG/blob/main/license
 repository-code: https://github.com/Hello-QM/catgo-LRG
 type: software
 url: https://github.com/Hello-QM/catgo-LRG

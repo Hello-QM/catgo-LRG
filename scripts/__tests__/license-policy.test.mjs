@@ -562,7 +562,9 @@ test('active user surfaces make citation a non-binding AGPL request', () => {
     assert.doesNotMatch(text,
       /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i, file)
     assert.match(text, /AGPL-3\.0-or-later/, file)
-    assert.match(text, /not an additional condition|不构成.*附加条件/i, file)
+    assert.match(text, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./, file)
+    assert.match(text, /CITATION\.cff/, file)
+    assert.match(text, /not an additional\s+condition|不构成.*附加条件/i, file)
   }
 })
 
@@ -572,15 +574,23 @@ test('contribution guides preserve third-party provenance under AGPL', () => {
   assert.match(english, /third-party code must retain its original notices/i)
   assert.match(english, /not.*relicense third-party/i)
   assert.match(english, /does not by itself prove copyright assignment/i)
+  assert.match(english, /may require a separate\s+contributor agreement/i)
+  assert.match(english, /right to license and enforce its\s+code/i)
   assert.match(english, /AGPL-3\.0-or-later/)
-  assert.match(english, /not an additional condition/i)
+  assert.match(english, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
+  assert.match(english, /CITATION\.cff/)
+  assert.match(english, /not an additional\s+condition/i)
 
   const chinese = read('contributing.zh.md')
   assert.match(chinese, /贡献者必须有权/)
   assert.match(chinese, /第三方代码必须保留原有声明/)
   assert.match(chinese, /并不会.*重新许可.*第三方代码/)
   assert.match(chinese, /接受.*本身并不证明著作权已经转让/)
+  assert.match(chinese, /维护者可在接受贡献前要求单独的贡献者协议/)
+  assert.match(chinese, /许可和维权的权利/)
   assert.match(chinese, /AGPL-3\.0-or-later/)
+  assert.match(chinese, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
+  assert.match(chinese, /CITATION\.cff/)
   assert.match(chinese, /不构成.*附加条件/)
 })
 
