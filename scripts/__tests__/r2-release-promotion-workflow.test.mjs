@@ -194,6 +194,17 @@ test('only explicit promotion mutates root and writes index before latest commit
   assert.doesNotMatch(promote.run, /latest_app_tag/)
 })
 
+test('captures only the digest when backing up existing root objects', () => {
+  const promote = stepNamed(
+    workflow().jobs.mirror.steps,
+    'Back up and promote Cloudflare root',
+  )
+  assert.match(
+    promote.run,
+    /aws s3 cp "s3:\/\/\$R2_BUCKET\/\$key" "\$output" > \/dev\/null/,
+  )
+})
+
 test('reconciles the versioned tag prefix to the exact validated asset inventory', () => {
   const sync = stepNamed(
     workflow().jobs.mirror.steps,
