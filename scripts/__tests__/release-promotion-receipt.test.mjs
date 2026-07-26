@@ -70,7 +70,7 @@ function fixture() {
   return paths
 }
 
-function run(mode, paths, extra = []) {
+function run(mode, paths, extra = [], promotionId = PROMOTION_ID) {
   return spawnSync(
     process.execPath,
     [
@@ -85,7 +85,7 @@ function run(mode, paths, extra = []) {
       '--asset-snapshot',
       ASSET_SNAPSHOT,
       '--promotion-id',
-      PROMOTION_ID,
+      promotionId,
       '--latest',
       paths.latest,
       '--index',
@@ -135,6 +135,19 @@ test('creates and verifies an exact release-promotion receipt', () => {
     assert.equal(verified.status, 0, verified.stderr || verified.stdout)
   } finally {
     rmSync(paths.root, { recursive: true, force: true })
+  }
+})
+
+test('rejects promotion ids that the public receipt route cannot serve', () => {
+  for (const promotionId of ['-unsafe', '.unsafe', 'unsafe_', 'unsafe-']) {
+    const paths = fixture()
+    try {
+      const result = run('create', paths, [], promotionId)
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /promotion id/i)
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true })
+    }
   }
 })
 

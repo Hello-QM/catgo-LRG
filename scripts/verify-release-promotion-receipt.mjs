@@ -14,7 +14,8 @@ import { requiredReleaseAssets } from './release-asset-policy.mjs'
 
 const HEX_40 = /^[0-9a-f]{40}$/
 const HEX_64 = /^[0-9a-f]{64}$/
-const PROMOTION_ID = /^[A-Za-z0-9._-]{1,100}$/
+const PROMOTION_ID =
+  /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/
 const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/
 
 function parseArguments(argv) {

@@ -184,7 +184,7 @@ jobs:
             if [ -z "$REQUESTED_TAG" ] ||
                ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
                ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]] ||
-               ! [[ "$PROMOTION_ID" =~ ^[A-Za-z0-9._-]{1,100}$ ]]; then
+               ! [[ "$PROMOTION_ID" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$ ]]; then
               echo "::error::Root mutation requires tag, source commit, asset snapshot, and promotion id."
               exit 1
             fi

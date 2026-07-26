@@ -42,6 +42,11 @@ test('manual promotion is explicit, serialized, and fails when R2 credentials ar
   assert.match(credentials.run, /root_action/)
   assert.match(credentials.run, /promot/i)
   assert.match(credentials.run, /exit 1/)
+  const resolveTag = stepNamed(current.jobs.mirror.steps, 'Resolve tag')
+  assert.match(
+    resolveTag.run,
+    /\^\[A-Za-z0-9\]\(\[A-Za-z0-9\._-\]\{0,98\}\[A-Za-z0-9\]\)\?\$/,
+  )
 })
 
 test('rollback resolution avoids release APIs, tag fetches, and rights gates', () => {
