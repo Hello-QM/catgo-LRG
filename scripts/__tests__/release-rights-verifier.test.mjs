@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +38,43 @@ function writeFixture(root, path, contents) {
   const target = resolve(root, path)
   mkdirSync(dirname(target), { recursive: true })
   writeFileSync(target, contents)
+}
+
+function releaseEvidence(root, paths) {
+  const files = []
+  const visit = (path) => {
+    const stat = lstatSync(path)
+    if (stat.isFile()) {
+      files.push(path)
+      return
+    }
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      visit(resolve(path, entry.name))
+    }
+  }
+  for (const path of paths) visit(resolve(root, path.replace(/\/$/, '')))
+  const unique = [...new Set(files.map((path) =>
+    relative(root, path).split(sep).join('/'))
+  )].sort()
+  const manifest = unique.map((path) => {
+    const digest = createHash('sha256')
+      .update(readFileSync(resolve(root, path)))
+      .digest('hex')
+    return `${digest}  ${path}\n`
+  }).join('')
+  return {
+    algorithm: 'sha256sum-manifest-v1',
+    fileCount: unique.length,
+    manifestSha256: createHash('sha256').update(manifest).digest('hex'),
+  }
+}
+
+function writeLedger(root, name, contents) {
+  writeFixture(
+    root,
+    `third_party/provenance/${name}`,
+    `${JSON.stringify(contents)}\n`,
+  )
 }
 
 function verify(root) {
@@ -65,16 +106,19 @@ test('accepts a CLEARED provenance ledger', () => {
 })
 
 test('accepts NOTICE_BACKED only with regular included notice files', () => {
-  const root = fixture({
-    'open-source.json': {
-      schemaVersion: 1,
-      releaseStatus: 'NOTICE_BACKED',
-      noticeFiles: ['third_party/licenses/component-MIT.txt'],
-      coveredPaths: ['src/component.js'],
-    },
-  })
+  const root = fixture({})
   writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
   writeFixture(root, 'src/component.js', 'export {}\n')
+  writeLedger(root, 'open-source.json', {
+    schemaVersion: 1,
+    releaseStatus: 'NOTICE_BACKED',
+    noticeFiles: ['third_party/licenses/component-MIT.txt'],
+    coveredPaths: ['src/component.js'],
+    releaseEvidence: releaseEvidence(root, [
+      'third_party/licenses/component-MIT.txt',
+      'src/component.js',
+    ]),
+  })
   try {
     assert.deepEqual(verifyReleaseRights(root), [
       { ledger: 'open-source.json', status: 'NOTICE_BACKED' },
@@ -88,17 +132,20 @@ test('accepts NOTICE_BACKED only with regular included notice files', () => {
 })
 
 test('accepts NOTICE_BACKED covered directories with nested regular files', () => {
-  const root = fixture({
-    'vendor-component.json': {
-      schemaVersion: 1,
-      releaseStatus: 'NOTICE_BACKED',
-      noticeFiles: ['third_party/licenses/component-MIT.txt'],
-      coveredPaths: ['vendor/component/'],
-    },
-  })
+  const root = fixture({})
   writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
   writeFixture(root, 'vendor/component/index.js', 'export {}\n')
   writeFixture(root, 'vendor/component/lib/helper.js', 'export {}\n')
+  writeLedger(root, 'vendor-component.json', {
+    schemaVersion: 1,
+    releaseStatus: 'NOTICE_BACKED',
+    noticeFiles: ['third_party/licenses/component-MIT.txt'],
+    coveredPaths: ['vendor/component/'],
+    releaseEvidence: releaseEvidence(root, [
+      'third_party/licenses/component-MIT.txt',
+      'vendor/component/',
+    ]),
+  })
   try {
     assert.deepEqual(verifyReleaseRights(root), [
       { ledger: 'vendor-component.json', status: 'NOTICE_BACKED' },
@@ -119,6 +166,53 @@ test("the repository's notice-backed provenance ledgers are both release-verifia
   const result = verify(ROOT)
   assert.equal(result.status, 0, result.stderr || result.stdout)
   assert.match(result.stdout, /VERIFIED: 2 ledgers/i)
+})
+
+test('blocks NOTICE_BACKED when covered bytes no longer match release evidence', () => {
+  const root = fixture({})
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'vendor/component/index.js', 'export const value = 1\n')
+  writeLedger(root, 'vendor-component.json', {
+    schemaVersion: 1,
+    releaseStatus: 'NOTICE_BACKED',
+    noticeFiles: ['third_party/licenses/component-MIT.txt'],
+    coveredPaths: ['vendor/component/'],
+    releaseEvidence: releaseEvidence(root, [
+      'third_party/licenses/component-MIT.txt',
+      'vendor/component/',
+    ]),
+  })
+  writeFixture(root, 'vendor/component/index.js', 'export const value = 2\n')
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'changed covered bytes must fail closed')
+    assert.match(result.stderr, /release evidence.*manifest/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED with an unsupported ledger schema', () => {
+  const root = fixture({})
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'src/component.js', 'export {}\n')
+  writeLedger(root, 'open-source.json', {
+    schemaVersion: 2,
+    releaseStatus: 'NOTICE_BACKED',
+    noticeFiles: ['third_party/licenses/component-MIT.txt'],
+    coveredPaths: ['src/component.js'],
+    releaseEvidence: releaseEvidence(root, [
+      'third_party/licenses/component-MIT.txt',
+      'src/component.js',
+    ]),
+  })
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'unknown schemas must fail closed')
+    assert.match(result.stderr, /schemaVersion/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('blocks NOTICE_BACKED covered directories with no regular files', () => {

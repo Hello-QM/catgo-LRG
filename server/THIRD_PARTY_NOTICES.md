@@ -186,8 +186,8 @@ sparse ghost halves, and GPU picking.
 
 Every accelerator archive also retains the upstream file byte-for-byte at
 `whisper.cpp/LICENSE` and records the repository and exact revision in
-`whisper.cpp/SOURCE.json`. The CatGo noncommercial terms do not replace the
-MIT terms for whisper.cpp.
+`whisper.cpp/SOURCE.json`. CatGo's AGPL-3.0-or-later license does not replace
+the MIT terms for whisper.cpp.
 
 ### Vendored PORMAKE
 

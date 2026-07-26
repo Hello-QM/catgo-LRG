@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -103,6 +104,7 @@ function verifyNoticeFile(root, value, label) {
   if (!lstatSync(path).isFile()) {
     throw new Error(`${label} must reference a regular file`)
   }
+  return path
 }
 
 function verifyCoveredPath(root, value, label) {
@@ -111,13 +113,13 @@ function verifyCoveredPath(root, value, label) {
   const path = safeRelativePath(root, coveredValue, label)
   const stat = lstatSync(path)
   if (stat.isFile()) {
-    return
+    return [path]
   }
   if (!stat.isDirectory()) {
     throw new Error(`${label} must reference a regular file or directory`)
   }
 
-  let hasRegularFile = false
+  const regularFiles = []
   const visit = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const entryPath = resolve(directory, entry.name)
@@ -126,7 +128,7 @@ function verifyCoveredPath(root, value, label) {
         throw new Error(`${label} contains a symlinked entry`)
       }
       if (entryStat.isFile()) {
-        hasRegularFile = true
+        regularFiles.push(entryPath)
       } else if (entryStat.isDirectory()) {
         visit(entryPath)
       } else {
@@ -135,8 +137,65 @@ function verifyCoveredPath(root, value, label) {
     }
   }
   visit(path)
-  if (!hasRegularFile) {
+  if (regularFiles.length === 0) {
     throw new Error(`${label} must contain at least one regular file`)
+  }
+  return regularFiles
+}
+
+function verifyReleaseEvidence(root, ledger, record, files) {
+  const evidence = record.releaseEvidence
+  if (
+    !evidence ||
+    typeof evidence !== 'object' ||
+    Array.isArray(evidence)
+  ) {
+    throw new Error(`${ledger}: releaseEvidence must be an object`)
+  }
+  if (evidence.algorithm !== 'sha256sum-manifest-v1') {
+    throw new Error(`${ledger}: release evidence algorithm is unsupported`)
+  }
+  if (!Number.isSafeInteger(evidence.fileCount) || evidence.fileCount < 1) {
+    throw new Error(`${ledger}: release evidence fileCount is invalid`)
+  }
+  if (
+    typeof evidence.manifestSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(evidence.manifestSha256)
+  ) {
+    throw new Error(`${ledger}: release evidence manifestSha256 is invalid`)
+  }
+
+  const relativeFiles = [...new Set(files.map((path) =>
+    relative(root, path).split(sep).join('/')
+  ))].sort()
+  if (relativeFiles.length !== evidence.fileCount) {
+    throw new Error(
+      `${ledger}: release evidence fileCount expected ${evidence.fileCount} ` +
+      `but found ${relativeFiles.length}`,
+    )
+  }
+  const manifest = relativeFiles.map((path) => {
+    const absolutePath = safeRelativePath(
+      root,
+      path,
+      `${ledger}: release evidence`,
+    )
+    if (!lstatSync(absolutePath).isFile()) {
+      throw new Error(
+        `${ledger}: release evidence must reference only regular files`,
+      )
+    }
+    const digest = createHash('sha256')
+      .update(readFileSync(absolutePath))
+      .digest('hex')
+    return `${digest}  ${path}\n`
+  }).join('')
+  const actual = createHash('sha256').update(manifest).digest('hex')
+  if (actual !== evidence.manifestSha256) {
+    throw new Error(
+      `${ledger}: release evidence manifest SHA-256 does not match ` +
+      `the covered release bytes`,
+    )
   }
 }
 
@@ -145,17 +204,20 @@ function verifyNoticeBacked(root, ledger, record) {
   if (!Array.isArray(noticeFiles) || noticeFiles.length === 0) {
     throw new Error(`${ledger}: noticeFiles must be a non-empty array`)
   }
-  for (const value of noticeFiles) {
+  const files = noticeFiles.map((value) =>
     verifyNoticeFile(root, value, `${ledger}: noticeFiles`)
-  }
+  )
 
   const coveredPaths = record.coveredPaths
   if (!Array.isArray(coveredPaths) || coveredPaths.length === 0) {
     throw new Error(`${ledger}: coveredPaths must be a non-empty array`)
   }
   for (const value of coveredPaths) {
-    verifyCoveredPath(root, value, `${ledger}: coveredPaths`)
+    files.push(
+      ...verifyCoveredPath(root, value, `${ledger}: coveredPaths`),
+    )
   }
+  verifyReleaseEvidence(root, ledger, record, files)
 }
 
 export function verifyReleaseRights(root = ROOT) {
@@ -175,6 +237,12 @@ export function verifyReleaseRights(root = ROOT) {
       typeof record?.releaseStatus === 'string' && record.releaseStatus.length > 0
         ? record.releaseStatus
         : 'UNKNOWN'
+    if (record?.schemaVersion !== 1) {
+      unresolved.push(
+        `${ledger}: schemaVersion must be exactly 1`,
+      )
+      continue
+    }
     if (!ACCEPTED_STATUSES.has(status)) {
       unresolved.push(`${ledger}: releaseStatus=${status}`)
       continue

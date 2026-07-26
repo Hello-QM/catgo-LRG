@@ -10,6 +10,11 @@
   "coveredPaths": [
     "server/catgo/vendor/pormake/database"
   ],
+  "releaseEvidence": {
+    "algorithm": "sha256sum-manifest-v1",
+    "fileCount": 3277,
+    "manifestSha256": "646f28aa8e3bc8958629bbc47e48ca51923cc3bca6502c2b4bd2e9e16af4b602"
+  },
   "pormake": {
     "repository": "https://github.com/Sangwon91/PORMAKE",
     "revision": "639caad9d315ef6cb4838d0f8e44336d4a41aa7a",

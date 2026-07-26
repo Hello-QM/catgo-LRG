@@ -38,6 +38,11 @@ test('confirmed upstream MIT notices retain their copyright and permission text'
   }
 })
 
+test('the active notice bundle does not claim CatGo has noncommercial terms', () => {
+  const notice = read('THIRD_PARTY_NOTICES.md')
+  assert.doesNotMatch(notice, /CatGo noncommercial terms/i)
+})
+
 test('the notice index links confirmed sources without assigning blanket path coverage', () => {
   const text = read('THIRD_PARTY_NOTICES.md')
   for (const source of [

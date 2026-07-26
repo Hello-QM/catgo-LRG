@@ -26,6 +26,11 @@
     "src/lib/xrd/atomic-scattering-params.ts",
     "src/lib/xrd/calc-xrd.ts"
   ],
+  "releaseEvidence": {
+    "algorithm": "sha256sum-manifest-v1",
+    "fileCount": 20,
+    "manifestSha256": "e92b0291502c4fb30b8ec656bc7d29881ef1e80945395ef656c44215894990ab"
+  },
   "intermediaries": [
     {
       "repository": "https://github.com/janosh/matterviz",
