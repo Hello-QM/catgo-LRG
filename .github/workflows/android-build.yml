@@ -178,7 +178,11 @@ jobs:
                 echo "::error::$artifact is missing legal/$rel"
                 exit 1
               fi
-            done < <(find build/legal-bundle -type f | sort)
+            done < <(
+              find build/legal-bundle -type f \
+                ! -name '.catgo-legal-bundle-owned' |
+                sort
+            )
           done
 
       - name: Sign the APK (apksigner)

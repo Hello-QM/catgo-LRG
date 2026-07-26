@@ -173,11 +173,15 @@ function verifyRunProvenance({
     throw new Error('TestFlight attestation source commit does not match release source')
   }
   if (run.head_sha !== sourceCommit) {
+    const approvedBackfills =
+      RELEASE_TRUST_POLICY.iosBackfillWorkflowSha256s
     if (
       attestation.releaseTag !== V146_TAG ||
       sourceCommit !== V146_SOURCE_COMMIT ||
       run.head_branch !== V146_BACKFILL_BRANCH ||
-      runWorkflowHash !== RELEASE_TRUST_POLICY.iosBackfillWorkflowSha256
+      !Array.isArray(approvedBackfills) ||
+      approvedBackfills.some((digest) => !SHA256_PATTERN.test(digest)) ||
+      !approvedBackfills.includes(runWorkflowHash)
     ) {
       throw new Error(
         `GitHub Actions run head_sha does not match source commit ${sourceCommit}`,

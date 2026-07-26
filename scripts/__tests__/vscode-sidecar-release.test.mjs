@@ -47,6 +47,11 @@ test('sidecar archive verification excludes the sync ownership sentinel', () => 
   assert.match(step, /find build\/legal-bundle -type f/)
   assert.match(
     step,
+    /pyi-archive_viewer[\s\S]*\|\s*tr ['"]\\\\['"] ['"]\/['"]/,
+    'Windows archive paths must be normalized before exact legal checks',
+  )
+  assert.match(
+    step,
     /! -name ['"]\.catgo-legal-bundle-owned['"]/,
     'the ownership sentinel is not a redistributed legal document',
   )
