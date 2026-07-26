@@ -98,12 +98,8 @@ jobs:
             Cache-Control: public, max-age=0, must-revalidate
           EOF
 
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.90.1'
-          command: deploy --config wrangler.docs.toml
+      - name: Deploy with pinned Wrangler
+        run: pnpm dlx wrangler@4.90.1 deploy --config wrangler.docs.toml
 
   deploy-app:
     name: Deploy app.catgo-ucsd.org
@@ -206,12 +202,8 @@ jobs:
             Cache-Control: public, max-age=0, must-revalidate
           EOF
 
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.90.1'
-          command: deploy --config wrangler.app.toml
+      - name: Deploy with pinned Wrangler
+        run: pnpm dlx wrangler@4.90.1 deploy --config wrangler.app.toml
 
   deploy-downloads:
     name: Deploy dl.catgo-ucsd.org
@@ -227,9 +219,5 @@ jobs:
         with:
           version: 10.28.2
 
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.90.1'
-          command: deploy --config wrangler.downloads.toml
+      - name: Deploy with pinned Wrangler
+        run: pnpm dlx wrangler@4.90.1 deploy --config wrangler.downloads.toml

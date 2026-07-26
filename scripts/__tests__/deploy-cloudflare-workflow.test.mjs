@@ -14,6 +14,11 @@ const WASM_PACK_INSTALL =
   'curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh'
 const DOWNLOADS_CONFIG_PATH = resolve(ROOT, 'wrangler.downloads.toml')
 const DEPLOY_CONFIG = loadYaml(DEPLOY_WORKFLOW)
+const WRANGLER_VERSION = '4.90.1'
+
+function wranglerDeployCommand(configFile) {
+  return `pnpm dlx wrangler@${WRANGLER_VERSION} deploy --config ${configFile}`
+}
 
 test('Cloudflare app deployment installs a wasm-pack that supports feature flags', () => {
   assert.doesNotMatch(DEPLOY_WORKFLOW, /jetli\/wasm-pack-action/)
@@ -28,7 +33,7 @@ test('Cloudflare workflow deploys the download Worker', () => {
   assert.match(DEPLOY_WORKFLOW, /name: Deploy dl\.catgo-ucsd\.org/)
   assert.match(
     DEPLOY_WORKFLOW,
-    /command: deploy --config wrangler\.downloads\.toml/,
+    /run: pnpm dlx wrangler@4\.90\.1 deploy --config wrangler\.downloads\.toml/,
   )
 })
 
@@ -38,7 +43,7 @@ test('download deployment provisions pnpm before Wrangler runs', () => {
     (step) => step.uses === 'pnpm/action-setup@v4',
   )
   const wranglerIndex = steps.findIndex(
-    (step) => step.uses === 'cloudflare/wrangler-action@v3',
+    (step) => step.run === wranglerDeployCommand('wrangler.downloads.toml'),
   )
 
   assert.notEqual(pnpmIndex, -1, 'download deployment installs pnpm')
@@ -47,23 +52,24 @@ test('download deployment provisions pnpm before Wrangler runs', () => {
 })
 
 test('every Cloudflare deployment pins the validated Wrangler release', () => {
-  const deployJobs = ['deploy-docs', 'deploy-app', 'deploy-downloads']
-  const wranglerSteps = deployJobs.map((jobName) => {
+  const deployJobs = new Map([
+    ['deploy-docs', 'wrangler.docs.toml'],
+    ['deploy-app', 'wrangler.app.toml'],
+    ['deploy-downloads', 'wrangler.downloads.toml'],
+  ])
+  const wranglerSteps = [...deployJobs].map(([jobName, configFile]) => {
     const steps = DEPLOY_CONFIG.jobs[jobName].steps
     const matches = steps.filter(
-      (step) => step.uses === 'cloudflare/wrangler-action@v3',
+      (step) => step.run === wranglerDeployCommand(configFile),
     )
-    assert.equal(matches.length, 1, `${jobName} has one Wrangler action`)
+    assert.equal(matches.length, 1, `${jobName} has one pinned Wrangler deploy`)
     return [jobName, matches[0]]
   })
 
   assert.equal(wranglerSteps.length, 3)
   for (const [jobName, step] of wranglerSteps) {
-    assert.equal(
-      step.with.wranglerVersion,
-      '4.90.1',
-      `${jobName} pins the validated Wrangler release`,
-    )
+    assert.match(step.run, new RegExp(`wrangler@${WRANGLER_VERSION}`))
+    assert.equal(step.uses, undefined, `${jobName} avoids action self-install`)
   }
 })
 

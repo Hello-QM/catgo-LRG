@@ -32,7 +32,7 @@ const RELEASE_JOBS = {
 }
 
 const PUBLICATION_SIGNAL =
-  /(?:gh release (?:create|upload)|aws s3 (?:sync|cp)|xcrun altool|vsce publish|ovsx publish)/
+  /(?:gh release (?:create|upload)|aws s3 (?:sync|cp)|xcrun altool|vsce publish|ovsx publish|pnpm dlx wrangler@\S+ deploy)/
 const PUBLICATION_ACTION =
   /(?:actions\/upload-artifact|cloudflare\/wrangler-action|docker\/build-push-action|pypa\/gh-action-pypi-publish|softprops\/action-gh-release|tauri-apps\/tauri-action)/
 

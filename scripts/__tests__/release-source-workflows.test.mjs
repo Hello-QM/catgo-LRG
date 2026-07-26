@@ -19,10 +19,11 @@ const RELEASE_WORKFLOWS = [
     file: 'tauri-build.yml',
     job: 'build',
     checkoutRef:
-      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.ref }}",
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}",
     tag:
-      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}",
-    requireTag: "${{ startsWith(github.ref, 'refs/tags/') }}",
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}",
+    requireTag:
+      "${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}",
   },
   {
     file: 'android-build.yml',
@@ -142,6 +143,50 @@ test('Android release signing verifies validity and the approved signer identity
     /build `main` and upload the APK to an existing release tag/,
     'comments must not endorse building a different source for a release',
   )
+})
+
+test('Windows release publishers disable CRLF conversion before checkout', () => {
+  for (const [file, job] of [
+    ['tauri-build.yml', 'build'],
+    ['build-vscode-sidecars.yml', 'build'],
+  ]) {
+    const steps = workflow(file).jobs[job].steps
+    const checkoutIndex = steps.findIndex((step) =>
+      String(step.uses ?? '').startsWith('actions/checkout@'),
+    )
+    const checkoutPolicyIndex = steps.findIndex(
+      (step) =>
+        step.if === "runner.os == 'Windows'" &&
+        step.run === 'git config --global core.autocrlf false',
+    )
+
+    assert.ok(
+      checkoutPolicyIndex >= 0 && checkoutPolicyIndex < checkoutIndex,
+      `${file} must preserve release-evidence bytes before Windows checkout`,
+    )
+  }
+})
+
+test('desktop workflow can backfill only Windows from an exact release tag', () => {
+  const parsed = workflow('tauri-build.yml')
+  const dispatch = parsed.on.workflow_dispatch
+  const guard = parsed.jobs.build.steps.find(
+    (step) => step.name === 'Reject unsafe manual release matrix',
+  )
+
+  assert.equal(dispatch.inputs.release_tag.type, 'string')
+  assert.equal(dispatch.inputs.release_tag.required, false)
+  assert.equal(dispatch.inputs.windows_only.type, 'boolean')
+  assert.equal(dispatch.inputs.windows_only.default, false)
+  assert.match(String(parsed.jobs.build.strategy.matrix), /inputs\.windows_only/)
+  assert.match(String(parsed.jobs.build.strategy.matrix), /windows-latest/)
+  assert.ok(guard)
+  assert.equal(
+    guard.if,
+    "github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && !inputs.windows_only",
+  )
+  assert.match(guard.run, /Windows-only/)
+  assert.match(guard.run, /exit 1/)
 })
 
 test('path-filtered release workflows watch the shared source verifier', () => {

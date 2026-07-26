@@ -105,5 +105,5 @@ test('Tauri workflow finalizes the canonical body after tauri-action', () => {
   assert.ok(action >= 0)
   assert.ok(finalize > action)
   const block = WORKFLOW.slice(finalize)
-  assert.match(block, /scripts\/ensure-v1\.4\.6-release-body\.sh "\$GITHUB_REF_NAME"/)
+  assert.match(block, /scripts\/ensure-v1\.4\.6-release-body\.sh "\$CATGO_RELEASE_TAG"/)
 })

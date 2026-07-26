@@ -11,3 +11,16 @@ patches/*.patch text eol=lf
 *.sh text eol=lf
 
 tests/fixtures/trajectory/*.extxyz text eol=lf
+
+# Release-rights evidence hashes the shipped bytes. Keep every text file in
+# the two NOTICE_BACKED manifests byte-identical on Windows, macOS, and Linux.
+/THIRD_PARTY_NOTICES.md text eol=lf
+/server/catgo/vendor/pormake/LICENSE text eol=lf
+/server/catgo/vendor/pormake/database/**/*.cgd text eol=lf
+/server/catgo/vendor/pormake/database/**/*.xyz text eol=lf
+/server/catgo/vendor/pormake/database/**/*.txt text eol=lf
+/server/catgo/vendor/pormake/database/**/*.zip -text
+/third_party/licenses/*.txt text eol=lf
+/extensions/rust/src/**/*.rs text eol=lf
+/src/lib/structure/TerminalPanel.svelte text eol=lf
+/src/lib/xrd/*.ts text eol=lf
