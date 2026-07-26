@@ -98,18 +98,63 @@ function safeRelativePath(root, value, label) {
   return absolutePath
 }
 
-function verifyNoticeBacked(root, ledger, record) {
-  for (const field of ['noticeFiles', 'coveredPaths']) {
-    const paths = record[field]
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw new Error(`${ledger}: ${field} must be a non-empty array`)
-    }
-    for (const value of paths) {
-      const path = safeRelativePath(root, value, `${ledger}: ${field}`)
-      if (!lstatSync(path).isFile()) {
-        throw new Error(`${ledger}: ${field} must reference a regular file`)
+function verifyNoticeFile(root, value, label) {
+  const path = safeRelativePath(root, value, label)
+  if (!lstatSync(path).isFile()) {
+    throw new Error(`${label} must reference a regular file`)
+  }
+}
+
+function verifyCoveredPath(root, value, label) {
+  const coveredValue =
+    typeof value === 'string' && value.endsWith('/') ? value.slice(0, -1) : value
+  const path = safeRelativePath(root, coveredValue, label)
+  const stat = lstatSync(path)
+  if (stat.isFile()) {
+    return
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} must reference a regular file or directory`)
+  }
+
+  let hasRegularFile = false
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = resolve(directory, entry.name)
+      const entryStat = lstatSync(entryPath)
+      if (entryStat.isSymbolicLink()) {
+        throw new Error(`${label} contains a symlinked entry`)
+      }
+      if (entryStat.isFile()) {
+        hasRegularFile = true
+      } else if (entryStat.isDirectory()) {
+        visit(entryPath)
+      } else {
+        throw new Error(`${label} contains an unsupported entry`)
       }
     }
+  }
+  visit(path)
+  if (!hasRegularFile) {
+    throw new Error(`${label} must contain at least one regular file`)
+  }
+}
+
+function verifyNoticeBacked(root, ledger, record) {
+  const noticeFiles = record.noticeFiles
+  if (!Array.isArray(noticeFiles) || noticeFiles.length === 0) {
+    throw new Error(`${ledger}: noticeFiles must be a non-empty array`)
+  }
+  for (const value of noticeFiles) {
+    verifyNoticeFile(root, value, `${ledger}: noticeFiles`)
+  }
+
+  const coveredPaths = record.coveredPaths
+  if (!Array.isArray(coveredPaths) || coveredPaths.length === 0) {
+    throw new Error(`${ledger}: coveredPaths must be a non-empty array`)
+  }
+  for (const value of coveredPaths) {
+    verifyCoveredPath(root, value, `${ledger}: coveredPaths`)
   }
 }
 

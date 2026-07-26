@@ -87,6 +87,76 @@ test('accepts NOTICE_BACKED only with regular included notice files', () => {
   }
 })
 
+test('accepts NOTICE_BACKED covered directories with nested regular files', () => {
+  const root = fixture({
+    'vendor-component.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+      coveredPaths: ['vendor/component/'],
+    },
+  })
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFixture(root, 'vendor/component/index.js', 'export {}\n')
+  writeFixture(root, 'vendor/component/lib/helper.js', 'export {}\n')
+  try {
+    assert.deepEqual(verifyReleaseRights(root), [
+      { ledger: 'vendor-component.json', status: 'NOTICE_BACKED' },
+    ])
+    const result = verify(root)
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.match(result.stdout, /VERIFIED: 1 ledger/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED covered directories with no regular files', () => {
+  const root = fixture({
+    'empty-vendor-component.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+      coveredPaths: ['vendor/component/'],
+    },
+  })
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  mkdirSync(resolve(root, 'vendor/component'), { recursive: true })
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'empty covered directories must fail closed')
+    assert.match(result.stderr, /empty-vendor-component\.json.*coveredPaths/i)
+    assert.match(result.stderr, /regular file/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('blocks NOTICE_BACKED covered directories containing symlinks', () => {
+  const root = fixture({
+    'linked-vendor-component.json': {
+      schemaVersion: 1,
+      releaseStatus: 'NOTICE_BACKED',
+      noticeFiles: ['third_party/licenses/component-MIT.txt'],
+      coveredPaths: ['vendor/component/'],
+    },
+  })
+  const outside = resolve(root, 'outside-component.js')
+  const linked = resolve(root, 'vendor/component/linked.js')
+  writeFixture(root, 'third_party/licenses/component-MIT.txt', 'MIT\n')
+  writeFileSync(outside, 'export {}\n')
+  mkdirSync(dirname(linked), { recursive: true })
+  symlinkSync(outside, linked)
+  try {
+    const result = verify(root)
+    assert.notEqual(result.status, 0, 'symlinked covered files must fail closed')
+    assert.match(result.stderr, /linked-vendor-component\.json.*coveredPaths/i)
+    assert.match(result.stderr, /symlink/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('blocks NOTICE_BACKED ledgers without noticeFiles or coveredPaths', () => {
   const root = fixture({
     'missing-notices.json': {
