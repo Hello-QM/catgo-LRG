@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TAG="${1:?usage: ensure-v1.4.6-release-body.sh v1.4.6}"
-if [ "$TAG" != "v1.4.6" ]; then
-  echo "refusing to apply v1.4.6 release notes to $TAG" >&2
+TAG="${1:?usage: ensure-release-body.sh vX.Y.Z}"
+if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "release tag must match vX.Y.Z: $TAG" >&2
   exit 2
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
-NOTES=".github/release-notes/v1.4.6.md"
+NOTES=".github/release-notes/${TAG}.md"
 GH_BIN="${CATGO_GH_BIN:-gh}"
 cd "$ROOT"
+
+if [ ! -f "$NOTES" ]; then
+  echo "canonical release notes do not exist: $NOTES" >&2
+  exit 2
+fi
 
 if ! "$GH_BIN" release view "$TAG" >/dev/null 2>&1; then
   # Another matrix or asset workflow may create the draft after our view.

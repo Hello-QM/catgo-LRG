@@ -14,13 +14,14 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const NOTES = resolve(ROOT, '.github/release-notes/v1.4.6.md')
+const TAG = 'v1.4.7'
+const NOTES = resolve(ROOT, `.github/release-notes/${TAG}.md`)
 const WORKFLOW = readFileSync(
   resolve(ROOT, '.github/workflows/tauri-build.yml'),
   'utf8',
 )
 
-function runEnsure({ existing, createStatus = 0 }) {
+function runEnsure({ existing, createStatus = 0, tag = TAG }) {
   const fixture = mkdtempSync(resolve(tmpdir(), 'catgo-release-body-'))
   const fakeGh = resolve(fixture, 'gh')
   const state = resolve(fixture, 'release-exists')
@@ -45,7 +46,7 @@ exit 0
   chmodSync(fakeGh, 0o755)
   const result = spawnSync(
     'bash',
-    [resolve(ROOT, 'scripts/ensure-v1.4.6-release-body.sh'), 'v1.4.6'],
+    [resolve(ROOT, 'scripts/ensure-release-body.sh'), tag],
     {
       cwd: ROOT,
       encoding: 'utf8',
@@ -63,7 +64,7 @@ exit 0
   return { result, calls }
 }
 
-test('canonical v1.4.6 release body contains every mandatory disclosure', () => {
+test('canonical current release body contains every mandatory disclosure', () => {
   assert.ok(existsSync(NOTES), 'canonical release notes file exists')
   const body = readFileSync(NOTES, 'utf8')
   assert.match(body, /AGPL-3\.0-or-later/)
@@ -78,11 +79,11 @@ test('canonical v1.4.6 release body contains every mandatory disclosure', () => 
 test('existing release is always edited to the canonical body', () => {
   const { result, calls } = runEnsure({ existing: true })
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^release view v1\.4\.6$/m)
+  assert.match(calls, /^release view v1\.4\.7$/m)
   assert.doesNotMatch(calls, /^release create /m)
   assert.match(
     calls,
-    /^release edit v1\.4\.6 --title CatGo v1\.4\.6 --notes-file \.github\/release-notes\/v1\.4\.6\.md$/m,
+    /^release edit v1\.4\.7 --title CatGo v1\.4\.7 --notes-file \.github\/release-notes\/v1\.4\.7\.md$/m,
   )
 })
 
@@ -92,18 +93,34 @@ test('concurrent draft creation still converges through an explicit edit', () =>
     createStatus: 1,
   })
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^release create v1\.4\.6 --draft /m)
-  assert.match(calls, /^release view v1\.4\.6$/m)
-  assert.match(calls, /^release edit v1\.4\.6 /m)
+  assert.match(calls, /^release create v1\.4\.7 --draft /m)
+  assert.match(calls, /^release view v1\.4\.7$/m)
+  assert.match(calls, /^release edit v1\.4\.7 /m)
 })
 
 test('Tauri workflow finalizes the canonical body after tauri-action', () => {
   const action = WORKFLOW.indexOf('uses: tauri-apps/tauri-action@v0.6')
-  const finalize = WORKFLOW.indexOf(
-    '- name: Finalize canonical v1.4.6 release body',
-  )
+  const finalize = WORKFLOW.indexOf('- name: Finalize canonical release body')
   assert.ok(action >= 0)
   assert.ok(finalize > action)
   const block = WORKFLOW.slice(finalize)
-  assert.match(block, /scripts\/ensure-v1\.4\.6-release-body\.sh "\$CATGO_RELEASE_TAG"/)
+  assert.match(block, /if: env\.CATGO_RELEASE_TAG == 'v1\.4\.7'/)
+  assert.match(block, /scripts\/ensure-release-body\.sh "\$CATGO_RELEASE_TAG"/)
+})
+
+test('Tauri workflow retains the v1.4.6 backfill finalizer', () => {
+  assert.match(
+    WORKFLOW,
+    /if: env\.CATGO_RELEASE_TAG == 'v1\.4\.6'[\s\S]*scripts\/ensure-v1\.4\.6-release-body\.sh "\$CATGO_RELEASE_TAG"/,
+  )
+})
+
+test('canonical body finalizer rejects malformed release tags before calling GitHub', () => {
+  const { result, calls } = runEnsure({
+    existing: false,
+    tag: 'latest',
+  })
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /release tag must match vX\.Y\.Z/)
+  assert.equal(calls, '')
 })
