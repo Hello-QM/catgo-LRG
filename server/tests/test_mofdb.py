@@ -26,13 +26,18 @@ _cell_angle_alpha 90
 _cell_angle_beta 90
 _cell_angle_gamma 90
 _symmetry_space_group_name_H-M 'P 1'
+_chemical_formula_sum 'Zn1 O1'
+loop_
+_symmetry_equiv_pos_as_xyz
+'x, y, z'
 loop_
 _atom_site_label
+_atom_site_type_symbol
 _atom_site_fract_x
 _atom_site_fract_y
 _atom_site_fract_z
-Zn1 0.0 0.0 0.0
-O1 0.5 0.5 0.5
+Zn1 Zn 0.0 0.0 0.0
+O1 O 0.5 0.5 0.5
 """
 
 

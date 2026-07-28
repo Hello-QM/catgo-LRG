@@ -39,8 +39,11 @@ from mcp.types import TextContent, Tool
 # `from workflow.catalysis...` import died with "No module named 'workflow.catalysis'"
 # and catgo_catalysis answered "Catalysis module not available" for every call.
 _server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _server_dir not in sys.path:
-    sys.path.insert(0, _server_dir)
+_bundled_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "_bundled")
+for _runtime_dir in (_server_dir, _bundled_dir):
+    if os.path.isdir(_runtime_dir) and _runtime_dir not in sys.path:
+        sys.path.insert(0, _runtime_dir)
 
 from plugin_loader import get_plugin_tool_defs, dispatch_plugin
 from catgo.mcp_tools.tools import TOOLS
@@ -61,8 +64,9 @@ from catgo.mcp_tools.structure_tools import (
     _handle_fetch_molecule,
 )
 from catgo.mcp_tools.plugin_tools import _handle_plugin_analyzer, _handle_plugin_reader
-# verification layer (additive): reuse the merged variant's handler + enforcement
-from catgo.mcp_tools.server_claude_code import _handle_verify
+# verification layer (additive): reuse the merged variant's handler, response
+# classifier, and enforcement semantics so both MCP entry points stay identical.
+from catgo.mcp_tools.server_claude_code import _handle_verify, _response_succeeded
 from catgo.mcp_tools import verify_enforcement as _verify_enf
 
 logger = logging.getLogger(__name__)
@@ -398,7 +402,9 @@ async def handle_list_tools() -> list[Tool]:
             "type": "object",
             "properties": {
                 "result": {"type": "object", "description": (
-                    "Parsed result dict. Optional keys: dG, species; ads_titels, "
+                    "Parsed result dict OR a numeric tool's {value, provenance, claim} "
+                    "envelope (auto-unwrapped and its claim auto-included). Optional keys: "
+                    "dG, species; ads_titels, "
                     "bare_titels; nelect_ads, nelect_bare, zval_adsorbate; fmax, ediffg; "
                     "energy, n_atoms; opt_conv; products_found, products_expected; "
                     "hessian_max_asym; freq_frame0_maxdev; n_imag, imag_max_cm; ul_v; "
@@ -406,9 +412,10 @@ async def handle_list_tools() -> list[Tool]:
                 "require": {"type": "array", "items": {"type": "string"},
                             "description": "Gate names that MUST run (error if inputs absent)."},
                 "claims": {"type": "array", "items": {"type": "string"},
-                           "description": "Claim types asserted (binding_dG, her_dGH, band_gap, "
-                                          "field_energy, stratified, converged_E) for the "
-                                          "verifiability check."},
+                           "description": "Claim types asserted (energy, binding_Eads, binding_dG, her_dGH, "
+                                          "band_gap, field_energy, stratified, converged_E, "
+                                          "limiting_potential) for the verifiability check. "
+                                          "An envelope's claim is always included."},
                 "override": {"type": "array", "items": {"type": "string"},
                              "description": "Gate name(s) whose FAIL you assert is a false alarm. "
                                             "Waives the submit block ONCE for exactly those gates "
@@ -558,15 +565,39 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     if decision == _verify_enf.FORBIDDEN:
         return [TextContent(type="text", text=reason)]
     result = await _dispatch_tool(name, arguments)
-    ok = not (result and isinstance(result[0].text, str) and
-              (result[0].text.startswith("Unknown tool:") or result[0].text.startswith("Error:")))
-    _verify_enf.postmark(name, arguments, ok=ok)
-    if ok and result and _verify_enf._is_numeric(name, arguments):
-        from catgo.mcp_tools import provenance as _prov
+    ok = _response_succeeded(name, result, arguments)
+    wrapped_numeric = False
+    raw_numeric_text = result[0].text if ok and result else ""
+    from catgo.mcp_tools import provenance as _prov
+    v2_result_response = (
+        name == "catgo_workflow"
+        and str(arguments.get("action", "")).lower() in {
+            "status", "results", "step_error"
+        }
+        and _prov.workflow_payload_has_results(raw_numeric_text)
+    ) if ok and result else False
+    numeric_response = _verify_enf._is_numeric(name, arguments) or v2_result_response
+    if ok and result and numeric_response:
         wrapped = _prov.wrap_payload(result[0].text, tool=name,
                                      action=arguments.get("action"), inputs=arguments)
         if wrapped is not None:
             result[0] = TextContent(type="text", text=wrapped)
+            wrapped_numeric = True
+    is_empty_batch = (
+        name == "catgo_workflow"
+        and str(arguments.get("action", "")).lower() == "batch_results"
+        and _prov.batch_payload_is_empty(raw_numeric_text)
+    )
+    result_records = (
+        _prov.extract_result_records(result[0].text)
+        if ok and result and numeric_response else []
+    )
+    postmark_args = {
+        **arguments,
+        **({"_numeric_response": True} if v2_result_response else {}),
+        **({"_result_records": result_records} if result_records else {}),
+    }
+    _verify_enf.postmark(name, postmark_args, ok=ok and not is_empty_batch)
     if decision == _verify_enf.PROMPT and result:
         # a waived FAIL still went out — stamp the response so the override is
         # visible in the transcript rather than only in the audit list.

@@ -1082,8 +1082,21 @@ class WorkflowEngine:
         states = [TaskState(t["status"]) for t in tasks]
         new_status = WorkflowState.from_task_states(states)
 
-        if current["status"] != new_status.value:
+        status_changed = current["status"] != new_status.value
+        if status_changed:
             self.db.update_workflow(workflow_id, status=new_status.value)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.create_task(
+                    _broadcast(
+                        workflow_id,
+                        {"type": "workflow_status", "status": new_status.value},
+                    )
+                )
+            logger.info("Workflow %s: status → %s", workflow_id, new_status.value)
 
         # Always reconcile V1 workflow status from V2 — even when V2 hasn't
         # transitioned this cycle. Without this, a stale V1 row (e.g. left
@@ -1096,10 +1109,6 @@ class WorkflowEngine:
             update_v1_workflow(workflow_id, {"status": new_status.value})
         except Exception:
             pass
-            asyncio.get_event_loop().create_task(
-                _broadcast(workflow_id, {"type": "workflow_status", "status": new_status.value})
-            )
-            logger.info("Workflow %s: status → %s", workflow_id, new_status.value)
 
     async def run_forever(self) -> None:
         """Run the scanner in a loop."""

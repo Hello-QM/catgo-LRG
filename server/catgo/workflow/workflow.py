@@ -306,13 +306,13 @@ class Workflow:
         """
         return Zone(self, name)
 
-    def submit(self, auto_submit: bool = True) -> str:
+    def submit(self, auto_submit: bool = False) -> str:
         """Mark workflow as ready for execution. Engine picks it up.
 
         Args:
             auto_submit: If True, HPC tasks skip the PENDING_REVIEW gate
-                and go straight to READY. Default True (set to False to
-                require user confirmation before HPC submission).
+                and go straight to READY. Defaults to False; callers must
+                opt in explicitly after reviewing generated inputs.
         """
         import json as _json
         # Merge auto_submit into workflow config_json

@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 import time
+from contextvars import ContextVar
 
 import httpx
 from catgo.mcp_tools.helpers import _push_workflow_navigate
@@ -39,8 +40,11 @@ from mcp.types import TextContent, Tool
 # `from workflow...` import failed with "No module named 'workflow.catalysis'"
 # unless PYTHONPATH happened to supply server/ from outside.
 _server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _server_dir not in sys.path:
-    sys.path.insert(0, _server_dir)
+_bundled_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "_bundled")
+for _runtime_dir in (_server_dir, _bundled_dir):
+    if os.path.isdir(_runtime_dir) and _runtime_dir not in sys.path:
+        sys.path.insert(0, _runtime_dir)
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +229,7 @@ TOOLS = [
             "The disambiguator: does the user want NUMBERS (energies, ΔG, barriers) at the end? "
             "If yes, build a workflow. If they just want a STRUCTURE in the viewer, don't.\n\n"
             "Actions: list, templates, node_types, node_details, create, rename, get, add_node, "
-            "remove_node, connect, set_params, batch, run, pause, resume, validate, status, step_error, "
+            "remove_node, connect, set_params, batch, run, pause, resume, validate, status, results, step_error, "
             "retry, batch_status, batch_results, list_presets.\n\n"
             "RENAME an existing workflow: rename {workflow_id:'<ID from context>', "
             "name:'<new name>'}. This only changes the display name — the graph is "
@@ -321,7 +325,7 @@ TOOLS = [
                     "enum": [
                         "list", "templates", "node_types", "node_details", "create", "rename", "get",
                         "add_node", "remove_node", "connect", "set_params", "batch",
-                        "run", "pause", "resume", "validate", "status", "step_error",
+                        "run", "pause", "resume", "validate", "status", "results", "step_error",
                         "retry", "batch_status", "batch_results", "list_presets",
                     ],
                     "description": "Workflow operation",
@@ -851,7 +855,9 @@ TOOLS = [
                 "result": {
                     "type": "object",
                     "description": (
-                        "Parsed result dict. Recognized keys (all optional): dG, "
+                        "Parsed result dict OR a numeric tool's "
+                        "{value, provenance, claim} envelope (auto-unwrapped and its "
+                        "claim auto-included). Recognized keys (all optional): dG, "
                         "species; ads_titels, bare_titels; nelect_ads, nelect_bare, "
                         "zval_adsorbate; fmax, ediffg; energy, n_atoms; opt_conv; "
                         "products_found, products_expected; hessian_max_asym; "
@@ -873,8 +879,9 @@ TOOLS = [
                     "items": {"type": "string"},
                     "description": (
                         "Optional claim types this result asserts, for the verifiability "
-                        "check. Known: binding_dG, her_dGH, band_gap, field_energy, "
-                        "stratified, converged_E. A claim whose provenance is absent is "
+                        "check. Known: energy, binding_Eads, binding_dG, her_dGH, band_gap, field_energy, "
+                        "stratified, converged_E, limiting_potential. An envelope's claim "
+                        "is always included even when omitted here. A claim whose provenance is absent is "
                         "flagged UNVERIFIABLE — the tool refuses to certify a value it "
                         "cannot check, rather than passing it silently."
                     ),
@@ -1344,11 +1351,23 @@ TOOLS = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+_get_current_structure_override = ContextVar(
+    "catgo_get_current_structure_override",
+    default=None,
+)
+_push_structure_override = ContextVar(
+    "catgo_push_structure_override",
+    default=None,
+)
+
 
 async def _get_current_structure(
     client: httpx.AsyncClient, panel_id: str = "default",
 ) -> dict | None:
     """Fetch current structure from viewer. Returns None if unavailable."""
+    override = _get_current_structure_override.get()
+    if override is not None:
+        return await override(client, panel_id)
     try:
         resp = await client.get(
             f"{API_BASE}/view/structure/current",
@@ -1373,6 +1392,9 @@ async def _push_structure(
     ``_push_structure_direct`` (mcp_http.py) accepts the same param, so callers
     passing ``intent="load"`` work on both the HTTP and monkeypatched paths.
     """
+    override = _push_structure_override.get()
+    if override is not None:
+        return await override(client, struct, panel_id, intent=intent)
     try:
         await client.post(
             f"{API_BASE}/view/structure/push",
@@ -2236,9 +2258,21 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
             from . import provenance as _prov
         except ImportError:
             import provenance as _prov
-        enveloped = _prov.envelope(result, tool="catgo_catalysis", action=action,
-                                   inputs=params, claim=_prov.CATALYSIS_CLAIM.get(action),
-                                   method=f"workflow.catalysis.{action}")
+        claim = _prov.claim_for("catgo_catalysis", action)
+        methods = {
+            "oer": "workflow.catalysis.oer.compute_oer_overpotential",
+            "co2rr": "workflow.catalysis.co2rr.compute_co2rr_limiting_potential",
+            "nrr": "workflow.catalysis.nrr.compute_nrr_overpotential",
+            "free_energy": "workflow.catalysis.free_energy.gibbs_free_energy",
+            "volcano": "workflow.catalysis.volcano.generate_volcano_data",
+            "d_band_center": "workflow.catalysis.descriptors.compute_d_band_center",
+            "adsorption_energy": "workflow.catalysis.oer.compute_adsorption_free_energy",
+        }
+        enveloped = _prov.envelope(
+            result, tool="catgo_catalysis", action=action, inputs=params,
+            claim=claim, trusted_input_fields=_prov.NEEDS.get(claim, ()),
+            method=methods[action],
+        )
         return [T(type="text", text=json.dumps(enveloped, indent=2, ensure_ascii=False))]
     except ImportError as exc:
         return [T(type="text", text=f"Catalysis module not available: {exc}")]
@@ -2382,16 +2416,25 @@ def _handle_verify(args: dict) -> list[TextContent]:
     silent pass). Imported lazily so a missing verify_gates module never breaks other tools.
     """
     T = TextContent
-    result = args.get("result")
-    if not isinstance(result, dict):
+    raw_result = args.get("result")
+    if not isinstance(raw_result, dict):
         return [T(type="text", text="catgo_verify requires 'result' as an object/dict.")]
     try:
         from . import verify_gates
+        from . import provenance as _prov
     except ImportError:
         import verify_gates  # flat-layout fallback
+        import provenance as _prov
+
+    # Numeric tools emit {value, provenance, claim}. Consume that object directly:
+    # flatten only producer-owned fields, never echoed inputs, and auto-include the
+    # emitted claim so callers cannot bypass certification by omitting `claims`.
+    bound_digest = _prov.bound_result_digest(raw_result)
+    supplied_envelope_digest = _prov.supplied_envelope_digest(raw_result)
+    result, inferred_claims, conflicts = _prov.verification_view(raw_result)
     try:
         report = verify_gates.audit(result, require=args.get("require"))
-    except ValueError as e:
+    except (ValueError, TypeError, ZeroDivisionError, OverflowError) as e:
         return [T(type="text", text=f"catgo_verify: {e}")]
 
     cov = report["coverage"]
@@ -2403,19 +2446,11 @@ def _handle_verify(args: dict) -> list[TextContent]:
     for v in report["verdicts"]:
         mark = {"PASS": "✓", "FAIL": "✗", "SKIP": "·"}[v["status"]]
         lines.append(f"  {mark} [{v['taxon']}] {v['gate']}: {v['detail']}")
-    verdict = "FAIL" if cov["failed"] else ("PASS" if cov["ran"] else "NO-COVERAGE")
-    head = (
-        f"catgo_verify → {verdict}  "
-        f"({cov['ran']} ran, {cov['failed']} failed, {cov['skipped']} skipped "
-        f"of {cov['gates_total']} gates)"
-    )
-    if cov["failed"]:
-        head += f"\n  failed taxa: {', '.join(cov['failed_taxa'])} "
-        head += "— silent-error class(es); do NOT report this result as correct."
-    elif not cov["ran"]:
-        head += "\n  no gate had its inputs — this is NOT a clean bill of health."
 
-    claims = args.get("claims") or []
+    requested_claims = args.get("claims") or []
+    if isinstance(requested_claims, str):
+        requested_claims = [requested_claims]
+    claims = list(dict.fromkeys([*requested_claims, *inferred_claims]))
     vlines, unver = [], []
     if claims:
         vres = verify_gates.verifiability(result, claims)  # compute once
@@ -2424,19 +2459,65 @@ def _handle_verify(args: dict) -> list[TextContent]:
             vlines.append(f"  {m} claim '{vf['claim']}': {vf['status']} — {vf['detail']}")
         # default-deny: an unregistered claim (UNKNOWN-CLAIM) is NOT a silent pass.
         unver = [vf for vf in vres if vf["status"] in ("UNVERIFIABLE", "UNKNOWN-CLAIM")]
-        if unver:
-            head += (f"\n  {len(unver)} claim(s) not certified (UNVERIFIABLE / UNKNOWN-CLAIM) "
-                     "— asserted but lacking provenance to check.")
+
+    # Internal envelope disagreement is itself unverifiable. Never pick one copy.
+    for field in conflicts:
+        vf = {
+            "claim": f"provenance_conflict:{field}",
+            "status": "UNVERIFIABLE",
+            "detail": "value and producer provenance disagree",
+        }
+        unver.append(vf)
+        vlines.append(
+            f"  ✗ claim '{vf['claim']}': UNVERIFIABLE — {vf['detail']}"
+        )
+
+    verifiable = [
+        vf for vf in (vres if claims else [])
+        if vf["status"] == "VERIFIABLE"
+    ]
+    if cov["failed"]:
+        verdict = "FAIL"
+    elif unver:
+        verdict = "NOT-CERTIFIED"
+    elif cov["ran"]:
+        verdict = "PASS"
+    elif verifiable:
+        verdict = "PROVENANCE-ONLY"
+    else:
+        verdict = "NO-COVERAGE"
+    head = (
+        f"catgo_verify → {verdict}  "
+        f"({cov['ran']} ran, {cov['failed']} failed, {cov['skipped']} skipped "
+        f"of {cov['gates_total']} physics gates)"
+    )
+    if cov["failed"]:
+        head += f"\n  failed taxa: {', '.join(cov['failed_taxa'])} "
+        head += "— silent-error class(es); do NOT report this result as correct."
+    elif unver:
+        head += (f"\n  {len(unver)} claim(s) not certified "
+                 "(UNVERIFIABLE / UNKNOWN-CLAIM) — do not trust the claim.")
+    elif not cov["ran"] and verifiable:
+        head += ("\n  provenance requirements are complete; no numerical physics gate ran. "
+                 "This certifies checkability, not numeric correctness.")
+    elif not cov["ran"]:
+        head += "\n  no gate had its inputs — this is NOT a clean bill of health."
+    if inferred_claims:
+        head += f"\n  envelope claim(s) auto-included: {', '.join(inferred_claims)}."
 
     # Enforcement bookkeeping. Clearing the pending state needs a gate to have RUN
-    # *and* nothing to have failed — a FAIL or an uncertified claim keeps irreversible
-    # tools blocked, so the agent cannot spend HPC budget on a result it was just told
-    # is wrong. (An all-SKIP verify is not a clean bill of health either.)
+    # OR a registered claim to have complete provenance. This latter case is
+    # explicitly PROVENANCE-ONLY: it certifies checkability, never numerical truth.
+    # A FAIL, conflict, or uncertified claim keeps irreversible tools blocked.
     _enf.mark_verified(
-        cov["ran"] > 0,
+        cov["ran"] > 0 or bool(verifiable),
         failed_gates=[v["gate"] for v in report["verdicts"] if v["status"] == "FAIL"],
         failed_taxa=cov["failed_taxa"],
         uncertified_claims=[vf["claim"] for vf in unver],
+        # A mismatched digest is recorded against the envelope it claimed to be,
+        # so a later intact copy can clear that result only. A bare dict cannot
+        # select any digest because supplied_envelope_digest() rejects it.
+        result_digest=bound_digest or supplied_envelope_digest,
     )
 
     ov_lines = []
@@ -2778,7 +2859,12 @@ def _quickbuild_recipes() -> dict[str, dict]:
     }
 
 
-async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+async def _handle_quickbuild(
+    client: httpx.AsyncClient,
+    args: dict,
+    *,
+    workflow_client: httpx.AsyncClient | None = None,
+) -> list[TextContent]:
     """Server-side hook: build a complete reaction workflow from a recipe name.
 
     Saves CatBot from generating the batch operations array — picks the right
@@ -2786,6 +2872,7 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
     endpoint once, then routes navigation to the originating tab.
     """
     T = TextContent
+    internal_client = workflow_client or client
     recipe_name = (args.get("recipe") or "").strip()
     material_id = (args.get("material_id") or "").strip() or None
     name_arg = (args.get("name") or "").strip() or None
@@ -2829,7 +2916,7 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
     # intended structure — without this the structure_input node ends up
     # empty even though the correct structure is sitting on screen.
     if not si_params.get("structure_json"):
-        viewer_struct = await _get_current_structure(client)
+        viewer_struct = await _get_current_structure(internal_client)
         if viewer_struct:
             si_params["structure_json"] = json.dumps(viewer_struct)
             logger.info("Quickbuild: captured viewer structure into structure_input")
@@ -2894,12 +2981,12 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
     payload = {"name": final_name, "graph_json": json.dumps(graph_json)}
 
     base = f"{API_BASE}/workflow"
-    resp = await client.post(f"{base}/", json=payload)
+    resp = await internal_client.post(f"{base}/", json=payload)
     if resp.status_code not in (200, 201):
         return [T(type="text", text=f"QuickBuild failed ({resp.status_code}): {resp.text[:300]}")]
     wf = resp.json()
     try:
-        await _push_workflow_navigate(client, wf["id"])
+        await _push_workflow_navigate(internal_client, wf["id"])
     except Exception:
         pass
 
@@ -3559,6 +3646,58 @@ async def _handle_moire(client: httpx.AsyncClient, args: dict) -> list[TextConte
 # ---------------------------------------------------------------------------
 
 
+def _response_succeeded(
+    name: str,
+    result: list[TextContent] | None,
+    arguments: dict | None = None,
+) -> bool:
+    """Reject structured and legacy text errors before arming verification."""
+    if not result or not isinstance(result[0].text, str):
+        return False
+    text = result[0].text.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    error_prefixes = (
+        "unknown ",       # "Unknown tool:" and "Unknown <tool> action '...'" variants
+        f"{name.lower()} failed:",
+        "cannot connect",
+        "cannot get ",
+        "error:",
+        "traceback ",
+        "batch_results requires ",
+    )
+    if lowered.startswith(error_prefixes):
+        return False
+    first_line = lowered.splitlines()[0]
+    if (
+        " failed:" in first_line     # "catalysis/oer failed: ..."
+        or " error:" in first_line   # "workflow_engine error: ...", "[catgo campaign x] error: ..."
+        or " requires " in first_line
+        or " not available:" in first_line
+    ):
+        return False
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(payload, dict):
+        if payload.get("success") is False or payload.get("ok") is False:
+            return False
+        if payload.get("error") not in (None, "", False, [], {}):
+            return False
+        domain_status = (
+            name == "catgo_workflow"
+            and str((arguments or {}).get("action", "")).lower()
+            in {"status", "results", "step_error"}
+        )
+        if not domain_status and str(payload.get("status", "")).lower() in {
+            "error", "failed", "failure", "cancelled", "canceled",
+        }:
+            return False
+    return True
+
+
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
@@ -3576,21 +3715,47 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
         return [T(type="text", text=reason)]
 
     result = await _dispatch_tool(name, arguments)
-    ok = not (result and isinstance(result[0].text, str) and
-              result[0].text.startswith(("Unknown tool:", f"{name} failed:", "Cannot connect")))
-    _enf.postmark(name, arguments, ok=ok)
+    ok = _response_succeeded(name, result, arguments)
     # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
     # Single boundary = the same place the ecosystem audit found metadata being
     # discarded (59.6% of 178 public tools emit none).
-    if ok and result and _enf._is_numeric(name, arguments):
-        try:
-            from . import provenance as _prov
-        except ImportError:
-            import provenance as _prov
+    wrapped_numeric = False
+    raw_numeric_text = result[0].text if ok and result else ""
+    try:
+        from . import provenance as _prov
+    except ImportError:
+        import provenance as _prov
+    v2_result_response = (
+        name == "catgo_workflow"
+        and str(arguments.get("action", "")).lower() in {
+            "status", "results", "step_error"
+        }
+        and _prov.workflow_payload_has_results(raw_numeric_text)
+    ) if ok and result else False
+    numeric_response = _enf._is_numeric(name, arguments) or v2_result_response
+    if ok and result and numeric_response:
         wrapped = _prov.wrap_payload(result[0].text, tool=name,
                                      action=arguments.get("action"), inputs=arguments)
         if wrapped is not None:
             result[0] = T(type="text", text=wrapped)
+            wrapped_numeric = True
+    # batch_results is numeric only when at least one item was actually enveloped.
+    # Empty pages and argument errors must not poison the session as "unverified".
+    is_empty_batch = (
+        name == "catgo_workflow"
+        and str(arguments.get("action", "")).lower() == "batch_results"
+        and _prov.batch_payload_is_empty(raw_numeric_text)
+    )
+    result_records = (
+        _prov.extract_result_records(result[0].text)
+        if ok and result and numeric_response else []
+    )
+    postmark_args = {
+        **arguments,
+        **({"_numeric_response": True} if v2_result_response else {}),
+        **({"_result_records": result_records} if result_records else {}),
+    }
+    _enf.postmark(name, postmark_args, ok=ok and not is_empty_batch)
     if decision == _enf.PROMPT and result:
         # a waived FAIL still went out — stamp the response so the override is
         # visible in the transcript rather than only in the audit list.

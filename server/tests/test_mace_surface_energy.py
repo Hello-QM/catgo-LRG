@@ -17,8 +17,14 @@ Expected runtime: ~2-5 minutes (12 slab relaxations).
 import sys
 import time
 
+import pytest
+
+
+pytestmark = pytest.mark.slow
+
 
 def test_surface_energy():
+    pytest.importorskip("mace", reason="mace-torch is required for the surface-energy benchmark")
     print("=" * 70)
     print("MACE Surface Energy Calculation — Ni(111), (100), (110), (211)")
     print("=" * 70)

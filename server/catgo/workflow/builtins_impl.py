@@ -86,12 +86,21 @@ def run_gibbs_energy(
                     else:
                         real_freqs_cm.append(val)
 
-    # Import gibbs_calculator directly to avoid utils/__init__.py pulling in ase/numpy
-    import importlib.util, os
+    # Import gibbs_calculator directly to avoid utils/__init__.py pulling in ase/numpy.
+    # builtins_impl.py lives in catgo/workflow; the calculator is in the sibling
+    # catgo/utils package.  Keep this package-relative so source and wheel layouts
+    # resolve identically.
+    import importlib.util
+
+    calculator_path = (
+        Path(__file__).resolve().parent.parent / "utils" / "gibbs_calculator.py"
+    )
     _spec = importlib.util.spec_from_file_location(
         "gibbs_calculator",
-        os.path.join(os.path.dirname(__file__), "..", "..", "utils", "gibbs_calculator.py"),
+        calculator_path,
     )
+    if _spec is None or _spec.loader is None:
+        raise ImportError(f"Cannot load Gibbs calculator from {calculator_path}")
     _mod = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
     calc_adsorbed, calc_gas = _mod.calc_adsorbed, _mod.calc_gas
@@ -343,11 +352,17 @@ def run_adsorbate_place(
         chosen_3d = list(chosen)
         chosen_3d[2] = z_top + height
         new_slab = slab.copy()
+        adsorbate_properties = (
+            {"selective_dynamics": [True, True, True]}
+            if "selective_dynamics" in slab.site_properties
+            else None
+        )
         for elem, off in zip(elements, coords):
             new_slab.append(
                 elem,
                 [chosen_3d[0] + off[0], chosen_3d[1] + off[1], chosen_3d[2] + off[2]],
                 coords_are_cartesian=True,
+                properties=adsorbate_properties,
             )
         # Tag adsorbate atoms so downstream freq can fix the slab and vibrate
         # only the adsorbate (freeze_mode=adsorbate).

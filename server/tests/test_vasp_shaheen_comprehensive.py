@@ -6,8 +6,14 @@ Usage:
   PYTHONPATH=server:server/catgo python server/tests/test_vasp_shaheen_comprehensive.py
 """
 import json, time, uuid, sys, os, requests
+import pytest
 
 os.environ["PYTHONUNBUFFERED"] = "1"
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CATGO_RUN_SHAHEEN_E2E") != "1",
+    reason="requires explicit CATGO_RUN_SHAHEEN_E2E=1, live :8000 backend, and Shaheen session",
+)
 
 API = "http://localhost:8000"
 SHAHEEN = "5e27f9b4-37ba-486b-83cd-e2c7a86863e3"

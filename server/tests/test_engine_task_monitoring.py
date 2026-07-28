@@ -15,6 +15,18 @@ from fastapi.testclient import TestClient
 from catgo.routers.workflow_engine_tasks import router, set_db
 
 
+@pytest.fixture(autouse=True)
+def _restore_router_db():
+    """Do not leak each test's FakeDB into later full-app tests."""
+    import catgo.routers.workflow_engine_tasks as task_router
+
+    original = task_router._db
+    try:
+        yield
+    finally:
+        set_db(original)
+
+
 def _make_app():
     app = FastAPI()
     app.include_router(router)
@@ -65,10 +77,8 @@ class TestGetTaskFiles:
 
         with patch("catgo.utils.hpc_client.pool") as mock_pool:
             mock_pool.get_connection.return_value = mock_hpc
-            # Need to also patch the import inside _get_task_hpc
-            with patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool)}):
-                client = TestClient(_make_app())
-                resp = client.get("/api/engine/tasks/t1/files")
+            client = TestClient(_make_app())
+            resp = client.get("/api/engine/tasks/t1/files")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -110,7 +120,6 @@ class TestGetTaskConvergence:
         mock_hpc.conn = AsyncMock()
 
         with patch("catgo.utils.hpc_client.pool") as mock_pool, \
-             patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool)}), \
              patch("catgo.utils.job_parser.detect_calc_type", new_callable=AsyncMock) as mock_detect, \
              patch("catgo.utils.job_parser.parse_vasp_convergence", new_callable=AsyncMock) as mock_parse:
             mock_pool.get_connection.return_value = mock_hpc
@@ -138,7 +147,7 @@ class TestGetTaskFileContent:
         mock_hpc.__class__ = type("HPCConnection", (), {})
 
         with patch("catgo.utils.hpc_client.pool") as mock_pool, \
-             patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool, LocalFileConnection=type("LC", (), {}))}), \
+             patch("catgo.utils.hpc_client.LocalFileConnection", type("LC", (), {})), \
              patch("catgo.utils.job_parser.read_remote_file", new_callable=AsyncMock) as mock_read:
             mock_pool.get_connection.return_value = mock_hpc
             mock_read.return_value = ("SYSTEM = test\nENCUT = 400\n", 2)
@@ -156,8 +165,7 @@ class TestGetTaskFileContent:
         set_db(db)
 
         mock_hpc = MagicMock()
-        with patch("catgo.utils.hpc_client.pool") as mock_pool, \
-             patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool)}):
+        with patch("catgo.utils.hpc_client.pool") as mock_pool:
             mock_pool.get_connection.return_value = mock_hpc
             client = TestClient(_make_app())
             resp = client.get("/api/engine/tasks/t1/file-content?path=../../etc/passwd")
@@ -174,7 +182,7 @@ class TestPutTaskFileContent:
         mock_hpc.__class__ = type("HPCConnection", (), {})
 
         with patch("catgo.utils.hpc_client.pool") as mock_pool, \
-             patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool, LocalFileConnection=type("LC", (), {}))}), \
+             patch("catgo.utils.hpc_client.LocalFileConnection", type("LC", (), {})), \
              patch("catgo.utils.job_parser.write_remote_file", new_callable=AsyncMock) as mock_write:
             mock_pool.get_connection.return_value = mock_hpc
             mock_write.return_value = True
@@ -207,7 +215,6 @@ class TestGetTaskFrequencies:
         }
 
         with patch("catgo.utils.hpc_client.pool") as mock_pool, \
-             patch.dict("sys.modules", {"catgo.utils.hpc_client": MagicMock(pool=mock_pool)}), \
              patch("catgo.utils.vasp_freq_parser.parse_vasp_frequencies", new_callable=AsyncMock) as mock_parse:
             mock_pool.get_connection.return_value = mock_hpc
             mock_parse.return_value = freq_result

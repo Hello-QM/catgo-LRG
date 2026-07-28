@@ -50,14 +50,16 @@ def config():
     }
 
 
-def _make_tasks(db, workflow_id, n=5, task_type="geo_opt", software="vasp"):
+def _make_tasks(
+    db, workflow_id, n=5, task_type="geo_opt", software="vasp", params=None,
+):
     """Create n READY tasks of the same type."""
     ids = []
     for i in range(n):
         tid = db.create_task(
             workflow_id, task_type,
             name=f"task_{i}",
-            params={"software": software},
+            params={"software": software, **(params or {})},
         )
         db.update_task(tid, status=TaskState.READY.value)
         ids.append(tid)
@@ -71,6 +73,11 @@ def _mock_hpc():
     # sbatch returns a fake job ID
     sbatch_result = SimpleNamespace(stdout="Submitted batch job 99887766")
     hpc.conn.run = AsyncMock(return_value=sbatch_result)
+
+    async def _run_on_owner(coro_factory):
+        return await coro_factory()
+
+    hpc.run_on_owner = AsyncMock(side_effect=_run_on_owner)
     return hpc
 
 
@@ -123,6 +130,111 @@ def test_batch_updates_all_tasks(db, workflow_id, config):
         task = db.get_task(tid)
         assert task["status"] == TaskState.SUBMITTED.value
         assert task["hpc_job_id"] == f"99887766_{i}"
+
+
+def test_batch_uses_resolved_command_manifest_and_job_default_potcar(
+    db, workflow_id, config,
+):
+    config["hpc"].update({
+        "use_custodian": True,
+        "run_commands": {"vasp": "srun rc_vasp_std"},
+    })
+    config["hpc"]["job_defaults"].update({
+        "vasp_command": "srun jd_vasp_std",
+        "potcar_root": "/opt/potcars",
+        "potcar_functional": "potpaw_PBE_54",
+    })
+    task_ids = _make_tasks(
+        db,
+        workflow_id,
+        n=3,
+        params={"run_command": "srun --hint=nomultithread vasp_ncl"},
+    )
+    hpc = _mock_hpc()
+
+    with patch(
+        "catgo.workflow.engine.batch_submitter.get_hpc_connection",
+        new_callable=AsyncMock,
+        return_value=hpc,
+    ), patch(
+        "catgo.workflow.engine.batch_submitter.get_engine_generator",
+        return_value=AsyncMock(),
+    ), patch(
+        "catgo.workflow.engine.batch_submitter.resolve_task_inputs",
+        return_value={},
+    ), patch(
+        "catgo.workflow.engine.batch_submitter.map_task_type_to_engine",
+        return_value=("vasp_relax", "vasp"),
+    ), patch(
+        "catgo.workflow.engine.submitter._generate_potcar",
+        new_callable=AsyncMock,
+    ) as generate_potcar:
+        job_id = _run(submit_batch_tasks(db, task_ids, workflow_id, config))
+
+    assert job_id == "99887766"
+    assert generate_potcar.await_count == 3
+    generate_potcar.assert_any_await(
+        hpc, f"/scratch/catgo/{workflow_id}/batch_geo_opt/000000",
+        "/opt/potcars", "potpaw_PBE_54",
+    )
+
+    commands = [
+        str(call.args[0])
+        for call in hpc.conn.run.call_args_list
+        if call.args
+    ]
+    manifests = [cmd for cmd in commands if "CATGO_VASP_PREFLIGHT" in cmd]
+    custodians = [
+        cmd for cmd in commands
+        if "/run_custodian.py << 'CATGO_EOF'" in cmd
+    ]
+    assert len(manifests) == 3
+    assert len(custodians) == 3
+    assert all("srun --hint=nomultithread vasp_ncl" in cmd for cmd in manifests)
+    assert all("vasp_ncl" in cmd for cmd in custodians)
+    assert all("which" not in cmd for cmd in manifests)
+    sbatch_index = next(
+        i for i, cmd in enumerate(commands)
+        if "&& sbatch submit_array.sh" in cmd
+    )
+    assert max(commands.index(cmd) for cmd in manifests) < sbatch_index
+
+
+@pytest.mark.parametrize(
+    "mixed_params",
+    [
+        {"run_command": "srun vasp_ncl"},
+        {"use_custodian": True},
+    ],
+)
+def test_batch_rejects_mixed_vasp_execution_fingerprints(
+    db, workflow_id, config, mixed_params,
+):
+    task_ids = _make_tasks(db, workflow_id, n=3)
+    db.update_task(
+        task_ids[1],
+        params_json=json.dumps({"software": "vasp", **mixed_params}),
+    )
+    get_hpc = AsyncMock()
+
+    with patch(
+        "catgo.workflow.engine.batch_submitter.get_hpc_connection",
+        get_hpc,
+    ), patch(
+        "catgo.workflow.engine.batch_submitter.map_task_type_to_engine",
+        return_value=("vasp_relax", "vasp"),
+    ):
+        with pytest.raises(
+            ValueError,
+            match="identical resolved run commands, binary tokens, and custodian modes",
+        ):
+            _run(submit_batch_tasks(db, task_ids, workflow_id, config))
+
+    get_hpc.assert_not_awaited()
+    assert all(
+        db.get_task(task_id)["status"] == TaskState.READY.value
+        for task_id in task_ids
+    )
 
 
 def test_batch_returns_none_on_empty(db, workflow_id, config):

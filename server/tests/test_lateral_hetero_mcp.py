@@ -196,6 +196,35 @@ async def test_build_lateral_searches_then_builds_and_pushes():
 
 
 @pytest.mark.asyncio
+async def test_http_viewer_overrides_are_request_local(monkeypatch):
+    """Embedded HTTP uses direct viewer access without mutating other clients."""
+    from mcp.types import TextContent
+    import catgo.mcp_tools.server_claude_code as handlers
+    import catgo.routers.mcp_http as mcp_http
+
+    assert handlers._get_current_structure_override.get() is None
+    assert handlers._push_structure_override.get() is None
+
+    async def _probe(_client, _arguments):
+        assert (
+            handlers._get_current_structure_override.get()
+            is mcp_http._get_current_structure_direct
+        )
+        assert (
+            handlers._push_structure_override.get()
+            is mcp_http._push_structure_direct
+        )
+        return [TextContent(type="text", text="probe-ok")]
+
+    monkeypatch.setattr(mcp_http, "_handle_heterostructure", _probe)
+    result = await mcp_http.call_tool("catgo_heterostructure", {})
+
+    assert result[0].text == "probe-ok"
+    assert handlers._get_current_structure_override.get() is None
+    assert handlers._push_structure_override.get() is None
+
+
+@pytest.mark.asyncio
 async def test_lateral_params_clamped_to_backend_range():
     """Out-of-range knobs are clamped to the backend's accepted bounds so the
     LLM never sees a raw pydantic 422 (e.g. max_strain below the 0.1% floor)."""

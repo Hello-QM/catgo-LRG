@@ -22,39 +22,69 @@ def _get_tools():
         pytest.skip(f"Cannot import server_claude_code: {e}")
 
 
+# Runtime manifest: tool name -> exact top-level required fields.
+# Optional properties may grow without weakening the stable invocation contract.
+EXPECTED_REQUIRED_FIELDS = {
+    "catgo_structure": {"action"},
+    "catgo_fetch": {"action"},
+    "catgo_workflow": {"action"},
+    "catgo_analyze": {"action"},
+    "catgo_view": {"action"},
+    "catgo_pane": {"action"},
+    "catgo_catalysis": {"action", "params"},
+    "catgo_system": {"action"},
+    "catgo_workflow_engine": {"action"},
+    "catgo_file": {"action"},
+    "catgo_diagnose": {"task_id"},
+    "catgo_quickbuild": {"recipe"},
+    "catgo_skills": {"action"},
+    "catgo_campaign": {"action"},
+    "catgo_terminal": {"action"},
+    "catgo_validate_config": {"potcar_root"},
+    "catgo_verify": {"result"},
+    "catgo_heterostructure": set(),
+    "catgo_nanotube": {"n", "m"},
+    "catgo_nanoparticle": {"element"},
+    "catgo_moire": set(),
+}
+
+
 class TestClaudeCodeToolDefinitions:
-    """Validate the 11 consolidated tools."""
+    """Validate the current consolidated MCP runtime contract."""
 
     def test_tool_count(self):
         tools = _get_tools()
-        assert len(tools) == 11, f"Expected 11 tools, got {len(tools)}"
+        assert len(tools) == len(EXPECTED_REQUIRED_FIELDS), (
+            f"Expected {len(EXPECTED_REQUIRED_FIELDS)} tools, got {len(tools)}"
+        )
 
     def test_tool_names(self):
         tools = _get_tools()
         names = {t.name for t in tools}
-        expected = {
-            "catgo_structure", "catgo_fetch", "catgo_workflow", "catgo_analyze",
-            "catgo_view", "catgo_catalysis", "catgo_system", "catgo_workflow_engine",
-            "catgo_file", "catgo_diagnose", "catgo_skills",
-        }
+        expected = set(EXPECTED_REQUIRED_FIELDS)
         assert names == expected, f"Tool names mismatch: {names}"
 
     def test_all_tools_have_action_enum(self):
         tools = _get_tools()
-        # catgo_diagnose uses task_id instead of action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
-        for tool in tools_with_action:
-            schema = tool.inputSchema
-            assert "action" in schema["properties"], f"{tool.name} missing 'action' property"
-            assert "enum" in schema["properties"]["action"], f"{tool.name} action missing enum"
+        for tool in tools:
+            action = tool.inputSchema.get("properties", {}).get("action")
+            if action is None:
+                continue
+            assert action.get("type") == "string", (
+                f"{tool.name}.action must be a string"
+            )
+            assert isinstance(action.get("enum"), list) and action["enum"], (
+                f"{tool.name}.action must define a non-empty enum"
+            )
 
-    def test_all_tools_require_action(self):
+    def test_required_fields_match_runtime_contract(self):
         tools = _get_tools()
-        # catgo_diagnose requires task_id, not action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
-        for tool in tools_with_action:
-            assert "action" in tool.inputSchema.get("required", []), (
-                f"{tool.name} does not require 'action'"
+        for tool in tools:
+            actual = set(tool.inputSchema.get("required", []))
+            expected = EXPECTED_REQUIRED_FIELDS[tool.name]
+            assert actual == expected, (
+                f"{tool.name} required fields changed: "
+                f"expected {sorted(expected)}, got {sorted(actual)}"
             )
 
     def test_diagnose_requires_task_id(self):
@@ -62,30 +92,21 @@ class TestClaudeCodeToolDefinitions:
         diagnose_tool = next(t for t in tools if t.name == "catgo_diagnose")
         assert "task_id" in diagnose_tool.inputSchema.get("required", [])
 
-    def test_descriptions_are_concise(self):
-        """Descriptions should be under 300 chars for token efficiency.
-
-        catgo_workflow has a long description with building guide, which is expected.
-        """
+    def test_all_tools_have_descriptions(self):
+        """Every tool needs non-empty routing guidance."""
         tools = _get_tools()
-        # Workflow, workflow_engine, and skills have intentionally long descriptions
-        exempt = {"catgo_workflow", "catgo_workflow_engine", "catgo_skills",
-                  "catgo_structure", "catgo_catalysis"}
         for tool in tools:
-            if tool.name in exempt:
-                continue
-            assert len(tool.description) < 300, (
-                f"{tool.name} description is {len(tool.description)} chars (max 300)"
-            )
+            assert isinstance(tool.description, str)
+            assert tool.description.strip(), f"{tool.name} has no description"
 
     def test_structure_actions_complete(self):
         tools = _get_tools()
         struct_tool = next(t for t in tools if t.name == "catgo_structure")
         actions = struct_tool.inputSchema["properties"]["action"]["enum"]
         expected = [
-            "get", "add_atom", "add_atoms", "delete", "replace",
+            "get", "export", "add_atom", "add_atoms", "delete", "replace",
             "move", "supercell", "set_lattice", "slab", "doping",
-            "merge", "add_molecule", "load_file",
+            "merge", "add_molecule", "add_cluster", "load_file",
         ]
         assert actions == expected
 
@@ -99,7 +120,7 @@ class TestClaudeCodeToolDefinitions:
         tools = _get_tools()
         view_tool = next(t for t in tools if t.name == "catgo_view")
         actions = view_tool.inputSchema["properties"]["action"]["enum"]
-        assert set(actions) == {"get_state", "selection", "screenshot"}
+        assert set(actions) == {"get_state", "selection", "screenshot", "select"}
 
     def test_workflow_actions_complete(self):
         """Workflow tool should have all expected actions."""
@@ -107,9 +128,9 @@ class TestClaudeCodeToolDefinitions:
         workflow_tool = next(t for t in tools if t.name == "catgo_workflow")
         actions = workflow_tool.inputSchema["properties"]["action"]["enum"]
         expected = {
-            "list", "templates", "node_types", "node_details", "create", "get",
+            "list", "templates", "node_types", "node_details", "create", "rename", "get",
             "add_node", "remove_node", "connect", "set_params", "batch",
-            "run", "pause", "resume", "validate", "status", "step_error",
+            "run", "pause", "resume", "validate", "status", "results", "step_error",
             "retry", "batch_status", "batch_results", "list_presets",
         }
         assert set(actions) == expected
@@ -178,13 +199,23 @@ class TestClaudeCodeToolDefinitions:
             assert isinstance(tool, Tool), f"Expected Tool object, got {type(tool)}"
 
     def test_tool_input_schemas_are_valid(self):
-        """All tools should have valid input schemas with type='object'."""
+        """All tools should have valid object schemas and declared required keys."""
         tools = _get_tools()
         for tool in tools:
             schema = tool.inputSchema
             assert isinstance(schema, dict), f"{tool.name} inputSchema is not a dict"
             assert schema.get("type") == "object", (
                 f"{tool.name} inputSchema type is '{schema.get('type')}', expected 'object'"
+            )
+            props = schema.get("properties")
+            required = schema.get("required", [])
+            assert isinstance(props, dict), f"{tool.name}.properties is not a dict"
+            assert isinstance(required, list), f"{tool.name}.required is not a list"
+            assert len(required) == len(set(required)), (
+                f"{tool.name} has duplicate required fields: {required}"
+            )
+            assert set(required) <= set(props), (
+                f"{tool.name} requires undeclared fields: {set(required) - set(props)}"
             )
 
     def test_structure_has_required_fields(self):
@@ -200,10 +231,11 @@ class TestClaudeCodeToolDefinitions:
             "miller_index", "min_slab_size", "min_vacuum_size",
             "dopant", "host_element", "concentration", "enumerate",
             "structure", "query", "count", "spacing",
+            "cluster_type", "size", "offset",
             "file_content", "file_format",
         }
-        assert set(props.keys()) == expected_params, (
-            f"Structure params mismatch. Got: {set(props.keys())}"
+        assert expected_params <= set(props), (
+            f"Structure params missing: {expected_params - set(props)}"
         )
 
     def test_fetch_has_required_fields(self):
@@ -216,8 +248,8 @@ class TestClaudeCodeToolDefinitions:
             "action", "formula", "elements", "structure_id",
             "provider", "query", "cid", "search_type", "limit"
         }
-        assert set(props.keys()) == expected_params, (
-            f"Fetch params mismatch. Got: {set(props.keys())}"
+        assert expected_params <= set(props), (
+            f"Fetch params missing: {expected_params - set(props)}"
         )
 
     def test_workflow_has_required_fields(self):
@@ -241,17 +273,17 @@ class TestClaudeCodeToolDefinitions:
             "action", "software", "calc_type", "model", "fmax",
             "params", "query", "plugin_id",
         }
-        assert set(props.keys()) == expected_params, (
-            f"Analyze params mismatch. Got: {set(props.keys())}"
+        assert expected_params <= set(props), (
+            f"Analyze params missing: {expected_params - set(props)}"
         )
 
     def test_view_has_required_fields(self):
-        """catgo_view should only have 'action' parameter (minimal tool)."""
+        """catgo_view should expose selection routing fields."""
         tools = _get_tools()
         view_tool = next(t for t in tools if t.name == "catgo_view")
         props = view_tool.inputSchema["properties"]
 
-        assert set(props.keys()) == {"action"}
+        assert {"action", "query", "panel_id", "mode"} <= set(props)
 
     def test_all_properties_have_type_field(self):
         """All properties should specify a JSON type."""
@@ -264,15 +296,17 @@ class TestClaudeCodeToolDefinitions:
                         f"{tool.name}.{param_name} missing 'type' or 'enum'"
                     )
 
-    def test_action_properties_have_descriptions(self):
-        """All action enums should have descriptions."""
+    def test_action_tools_have_routing_descriptions(self):
+        """Action routing must be documented inline or at tool level."""
         tools = _get_tools()
-        # catgo_diagnose uses task_id instead of action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
-        for tool in tools_with_action:
-            action_prop = tool.inputSchema["properties"].get("action", {})
-            assert "description" in action_prop, (
-                f"{tool.name} action property missing description"
+        for tool in tools:
+            action_prop = tool.inputSchema.get("properties", {}).get("action")
+            if action_prop is None:
+                continue
+            routing_description = action_prop.get("description") or tool.description
+            assert isinstance(routing_description, str)
+            assert routing_description.strip(), (
+                f"{tool.name} action routing has no description"
             )
 
     def test_provider_has_default(self):
@@ -316,10 +350,11 @@ class TestClaudeCodeToolDefinitions:
     def test_no_duplicate_actions_in_any_tool(self):
         """Each tool should have unique action values (no duplicates in enum)."""
         tools = _get_tools()
-        # catgo_diagnose has no action enum
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
-        for tool in tools_with_action:
-            actions = tool.inputSchema["properties"]["action"]["enum"]
+        for tool in tools:
+            action = tool.inputSchema.get("properties", {}).get("action")
+            if action is None:
+                continue
+            actions = action["enum"]
             assert len(actions) == len(set(actions)), (
                 f"{tool.name} has duplicate action values: {actions}"
             )

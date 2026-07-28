@@ -419,6 +419,8 @@ def build_part_c_results(task_rows: list[dict]) -> list[dict]:
                 results.append(base_result)
 
             elif orca_type == "orca_opt":
+                base_result["converged"] = outputs.get("converged")
+                base_result["n_steps"] = outputs.get("n_steps")
                 if convergence_points:
                     base_result["convergence_points"] = convergence_points
                     final_energy = convergence_points[-1].get("energy")

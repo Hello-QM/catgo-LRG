@@ -553,7 +553,7 @@ def generate_vasp_input_files(
     # VASP NEB reads one POSCAR per image directory 00/ (initial) .. 0(N+1)/
     # (final) and a shared root INCAR/KPOINTS/POTCAR. write_remote_files writes
     # any "subdir/file" key under work_dir, so we just add subdir-keyed POSCARs.
-    if node_type == "neb":
+    if node_type in ("neb", "vasp_neb"):
         product_str = params.get("_resolved_product_structure") or params.get("product_structure")
         final = None
         if product_str:

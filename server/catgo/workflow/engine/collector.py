@@ -132,10 +132,16 @@ def _store_result(db: WorkflowDB, task_id: str, workflow_id: str, result: dict) 
         real_freqs = [f["frequency_cm"] for f in frequencies if not f.get("imaginary", False)]
         imag_freqs = [f["frequency_cm"] for f in frequencies if f.get("imaginary", False)]
 
-        if real_freqs:
-            fields["real_freqs_json"] = json.dumps(real_freqs)
-        if imag_freqs:
-            fields["imag_freqs_json"] = json.dumps(imag_freqs)
+        # Presence of a parsed frequency payload is distinct from absence of
+        # frequency analysis.  Persist empty lists too, so a verified minimum
+        # (zero imaginary modes) does not become an ambiguous SQL NULL.
+        fields["real_freqs_json"] = json.dumps(real_freqs)
+        fields["imag_freqs_json"] = json.dumps(imag_freqs)
+
+    # ORCA parsers expose both Hartree and eV values.  task_results.energy is
+    # the common eV column used by enriched-result consumers.
+    if "energy" not in fields and "energy_ev" in result:
+        fields["energy"] = result["energy_ev"]
 
     # Fallback for old-style keys (if any other code returns direct lists)
     if "real_freqs" in result:

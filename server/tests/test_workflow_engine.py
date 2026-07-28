@@ -110,6 +110,18 @@ class TestResolveSoftware:
         assert resolved == "orca_irc"
         assert sw == "orca"
 
+    def test_neb_vasp(self):
+        """neb + vasp should resolve to the VASP-specific node type."""
+        resolved, sw = _resolve_software("neb", {"software": "vasp"})
+        assert resolved == "vasp_neb"
+        assert sw == "vasp"
+
+    def test_neb_mlp(self):
+        """neb + mlp should resolve to the MLP-specific node type."""
+        resolved, sw = _resolve_software("neb", {"software": "mlp"})
+        assert resolved == "mlp_neb"
+        assert sw == "mlp"
+
 
 class TestGetEngineForNode:
     """Test get_engine_for_node() returns the correct engine key for each node type."""
@@ -187,17 +199,24 @@ class TestGetEngineForNode:
 class TestNodeSetIntegrity:
     """Validate node type sets are well-formed and non-overlapping."""
 
-    ALL_SETS = [
+    ACTIVE_SETS = [
         VASP_CALC_NODES, CP2K_NODES, MLP_NODES, XTB_NODES,
         SELLA_NODES, LAMMPS_NODES, ORCA_CALC_NODES, GAUSSIAN_CALC_NODES,
-        GROMACS_NODES, LOCAL_NODES, ANALYSIS_NODES, HPC_ANALYSIS_NODES,
-        BUILD_NODES, POLYMER_SIM_NODES,
+        GROMACS_NODES, LOCAL_NODES, ANALYSIS_NODES, BUILD_NODES,
+        POLYMER_SIM_NODES,
     ]
+    # Kept in overlap checks as a reserved compatibility category. It is
+    # intentionally empty while charge analysis executes locally.
+    ALL_SETS = [*ACTIVE_SETS, HPC_ANALYSIS_NODES]
 
     def test_all_sets_are_nonempty(self):
-        """Every registered node set should contain at least one node type."""
-        for s in self.ALL_SETS:
+        """Every active node set should contain at least one node type."""
+        for s in self.ACTIVE_SETS:
             assert len(s) > 0, f"Node set should not be empty: {s}"
+
+    def test_hpc_analysis_is_reserved(self):
+        """The reserved HPC analysis category is intentionally empty."""
+        assert HPC_ANALYSIS_NODES == set()
 
     def test_no_overlaps_between_sets(self):
         """Each resolved node type should belong to at most one set."""

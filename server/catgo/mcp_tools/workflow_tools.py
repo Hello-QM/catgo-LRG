@@ -1054,6 +1054,7 @@ _ACTION_REQUIRED: dict[str, list[str]] = {
     "resume": ["workflow_id"],
     "validate": ["workflow_id"],
     "status": ["workflow_id"],
+    "results": ["workflow_id"],
     "step_error": ["workflow_id", "step_id"],
     "retry": ["workflow_id", "step_id"],
     "batch_status": ["workflow_id", "step_id"],
@@ -1249,6 +1250,19 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
             if resp.status_code != 200:
                 return [_t(type="text", text=f"Cannot get status for {wf_id}.")]
             return [_t(type="text", text=json.dumps(resp.json(), indent=2))]
+
+        if action == "results":
+            resp = await client.get(f"{base}/{wf_id}/steps")
+            if resp.status_code != 200:
+                return [_t(
+                    type="text",
+                    text=f"Cannot get results for {wf_id} ({resp.status_code}): "
+                         f"{resp.text[:300]}",
+                )]
+            return [_t(type="text", text=json.dumps(
+                {"workflow_id": wf_id, "steps": resp.json()},
+                indent=2,
+            ))]
 
         if action == "step_error":
             step_id = args["step_id"]

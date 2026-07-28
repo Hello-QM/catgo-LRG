@@ -6,7 +6,9 @@ results → results queryable via API.
 
 These tests use the REAL CatGo backend (must be running on localhost:8000).
 """
+import importlib.util
 import json
+import os
 import time
 import uuid
 
@@ -22,6 +24,8 @@ API = "http://localhost:8000"
 SHAHEEN_SESSION = "5e27f9b4-37ba-486b-83cd-e2c7a86863e3"
 LOCAL_SESSION = "__local__"
 SHAHEEN_WORK_BASE = "/scratch/reny0b/gs/test-catgo/engine-e2e"
+RUN_BACKEND_E2E = os.environ.get("CATGO_RUN_BACKEND_E2E") == "1"
+RUN_SHAHEEN_E2E = os.environ.get("CATGO_RUN_SHAHEEN_E2E") == "1"
 
 # ── Test Structures ──
 
@@ -175,7 +179,10 @@ def _shaheen_run_config():
 # Test: Engine Defs API
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend(), reason="Backend not running")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E or not _check_backend(),
+    reason="requires explicit CATGO_RUN_BACKEND_E2E=1 and an isolated live :8000 backend",
+)
 class TestEnginDefsAPI:
     """Verify /engine-defs API returns correct data."""
 
@@ -210,6 +217,9 @@ class TestEnginDefsAPI:
 
     def test_create_custom_engine(self):
         """POST /engine-defs/custom should create and register a new engine."""
+        from workflow.engine_runtime import ENGINE_DEFS_DIR
+
+        custom_path = ENGINE_DEFS_DIR / "custom" / "test_custom_e2e.yaml"
         custom_spec = {
             "engine": "test_custom_e2e",
             "label": "E2E Test Custom",
@@ -221,23 +231,33 @@ class TestEnginDefsAPI:
             "output_files": {},
             "calc_type_mapping": {},
         }
-        r = requests.post(f"{API}/api/workflow/engine-defs/custom", json=custom_spec)
-        assert r.status_code == 200
-        data = r.json()
-        assert data["engine"] == "test_custom_e2e"
-        assert data["safety"] == "warn"  # has run_commands
+        previous = custom_path.read_bytes() if custom_path.exists() else None
+        try:
+            r = requests.post(f"{API}/api/workflow/engine-defs/custom", json=custom_spec)
+            assert r.status_code == 200
+            data = r.json()
+            assert data["engine"] == "test_custom_e2e"
+            assert data["safety"] == "warn"  # has run_commands
 
-        # Verify it's now listed
-        r2 = requests.get(f"{API}/api/workflow/engine-defs/test_custom_e2e")
-        assert r2.status_code == 200
-        assert r2.json()["label"] == "E2E Test Custom"
+            # Verify it's now listed
+            r2 = requests.get(f"{API}/api/workflow/engine-defs/test_custom_e2e")
+            assert r2.status_code == 200
+            assert r2.json()["label"] == "E2E Test Custom"
+        finally:
+            if previous is None:
+                custom_path.unlink(missing_ok=True)
+            else:
+                custom_path.write_bytes(previous)
 
 
 # ══════════════════════════════════════════════════════════════
 # Test: Workflow CRUD
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend(), reason="Backend not running")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E or not _check_backend(),
+    reason="requires explicit CATGO_RUN_BACKEND_E2E=1 and an isolated live :8000 backend",
+)
 class TestWorkflowCRUD:
     """Create, read, update, delete workflows via API."""
 
@@ -291,7 +311,15 @@ class TestWorkflowCRUD:
 # Test: MLP Workflow via Engine (Local)
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend(), reason="Backend not running")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E
+    or not _check_backend()
+    or importlib.util.find_spec("mace") is None,
+    reason=(
+        "requires CATGO_RUN_BACKEND_E2E=1, an isolated live :8000 backend, "
+        "and mace-torch"
+    ),
+)
 class TestMlpWorkflowLocal:
     """Full pipeline: create MLP geo_opt workflow → run locally → get results."""
 
@@ -346,8 +374,16 @@ class TestMlpWorkflowLocal:
 # Test: VASP Workflow via Engine (Shaheen)
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend() or not _check_shaheen(),
-                    reason="Backend or Shaheen not available")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E
+    or not RUN_SHAHEEN_E2E
+    or not _check_backend()
+    or not _check_shaheen(),
+    reason=(
+        "requires CATGO_RUN_BACKEND_E2E=1, CATGO_RUN_SHAHEEN_E2E=1, "
+        "an isolated live :8000 backend, and a Shaheen session"
+    ),
+)
 class TestVaspWorkflowShaheen:
     """Full pipeline: VASP single_point on Shaheen via engine."""
 
@@ -403,7 +439,10 @@ class TestVaspWorkflowShaheen:
 # Test: Workflow State Machine
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend(), reason="Backend not running")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E or not _check_backend(),
+    reason="requires explicit CATGO_RUN_BACKEND_E2E=1 and an isolated live :8000 backend",
+)
 class TestWorkflowStateMachine:
     """Test pause, resume, reset operations."""
 
@@ -444,7 +483,10 @@ class TestWorkflowStateMachine:
 # Test: Preview Input Files
 # ══════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(not _check_backend(), reason="Backend not running")
+@pytest.mark.skipif(
+    not RUN_BACKEND_E2E or not _check_backend(),
+    reason="requires explicit CATGO_RUN_BACKEND_E2E=1 and an isolated live :8000 backend",
+)
 class TestPreviewInput:
     """Test input file preview generation via API."""
 

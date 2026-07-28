@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -216,9 +217,14 @@ def _extract(archive: Path, dest_dir: Path) -> None:
             for m in t.getmembers():
                 if m.issym() or m.islnk():
                     raise ValueError(f"link member not allowed: {m.name}")
+                if m.isdev():
+                    raise ValueError(f"device member not allowed: {m.name}")
                 if not _is_within(dest_dir, dest_dir / m.name):
                     raise ValueError(f"unsafe path in archive: {m.name}")
-            t.extractall(dest_dir)
+            if sys.version_info >= (3, 12):
+                t.extractall(dest_dir, filter="data")
+            else:
+                t.extractall(dest_dir)
 
 
 def _mark_executable(path: Path) -> None:

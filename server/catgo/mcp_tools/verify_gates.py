@@ -18,6 +18,11 @@ GENERATED from catgo-projects/data/ai-agent/agentbench/verifier.py by sync_copie
 edit that file, not this one.
 """
 from collections import defaultdict
+import hashlib
+import hmac
+import json
+import math
+import re
 
 # ---- thresholds: each traces to a recorded real failure ---------------------
 PHYS_RANGE = {  # eV, plausible adsorption ΔG windows (ai-screen 物理范围门)
@@ -77,6 +82,35 @@ def gate_physical_range(dG, species="default"):
               f"dG={dG:+.3f} eV vs window [{lo},{hi}] ({species})", "A2")
 
 
+def gate_adsorption_energy_range(E_ads_eV, E_ads_unit, species="default"):
+    """Electronic adsorption energy must be finite, in eV, and physically plausible.
+
+    This is deliberately separate from ``physical_range``: E_ads is an electronic
+    energy difference, not a Gibbs free energy, and must never be certified under a
+    ΔG claim merely because another adsorption gate ran.
+    """
+    if E_ads_unit != "eV":
+        return _v(
+            "adsorption_energy_range", False,
+            f"E_ads unit={E_ads_unit!r}; expected 'eV'", "A2",
+        )
+    if (
+        not isinstance(E_ads_eV, (int, float))
+        or isinstance(E_ads_eV, bool)
+        or not math.isfinite(float(E_ads_eV))
+    ):
+        return _v(
+            "adsorption_energy_range", False,
+            f"E_ads_eV={E_ads_eV!r} is not finite", "A2",
+        )
+    lo, hi = PHYS_RANGE.get(species, PHYS_RANGE["default"])
+    return _v(
+        "adsorption_energy_range", lo <= float(E_ads_eV) <= hi,
+        f"E_ads={float(E_ads_eV):+.3f} eV vs window [{lo},{hi}] ({species})",
+        "A2",
+    )
+
+
 # ---- A3 gas-phase thermodynamics -------------------------------------------
 def gate_gas_thermo_completeness(ladder):
     """Gas-release steps need FULL gas thermo, not ZPE-only (A3).
@@ -107,7 +141,7 @@ def gate_force_convergence(fmax, ediffg, ibrion=None, nsw=None):
     same OUTCAR, so the old flag survives while the tail energy is garbage): 8 dirs carried
     a false converged flag; Cu3Al_CO cached E=-90530 eV.
 
-    Two applicability rules, both learned from running this on 120 real VASP dirs on
+    Three applicability rules, learned from running this on 120 real VASP dirs on
     Shaheen (D-035), where the gate fired 117/117 — a 100% fire rate is a broken gate,
     not a discovery:
 
@@ -115,15 +149,24 @@ def gate_force_convergence(fmax, ediffg, ibrion=None, nsw=None):
        (VASP itself falls back to EDIFF*10), so the gate judged every run against a
        criterion nobody chose — a fabricated threshold, the exact failure mode this
        project exists to catch. Absent EDIFFG is now a declared SKIP.
-    2. A run that does not relax has no force criterion. IBRION < 0 (single point) or
-       NSW < 1 means the forces are an output, not a convergence target — MLIP training
-       sets are deliberately full of displaced and defective geometries with large
-       forces. Judging those by a relaxation criterion is meaningless.
+    2. IBRION and NSW must be present. Only VASP relaxation modes 1, 2, 3, and 44
+       use the final force as an ionic convergence target. Single-point, MD
+       (IBRION=0), and finite-difference/phonon modes (IBRION=5..8) merely output
+       forces; judging those by a relaxation criterion is meaningless.
+    3. NSW < 1 means no ionic steps were requested.
 
     A positive EDIFFG is an ENERGY criterion, not a force one; the gate declines it too."""
-    if ibrion is not None and float(ibrion) < 0:
-        return _na("force_convergence", "C1", f"IBRION={ibrion} is a single point, not a relaxation")
-    if nsw is not None and float(nsw) < 1:
+    if ibrion is None:
+        return _skip("force_convergence", "C1", ("ibrion",))
+    if nsw is None:
+        return _skip("force_convergence", "C1", ("nsw",))
+    mode = int(float(ibrion))
+    if mode not in {1, 2, 3, 44}:
+        return _na(
+            "force_convergence", "C1",
+            f"IBRION={ibrion} is not a supported ionic-relaxation mode",
+        )
+    if float(nsw) < 1:
         return _na("force_convergence", "C1", f"NSW={nsw}: no ionic steps requested")
     if ediffg is None:
         return _skip("force_convergence", "C1", ("ediffg",))
@@ -448,9 +491,23 @@ def gate_restoring_force_sign(r_series, r0):
               f"r0={r0} (a restoring force cannot push away)", "K9")
 
 
+# ---- G gas-phase entropy declared absent ------------------------------------
+def gate_gas_entropy_declared(gas_entropy_included):
+    """`gas_entropy_included=False` IS the G-class silent error, declared (G).
+    The verifiability layer only checks the field is PRESENT (present = the claim is
+    checkable); without this gate a ladder that openly declares the H2 gas-phase
+    entropy absent was certified PASS + VERIFIABLE — the exact ~0.15-0.2 eV in-range
+    shift the her_dGH spec exists to catch. Declared True passes; declared False fails
+    (if the correction genuinely does not apply, waive it via override with a reason)."""
+    return _v("gas_entropy_declared", bool(gas_entropy_included),
+              f"gas_entropy_included={gas_entropy_included!r} "
+              "(False = translational+rotational gas entropy absent from the ladder)", "G")
+
+
 # ---- audit: coverage-aware, no silent skips --------------------------------
 _SPEC = [
     ("physical_range",          "A2", ("dG",),                                   lambda r: gate_physical_range(r["dG"], r.get("species", "default"))),
+    ("adsorption_energy_range", "A2", ("E_ads_eV", "E_ads_unit"),                lambda r: gate_adsorption_energy_range(r["E_ads_eV"], r["E_ads_unit"], r.get("species", "default"))),
     ("paw_consistency",         "A1", ("ads_titels", "bare_titels"),             lambda r: gate_paw_consistency(r["ads_titels"], r["bare_titels"])),
     ("nelect_consistency",      "A1", ("nelect_ads", "nelect_bare", "zval_adsorbate"), lambda r: gate_nelect_consistency(r["nelect_ads"], r["nelect_bare"], r["zval_adsorbate"])),
     ("gas_thermo_completeness", "A3", ("ladder",),                               lambda r: gate_gas_thermo_completeness(r["ladder"])),
@@ -476,6 +533,7 @@ _SPEC = [
     ("dos_electron_count",      "K7", ("dos_integral", "nelect"),                lambda r: gate_dos_electron_count(r["dos_integral"], r["nelect"])),
     ("relaxation_minimum_endpoint", "K8", ("energy_series",),                    lambda r: gate_relaxation_minimum_endpoint(r["energy_series"])),
     ("restoring_force_sign",    "K9", ("r_series", "r0"),                        lambda r: gate_restoring_force_sign(r["r_series"], r["r0"])),
+    ("gas_entropy_declared",    "G",  ("gas_entropy_included",),                 lambda r: gate_gas_entropy_declared(r["gas_entropy_included"])),
 ]
 
 # Added in the D-030 batch: proven on their recorded cases in the self-test, but their
@@ -485,7 +543,7 @@ PROVISIONAL_GATES = {"incar_tag_echo_identity", "grand_potential_energy",
                      "lmaxmix_covers_valence", "gas_reference_spin",
                      "partial_hessian_dof", "optimizer_step_budget",
                      "dos_electron_count", "relaxation_minimum_endpoint",
-                     "restoring_force_sign"}
+                     "restoring_force_sign", "adsorption_energy_range"}
 
 
 def audit(result, require=None):
@@ -559,10 +617,49 @@ def catch_rate(cases):
 
 # claim_type → provenance a downstream checker needs to verify that class of claim.
 # any_of: at least one field-group must be fully present. all_of: every field required.
+ENERGY_PROVENANCE_FIELDS = (
+    "n_atoms", "xc_functional", "potcar_titels", "nelect", "kgrid",
+)
+VASP_ENERGY_PROVENANCE_FIELDS = (
+    *ENERGY_PROVENANCE_FIELDS,
+    "submission_manifest_digest", "input_hashes", "vasp_binary",
+    "resolved_run_command",
+)
 PROVENANCE_SPEC = {
-    "binding_dG":   {"any_of": [("ads_titels", "bare_titels"),
+    "energy":       {"all_of": [("energy", *ENERGY_PROVENANCE_FIELDS)],
+                     "why": "a total energy needs its atom count, XC functional, PAW set, "
+                            "electron count, and k-grid before it is checkable"},
+    "vasp_energy":  {
+                     "all_of": [("energy", *VASP_ENERGY_PROVENANCE_FIELDS)],
+                     "why": "a VASP energy also needs the validated pre-submit manifest, "
+                            "live-matched input hashes, executable, and resolved command"},
+    "binding_Eads": {
+                     "all_of": [(
+                         "E_ads_eV", "E_ads_unit",
+                         "reference_task_id", "reference_digest",
+                         "slab_adsorbate_task_id", "slab_adsorbate_digest",
+                         "pairing_mode", "lineage_records",
+                         "declared_role_bindings",
+                     )],
+                     "any_of": [("ads_titels", "bare_titels"),
                                 ("nelect_ads", "nelect_bare", "zval_adsorbate")],
-                     "why": "a ΔG difference is only meaningful if PAW set / electron count is self-consistent (A1)"},
+                     "why": "an electronic adsorption energy needs an explicit eV unit, "
+                            "content-bound identities for both "
+                            "surface operands and a checkable PAW/electron-count path (A1)"},
+    "binding_dG":   {
+                     "all_of": [(
+                         "E_ads_eV", "E_ads_unit", "dG_ads_eV", "dG_ads_unit",
+                         "temperature", "pressure", "zpe_correction_eV",
+                         "entropy_correction_eV", "gas_entropy_included",
+                         "reference_task_id", "reference_digest",
+                         "slab_adsorbate_task_id", "slab_adsorbate_digest",
+                         "pairing_mode", "lineage_records",
+                         "declared_role_bindings",
+                     )],
+                     "any_of": [("ads_titels", "bare_titels"),
+                                ("nelect_ads", "nelect_bare", "zval_adsorbate")],
+                     "why": "an adsorption ΔG needs electronic lineage plus explicit "
+                            "temperature, pressure, ZPE, entropy, and eV-unit provenance"},
     "her_dGH":      {"all_of": [("gas_entropy_included",)],
                      "why": "ΔG_H* must declare whether H2 gas-phase entropy was included (G: 0.15 eV, in-range, else invisible)"},
     "band_gap":     {"all_of": [("kgrid_coarse",)],
@@ -584,12 +681,221 @@ PROVENANCE_SPEC = {
 
 # default-deny policy: statuses a caller must treat as "not certified" (never a pass)
 NOT_CERTIFIED = ("UNVERIFIABLE", "UNKNOWN-CLAIM")
+_UNKNOWN_PLACEHOLDERS = {
+    "?", "n/a", "na", "none", "null", "tbd", "unknown", "unset",
+}
+
+
+def _provenance_value_present(field, value):
+    """Field-aware presence check; placeholders never certify a claim."""
+    if value in (None, [], {}, ""):
+        return False
+    if isinstance(value, str) and value.strip().lower() in _UNKNOWN_PLACEHOLDERS:
+        return False
+    if field == "n_atoms":
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    if field == "xc_functional":
+        return isinstance(value, str) and bool(value.strip())
+    if field == "potcar_titels":
+        return (
+            isinstance(value, (list, tuple))
+            and bool(value)
+            and all(
+                isinstance(item, str)
+                and item.strip()
+                and item.strip().lower() not in _UNKNOWN_PLACEHOLDERS
+                for item in value
+            )
+        )
+    if field == "kgrid":
+        return (
+            isinstance(value, (list, tuple))
+            and len(value) == 3
+            and all(
+                isinstance(item, int)
+                and not isinstance(item, bool)
+                and item > 0
+                for item in value
+            )
+        )
+    if field in {
+        "energy", "nelect", "E_ads_eV", "dG_ads_eV", "temperature", "pressure",
+        "zpe_correction_eV", "entropy_correction_eV",
+    }:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        if not math.isfinite(float(value)):
+            return False
+        if field in {
+            "energy", "E_ads_eV", "dG_ads_eV", "zpe_correction_eV",
+            "entropy_correction_eV",
+        }:
+            return True
+        return float(value) > 0.0
+    if field in {"E_ads_unit", "dG_ads_unit"}:
+        return value == "eV"
+    if field == "gas_entropy_included":
+        return isinstance(value, bool)
+    if field == "submission_manifest_digest":
+        return (
+            isinstance(value, str)
+            and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", value))
+        )
+    if field in {
+        "reference_digest", "slab_adsorbate_digest", "gas_reference_digest",
+    }:
+        return (
+            isinstance(value, str)
+            and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", value))
+        )
+    if field == "pairing_mode":
+        return value == "explicit_roles"
+    if field == "input_hashes":
+        return (
+            isinstance(value, dict)
+            and set(value) == {"INCAR", "POSCAR", "POTCAR", "KPOINTS"}
+            and all(
+                isinstance(digest, str)
+                and bool(re.fullmatch(r"[0-9a-f]{64}", digest))
+                for digest in value.values()
+            )
+        )
+    if field in {"vasp_binary", "resolved_run_command"}:
+        return isinstance(value, str) and bool(value.strip())
+    return True
+
+
+def _adsorption_operand_digest(record):
+    try:
+        canonical = json.dumps(
+            record,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _same_finite_number(left, right, *, atol=1e-12):
+    if (
+        not isinstance(left, (int, float))
+        or isinstance(left, bool)
+        or not isinstance(right, (int, float))
+        or isinstance(right, bool)
+    ):
+        return False
+    return math.isfinite(float(left)) and math.isfinite(float(right)) and math.isclose(
+        float(left), float(right), rel_tol=0.0, abs_tol=atol
+    )
+
+
+def _binding_lineage_valid(result):
+    """Recompute typed operand digests and bind them to explicit DAG roles."""
+    if result.get("pairing_mode") != "explicit_roles":
+        return False
+    records = result.get("lineage_records")
+    declared = result.get("declared_role_bindings")
+    if not isinstance(records, dict) or not isinstance(declared, dict):
+        return False
+    use_gas = "E_reference_eV" in result or "gas_reference_task_id" in result
+    roles = [
+        (
+            "slab_adsorbate", "slab_adsorbate_step",
+            "slab_adsorbate_task_id", "slab_adsorbate_digest",
+            "E_slab_adsorbate_eV",
+        ),
+        (
+            "clean_slab", "clean_slab_step",
+            "reference_task_id", "reference_digest", "E_clean_slab_eV",
+        ),
+    ]
+    if use_gas:
+        roles.append((
+            "gas_reference", "reference_step",
+            "gas_reference_task_id", "gas_reference_digest", "E_reference_eV",
+        ))
+    if set(declared) != {role[1] for role in roles}:
+        return False
+    for role, declared_key, task_key, digest_key, energy_key in roles:
+        record = records.get(role)
+        if (
+            not isinstance(record, dict)
+            or record.get("schema") != "catgo.adsorption-operand.v1"
+            or record.get("task_id") != result.get(task_key)
+            or declared.get(declared_key) != result.get(task_key)
+            or not _same_finite_number(record.get("energy_eV"), result.get(energy_key))
+        ):
+            return False
+        actual_digest = _adsorption_operand_digest(record)
+        expected_digest = result.get(digest_key)
+        if (
+            actual_digest is None
+            or not isinstance(expected_digest, str)
+            or not hmac.compare_digest(actual_digest, expected_digest)
+        ):
+            return False
+
+    ads = records["slab_adsorbate"]
+    bare = records["clean_slab"]
+    if "ads_titels" in result and (
+        ads.get("potcar_titels") != result["ads_titels"]
+        or bare.get("potcar_titels") != result.get("bare_titels")
+    ):
+        return False
+    if "nelect_ads" in result and (
+        not _same_finite_number(ads.get("nelect"), result["nelect_ads"])
+        or not _same_finite_number(
+            bare.get("nelect"), result.get("nelect_bare")
+        )
+    ):
+        return False
+
+    coefficient = 0.0
+    gas_energy = 0.0
+    if use_gas:
+        coefficient = result.get("reference_coefficient")
+        gas_energy = records["gas_reference"].get("energy_eV")
+        if not _same_finite_number(coefficient, coefficient):
+            return False
+    expected_eads = (
+        float(ads["energy_eV"])
+        - float(bare["energy_eV"])
+        - float(coefficient) * float(gas_energy)
+    )
+    return _same_finite_number(expected_eads, result.get("E_ads_eV"))
+
+
+def _binding_free_energy_valid(result):
+    """Bind ΔG to E_ads + ΔZPE - TΔS and require complete gas entropy."""
+    if result.get("E_ads_unit") != "eV" or result.get("dG_ads_unit") != "eV":
+        return False
+    fields = (
+        "E_ads_eV", "dG_ads_eV", "zpe_correction_eV",
+        "entropy_correction_eV", "temperature", "pressure",
+    )
+    if not all(_provenance_value_present(field, result.get(field)) for field in fields):
+        return False
+    use_gas = "E_reference_eV" in result or "gas_reference_task_id" in result
+    if use_gas and result.get("gas_entropy_included") is not True:
+        return False
+    expected_dg = (
+        float(result["E_ads_eV"])
+        + float(result["zpe_correction_eV"])
+        - float(result["entropy_correction_eV"])
+    )
+    return _same_finite_number(expected_dg, result["dG_ads_eV"])
 
 
 def _group_present(result, group):
-    # a key must be present AND carry a non-empty value — None / [] / {} / "" do NOT
-    # satisfy provenance (else a claim declaring `ads_titels: None` would be certified).
-    return all(result.get(k) not in (None, [], {}, "") for k in group)
+    # A key must be present AND valid for its field. This mirrors the emitter's
+    # fail-closed checks; `unknown`, NaN, zero atoms, and zero grids do not certify.
+    return all(
+        field in result and _provenance_value_present(field, result[field])
+        for field in group
+    )
 
 
 def workflow_consistency(steps):
@@ -777,11 +1083,11 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
         out.append(_na("in_one_tag_per_line", "P1",
                        f"{len(multi)} multi-tag line(s), but binary={binary!r} parses them"))
 
-    # P4 — KSPACING silently wins over an explicit KPOINTS file.
+    # P4 — an explicit KPOINTS file is authoritative; VASP ignores KSPACING.
     if "KSPACING" in tags and kpoints_text:
-        out.append(_v("in_kspacing_vs_kpoints", False,
+        out.append(_v("in_kspacing_vs_kpoints", True,
                       f"KSPACING={tags['KSPACING']} present AND a KPOINTS file exists — "
-                      f"VASP uses KSPACING and ignores the file", "P4"))
+                      f"VASP uses the file and ignores KSPACING", "P4"))
     elif "KSPACING" in tags:
         out.append(_v("in_kspacing_vs_kpoints", True,
                       f"KSPACING={tags['KSPACING']}, no KPOINTS file (consistent)", "P4"))
@@ -862,13 +1168,46 @@ def verifiability(result, claims):
             out.append({"claim": claim, "status": "UNKNOWN-CLAIM",
                         "detail": "no provenance spec registered for this claim type"})
             continue
-        if "any_of" in spec:
-            ok = any(_group_present(result, g) for g in spec["any_of"])
-            need = " OR ".join("+".join(g) for g in spec["any_of"])
-        else:
-            groups = spec["all_of"]
-            ok = all(_group_present(result, g) for g in groups)
-            need = " AND ".join("+".join(g) for g in groups)
+        all_groups = spec.get("all_of", [])
+        any_groups = spec.get("any_of", [])
+        all_ok = all(_group_present(result, g) for g in all_groups)
+        any_ok = not any_groups or any(
+            _group_present(result, g) for g in any_groups
+        )
+        conditional_ok = True
+        conditional_need = None
+        is_binding = claim in {"binding_Eads", "binding_dG"}
+        if is_binding and (
+            _provenance_value_present(
+                "gas_reference_task_id", result.get("gas_reference_task_id")
+            )
+            or "E_reference_eV" in result
+        ):
+            conditional_need = "gas_reference_task_id+gas_reference_digest"
+            conditional_ok = _group_present(
+                result, ("gas_reference_task_id", "gas_reference_digest")
+            )
+        if is_binding:
+            conditional_need = (
+                (conditional_need + " AND " if conditional_need else "")
+                + "recomputed typed lineage + explicit declared roles"
+            )
+            conditional_ok = conditional_ok and _binding_lineage_valid(result)
+        if claim == "binding_dG":
+            conditional_need = (
+                (conditional_need + " AND " if conditional_need else "")
+                + "recomputed ΔG = E_ads + ΔZPE - TΔS"
+            )
+            conditional_ok = conditional_ok and _binding_free_energy_valid(result)
+        ok = all_ok and any_ok and conditional_ok
+        needs = []
+        if all_groups:
+            needs.append(" AND ".join("+".join(g) for g in all_groups))
+        if any_groups:
+            needs.append("(" + " OR ".join("+".join(g) for g in any_groups) + ")")
+        if conditional_need:
+            needs.append(conditional_need + " [when a gas reference is used]")
+        need = " AND ".join(needs)
         out.append({"claim": claim,
                     "status": "VERIFIABLE" if ok else "UNVERIFIABLE",
                     "detail": (f"provenance present ({need})" if ok

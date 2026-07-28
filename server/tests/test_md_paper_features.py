@@ -60,9 +60,6 @@ def _load_module_without_imports(name: str, path: Path):
         pd.BaseModel = _BaseModel  # type: ignore[attr-defined]
         pd.Field = _Field  # type: ignore[attr-defined]
         sys.modules["pydantic"] = pd
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
     # Prevent `from .md_utils import load_trajectory` from pulling mdtraj
     pkg_name = "catgo.routers"
     if pkg_name not in sys.modules:
@@ -74,7 +71,11 @@ def _load_module_without_imports(name: str, path: Path):
         md_utils_stub.load_trajectory = lambda *a, **k: None  # type: ignore[attr-defined]
         md_utils_stub.resolve_periodic = lambda t, p: p  # type: ignore[attr-defined]
         sys.modules[f"{pkg_name}.md_utils"] = md_utils_stub
-    module.__package__ = pkg_name
+    qualified_name = f"{pkg_name}.{name}"
+    spec = importlib.util.spec_from_file_location(qualified_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[qualified_name] = module
     spec.loader.exec_module(module)
     return module
 

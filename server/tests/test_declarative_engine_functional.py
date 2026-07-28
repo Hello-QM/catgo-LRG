@@ -85,6 +85,25 @@ SIMPLE_CU_STRUCTURE = json.dumps({
 VALID_PARAM_TYPES = {"string", "number", "boolean", "select", "text"}
 
 
+def _expected_runtime_count() -> int:
+    """Built-ins plus persistent custom YAML definitions."""
+    custom_dir = ENGINE_DEFS_DIR / "custom"
+    custom_files = (
+        list(custom_dir.glob("*.yaml")) + list(custom_dir.glob("*.yml"))
+        if custom_dir.is_dir()
+        else []
+    )
+    return len(EXPECTED_ENGINE_KEYS) + len(custom_files)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_registry():
+    """Prevent runtime registrations from leaking between tests."""
+    _RUNTIME_REGISTRY.clear()
+    yield
+    _RUNTIME_REGISTRY.clear()
+
+
 def _load_fresh() -> list[DeclarativeEngineRuntime]:
     """Clear registry and load all engine defs fresh."""
     _RUNTIME_REGISTRY.clear()
@@ -96,7 +115,7 @@ def _load_fresh() -> list[DeclarativeEngineRuntime]:
 # =========================================================================
 
 class TestEngineLoading:
-    """All 13 YAML engine definitions should load and register correctly."""
+    """All built-in and persistent custom definitions load correctly."""
 
     def test_all_yaml_files_exist(self):
         """Every expected YAML file exists in engine_defs/."""
@@ -105,10 +124,11 @@ class TestEngineLoading:
             assert path.exists(), f"Missing YAML file: {path}"
 
     def test_all_engines_load_without_errors(self):
-        """load_all_engine_defs() should load all 13 engines."""
+        """load_all_engine_defs() should load built-ins plus custom specs."""
         runtimes = _load_fresh()
-        assert len(runtimes) == 13, (
-            f"Expected 13 engines, got {len(runtimes)}: "
+        expected_count = _expected_runtime_count()
+        assert len(runtimes) == expected_count, (
+            f"Expected {expected_count} engines, got {len(runtimes)}: "
             f"{[r.spec.engine for r in runtimes]}"
         )
 
@@ -159,10 +179,10 @@ class TestEngineLoading:
             assert rt.spec.engine == key
 
     def test_all_runtimes_returns_all(self):
-        """all_runtimes() should return all 13 runtimes."""
+        """all_runtimes() should include built-ins and persistent custom specs."""
         _load_fresh()
         rts = all_runtimes()
-        assert len(rts) == 13
+        assert len(rts) == _expected_runtime_count()
 
 
 # =========================================================================
@@ -379,7 +399,8 @@ class TestTemplateRendering:
             "mlp_relax",
         )
         self._assert_valid_python(content, "mlp_relax_chgnet")
-        assert "CHGNetCalculator" in content
+        assert "M3GNetCalculator" in content
+        assert 'matgl.load_model("chgnet")' in content
         assert "FIRE" in content
 
     def test_mlp_relax_m3gnet(self):
@@ -479,9 +500,7 @@ class TestHookSystem:
 
         mod = importlib.import_module(module_path)
         func = getattr(mod, func_name)
-        return asyncio.get_event_loop().run_until_complete(
-            func(params, structure_str)
-        )
+        return asyncio.run(func(params, structure_str))
 
     def test_orca_hook_produces_files(self):
         """ORCA hook should produce ORCA.inp file."""
@@ -738,6 +757,8 @@ class TestSafetyAssessment:
         """All built-in engines should be safety=safe."""
         _load_fresh()
         for rt in all_runtimes():
+            if rt.spec.engine not in EXPECTED_ENGINE_KEYS:
+                continue
             assert rt.spec.safety == "safe", (
                 f"Engine {rt.spec.engine} has safety={rt.spec.safety!r}"
             )
@@ -1181,7 +1202,7 @@ class TestEdgeCases:
     def test_registry_clear_works(self):
         """_RUNTIME_REGISTRY.clear() should empty the registry."""
         _load_fresh()
-        assert len(all_runtimes()) == 13
+        assert len(all_runtimes()) == _expected_runtime_count()
         _RUNTIME_REGISTRY.clear()
         assert len(all_runtimes()) == 0
 

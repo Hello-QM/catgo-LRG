@@ -14,9 +14,10 @@ _push_structure() and _get_current_structure() which normally make HTTP
 requests to /view/* endpoints — but those endpoints are served by the same
 worker, causing a deadlock.
 
-Solution: Monkey-patch the two viewer helpers to use direct in-process access
-via view_state.py (the shared state module). Computation endpoints like
-/structure-ops/supercell are fine because they don't call back into /view/*.
+Solution: bind two request-local ContextVar overrides so viewer helpers use
+direct in-process access via view_state.py.  A global monkey-patch is unsafe:
+it leaks into stdio/test clients and makes concurrent transports interfere.
+Computation endpoints like /structure-ops/supercell remain ordinary HTTP.
 """
 
 import logging
@@ -60,7 +61,7 @@ from catgo.mcp_tools.server_claude_code import (
 )
 
 # ---------------------------------------------------------------------------
-# Patch viewer helpers to use in-process state (avoids self-HTTP deadlock)
+# Direct viewer helpers used through request-local overrides
 # ---------------------------------------------------------------------------
 
 import catgo.mcp_tools.server_claude_code as _mcp_mod
@@ -158,10 +159,6 @@ async def _push_structure_direct(
         return str(exc)
 
 
-# Apply patches so all tool handlers use direct access
-_mcp_mod._get_current_structure = _get_current_structure_direct  # type: ignore[attr-defined]
-_mcp_mod._push_structure = _push_structure_direct  # type: ignore[attr-defined]
-
 import json as _json
 
 
@@ -187,12 +184,7 @@ async def _handle_view_direct(client: httpx.AsyncClient, args: dict) -> list[Tex
     return [T(type="text", text=f"Unknown view action '{action}'. Valid: get_state, selection, screenshot")]
 
 
-# (Duplicate patch block removed — the assignments above at lines 79-80
-#  already applied these patches. `_handle_view_direct` is dispatched
-#  directly by name from `call_tool` below and does not need a module
-#  patch on `_mcp_mod._handle_view`.)
-
-logger.info("MCP HTTP: patched viewer helpers for in-process access")
+logger.info("MCP HTTP: request-local viewer helper overrides enabled")
 
 
 # --- MCP Server + Session Manager (module-level singletons) ---
@@ -215,6 +207,12 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
     T = TextContent
+    get_token = _mcp_mod._get_current_structure_override.set(
+        _get_current_structure_direct,
+    )
+    push_token = _mcp_mod._push_structure_override.set(
+        _push_structure_direct,
+    )
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if name == "catgo_structure":
@@ -299,6 +297,9 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     except Exception as exc:
         logger.error("MCP tool %s unexpected error: %s", name, exc, exc_info=True)
         return [T(type="text", text=f"{name} encountered an internal error. Check server logs for details.")]
+    finally:
+        _mcp_mod._push_structure_override.reset(push_token)
+        _mcp_mod._get_current_structure_override.reset(get_token)
 
 
 async def mcp_asgi_app(scope, receive, send):
