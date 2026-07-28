@@ -9,7 +9,7 @@
   ·
   <a href="https://app.catgo-ucsd.org">Try Online</a>
   ·
-  <a href="https://github.com/Hello-QM/catgo-LRG/releases">Download Desktop</a>
+  <a href="https://dl.catgo-ucsd.org/">Download Desktop</a>
   ·
   <a href="https://docs.catgo-ucsd.org">Docs & Tutorials</a>
 </p>
@@ -17,7 +17,7 @@
 <p align="center">
 
 [![Tests](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml/badge.svg)](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml)
-[![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
 
 </p>
 
@@ -106,7 +106,7 @@ CatGo has three established day-to-day entry points—desktop, Web, and VS Code�
 
 ### A. Desktop app: the full workbench
 
-1. Download the Windows, macOS, or Linux installer from [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases).
+1. Download the Windows, macOS, or Linux installer from the [CatGo download hub](https://dl.catgo-ucsd.org/).
 2. Launch CatGo and drop in a structure/output file, or fetch a structure from a database.
 3. Use the structure toolbar, Quick Build, or CatBot to prepare the model and workflow.
 4. For remote calculations, connect your lab's cluster from the HPC panel.
@@ -285,16 +285,16 @@ Feature availability depends on the CatGo edition, installed optional dependenci
 
 ### Download
 
-Every link points at the **latest release**, so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest). On the release page, pick the file for your platform (shown in the **File** column). For older versions and checksums, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
+Every link points at the **latest release** on the dedicated [CatGo download hub](https://dl.catgo-ucsd.org/), so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://dl.catgo-ucsd.org/). For older versions and release history, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
 
-> **China mirror / 中国大陆镜像:** if GitHub is unreachable, download the latest release from [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) — same full installers as GitHub Releases. As a fallback, a browser-based subset (no CatBot chat or desktop integration) installs via a PyPI mirror: `pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`, then run `catgo`.
+> **Direct delivery / 中国大陆直连：** [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) serves the full installers directly through Cloudflare without requiring a GitHub login. As a fallback, a browser-based subset (no CatBot chat or desktop integration) installs via a PyPI mirror: `pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`, then run `catgo`.
 
 | System                    | Get the latest                                                      | File on the release page                                   |
 | ------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Windows**               | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
-| **macOS** (Apple Silicon) | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg`                                  |
-| **Linux**                 | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` or `CatGo-<ver>-1.x86_64.rpm`      |
-| **Android**               | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk`                       |
+| **Windows**               | [⬇ Download](https://dl.catgo-ucsd.org/#platform-windows)          | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
+| **macOS** (Apple Silicon) | [⬇ Download](https://dl.catgo-ucsd.org/#platform-macos)            | `CatGo_<ver>_aarch64.dmg`                                  |
+| **Linux**                 | [⬇ Download](https://dl.catgo-ucsd.org/#platform-linux)            | `CatGo_<ver>_amd64.deb` or `CatGo-<ver>-1.x86_64.rpm`      |
+| **Android**               | [⬇ Download](https://dl.catgo-ucsd.org/#platform-android)          | `CatGo-v<ver>-android-universal.apk`                       |
 | **iOS**                   | [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)       | or `CatGo-v<ver>-ios-arm64.ipa` on the release page        |
 | **VS Code**               | Search **CatGo** in Extensions                                      | or `catgo-<ver>.vsix` on the release page                  |
 | **Web** (no install)      | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)                    | —                                                          |
@@ -378,7 +378,14 @@ CatGo's structure viewer, periodic table, and parts of its core UI originate fro
 
 **CatRender** is CatGo's Rust/WASM molecular SVG renderer. It is implemented as a fidelity-oriented port of [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender), whose lineage includes [xyz2svg](https://github.com/briling/xyz2svg), with CatGo-specific interactive controls and export integration.
 
-If CatGo contributes to a publication, cite the ChemRxiv preprint:
+CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
+please include the following acknowledgement and the preferred ChemRxiv citation:
+
+```
+This work used CatGo (https://catgo-ucsd.org).
+```
+
+Use this preferred ChemRxiv citation:
 
 ```bibtex
 @misc{liu2026catgo,
@@ -392,7 +399,7 @@ If CatGo contributes to a publication, cite the ChemRxiv preprint:
 }
 ```
 
-For the software release, see [`citation.cff`](citation.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). CatGo is licensed under [GNU AGPL-3.0-or-later](license).
+For the software release, see the canonical [`CITATION.cff`](CITATION.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). This request is not an additional condition of the AGPL license. Third-party materials retain their own terms; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ---
 

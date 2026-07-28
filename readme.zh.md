@@ -9,7 +9,7 @@
   ·
   <a href="https://app.catgo-ucsd.org">在线体验</a>
   ·
-  <a href="https://github.com/Hello-QM/catgo-LRG/releases">下载桌面版</a>
+  <a href="https://dl.catgo-ucsd.org/">下载桌面版</a>
   ·
   <a href="https://docs.catgo-ucsd.org">教程与文档</a>
 </p>
@@ -17,7 +17,7 @@
 <p align="center">
 
 [![Tests](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml/badge.svg)](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml)
-[![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
 
 </p>
 
@@ -105,7 +105,7 @@ CatGo 有三个适合日常使用的成熟入口：桌面版、Web 版和 VS Cod
 
 ### A. 桌面版：完整工作台
 
-1. 从 [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases) 下载 Windows、macOS 或 Linux 安装包。
+1. 从 [CatGo 下载中心](https://dl.catgo-ucsd.org/) 下载 Windows、macOS 或 Linux 安装包。
 2. 打开 CatGo，拖入结构/输出文件，或从数据库获取结构。
 3. 使用结构工具栏、Quick Build 或 CatBot 准备模型与流程。
 4. 需要远程计算时，在 HPC 面板连接课题组集群。
@@ -286,16 +286,16 @@ catgo --help
 
 ### 下载
 
-下表所有链接都指向**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest)。在发布页选择对应平台的文件（见 **文件** 列）。历史版本与校验和见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
+下表所有链接都指向专用 [CatGo 下载中心](https://dl.catgo-ucsd.org/)的**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://dl.catgo-ucsd.org/)。历史版本与发布记录见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
 
-> **中国大陆镜像：** 无法访问 GitHub 时，可从 [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 下载最新版安装包（与 GitHub Releases 完全相同的完整版）。备选方案：通过 PyPI 镜像安装浏览器版（功能子集，不含 CatBot 聊天与桌面集成）：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
+> **中国大陆直连：** [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 通过 Cloudflare 直接提供完整安装包，无需登录或访问 GitHub。备选方案：通过 PyPI 镜像安装浏览器版（功能子集，不含 CatBot 聊天与桌面集成）：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
 
 | 系统                       | 获取最新版                                                         | 发布页上的文件                                                   |
 | ------------------------ | ------------------------------------------------------------- | --------------------------------------------------------- |
-| **Windows**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
-| **macOS**（Apple Silicon） | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg`                                 |
-| **Linux**                | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm`      |
-| **Android**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk`                      |
+| **Windows**              | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-windows)          | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
+| **macOS**（Apple Silicon） | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-macos)            | `CatGo_<ver>_aarch64.dmg`                                 |
+| **Linux**                | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-linux)            | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm`      |
+| **Android**              | [⬇ 下载](https://dl.catgo-ucsd.org/#platform-android)          | `CatGo-v<ver>-android-universal.apk`                      |
 | **iOS**                  | [TestFlight 公测](https://testflight.apple.com/join/FdHup5Hz)   | 或发布页的 `CatGo-v<ver>-ios-arm64.ipa`                        |
 | **VS Code**              | 在扩展市场搜索 **CatGo**                                             | 或发布页的 `catgo-<ver>.vsix`                                  |
 | **Web**（免安装）             | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)              | —                                                         |
@@ -379,7 +379,13 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 
 **CatRender** 是 CatGo 的 Rust/WASM 分子 SVG 渲染器。它以忠实复现为目标移植自 [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender)；后者的技术脉络还包括 [xyz2svg](https://github.com/briling/xyz2svg)。CatRender 在此基础上增加了 CatGo 的交互控制和导出集成。
 
-如果 CatGo 对论文工作有贡献，请引用 ChemRxiv 预印本：
+CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明下列致谢并使用首选的 ChemRxiv 引用。
+
+```
+This work used CatGo (https://catgo-ucsd.org).
+```
+
+首选 ChemRxiv 引用如下：
 
 ```bibtex
 @misc{liu2026catgo,
@@ -393,7 +399,7 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 }
 ```
 
-软件版本的引用信息见 [`citation.cff`](citation.cff) 和 Zenodo 存档 [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425)。项目采用 [GNU AGPL-3.0-or-later](license)。
+软件版本的规范引用信息见 [`CITATION.cff`](CITATION.cff) 和 Zenodo 存档 [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425)。该请求不构成 AGPL 许可的附加条件。第三方材料保留其各自的条款；请见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ---
 

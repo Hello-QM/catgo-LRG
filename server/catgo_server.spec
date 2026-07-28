@@ -24,6 +24,7 @@ block_cipher = None
 # Get the server directory
 server_dir = Path(SPECPATH)
 project_dir = server_dir.parent
+legal_bundle_dir = project_dir / 'build' / 'legal-bundle'
 dos_ext_dir = project_dir / 'extensions' / 'dos-analysis'
 cohp_ext_dir = project_dir / 'extensions' / 'cohp-analysis'
 
@@ -95,6 +96,10 @@ a = Analysis(
     pathex=[str(server_dir)],
     binaries=ctranslate2_bins,
     datas=[
+        # Complete redistribution bundle. PyInstaller embeds this directory in
+        # both Tauri's backend sidecar and the raw VS Code sidecar executable.
+        # scripts/sync-legal-bundle.mjs creates it before every production build.
+        (str(legal_bundle_dir), 'legal'),
         # Workflow engine definition YAML files
         ('workflow/engine_defs/*.yaml', 'workflow/engine_defs'),
         ('workflow/engine_defs/custom/*.yaml', 'workflow/engine_defs/custom'),

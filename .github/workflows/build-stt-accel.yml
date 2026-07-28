@@ -39,6 +39,8 @@ jobs:
     name: ${{ matrix.key }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve tag
         shell: bash
@@ -46,6 +48,49 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
         run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Verify target STT release rights
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SOURCE_COMMIT: ${{ github.sha }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if git fetch --force origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
+            rights_commit=$(git rev-parse "$tag^{commit}")
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            rights_commit="$EVENT_SOURCE_COMMIT"
+            git cat-file -e "$rights_commit^{commit}"
+          else
+            echo "::error::The pushed STT tag could not be resolved."
+            exit 1
+          fi
+          target_rights_source=$(mktemp -d)
+          rmdir "$target_rights_source"
+          cleanup() {
+            git worktree remove --force \
+              "$target_rights_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_rights_source" "$rights_commit"
+          node scripts/verify-release-rights.mjs \
+            --root "$target_rights_source"
+          cleanup
+          trap - EXIT
+          git checkout --detach "$rights_commit"
+          echo "RIGHTS_COMMIT=$rights_commit" >> "$GITHUB_ENV"
+
+      - name: Stage canonical legal bundle
+        run: node scripts/sync-legal-bundle.mjs
+
+      - name: Resolve pinned whisper.cpp revision
+        shell: bash
+        run: |
+          revision="$(node -p "require('./scripts/whispercpp-source.json').revision")"
+          echo "WHISPER_CPP_REVISION=$revision" >> "$GITHUB_ENV"
 
       - name: Install Vulkan toolchain (Linux)
         if: matrix.os == 'ubuntu-24.04'
@@ -64,7 +109,7 @@ jobs:
       - name: Build (Unix)
         if: matrix.os != 'windows-latest'
         shell: bash
-        run: bash scripts/build-whispercpp.sh ${{ matrix.backend }} "dist/${{ matrix.key }}"
+        run: bash scripts/build-whispercpp.sh ${{ matrix.backend }} "dist/${{ matrix.key }}" "$WHISPER_CPP_REVISION"
 
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
@@ -73,16 +118,29 @@ jobs:
           # Clone into RUNNER_TEMP, NOT "src" — the repo (checked out here) already
           # has its own src/ directory, so `git clone ... src` would collide.
           $wc = Join-Path $env:RUNNER_TEMP 'whispercpp'
-          git clone --depth 1 https://github.com/ggml-org/whisper.cpp $wc
+          $source = Get-Content scripts/whispercpp-source.json | ConvertFrom-Json
+          if ($env:WHISPER_CPP_REVISION -ne $source.revision) {
+            throw "workflow revision does not match pinned whisper.cpp source"
+          }
+          git init $wc
+          git -C $wc remote add origin $source.repository
+          git -C $wc fetch --depth 1 origin $source.revision
+          git -C $wc checkout --detach FETCH_HEAD
+          if ((git -C $wc rev-parse HEAD) -ne $source.revision) {
+            throw "whisper.cpp checkout does not match pinned revision"
+          }
           if (-not (Test-Path "$wc/CMakeLists.txt")) { throw "whisper.cpp clone failed" }
           cmake -S $wc -B $wc/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=1
           cmake --build $wc/build --config Release --target whisper-cli
           New-Item -ItemType Directory -Force "dist/${{ matrix.key }}" | Out-Null
           Copy-Item "$wc/build/bin/Release/*" "dist/${{ matrix.key }}/" -Recurse -Force
+          node scripts/stage-whispercpp-license.mjs --source-root $wc --output "dist/${{ matrix.key }}"
 
       - name: Package + checksum
         shell: bash
         run: |
+          mkdir -p "dist/${{ matrix.key }}/legal"
+          cp -r build/legal-bundle/. "dist/${{ matrix.key }}/legal/"
           mkdir -p out
           asset="whisper-cli-${{ matrix.key }}.${{ matrix.ext }}"
           if [ "${{ matrix.ext }}" = "zip" ]; then
@@ -98,6 +156,10 @@ jobs:
           echo "$sha" > "out/$asset.sha256"
           echo "ASSET=$asset" >> "$GITHUB_ENV"
 
+      - name: Verify legal bundle in accelerator archive
+        shell: bash
+        run: node scripts/verify-stt-archive.mjs --archive "out/$ASSET" --legal-root build/legal-bundle
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.key }}
@@ -107,15 +169,77 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" --notes "CatGo STT GPU accelerator binaries"
+          set -euo pipefail
+          assert_tag_commit() {
+            git fetch --force origin \
+              "+refs/tags/$TAG:refs/tags/$TAG"
+            actual_commit=$(git rev-parse "$TAG^{commit}")
+            if [ "$actual_commit" != "$RIGHTS_COMMIT" ]; then
+              echo "::error::STT release tag moved away from the rights-cleared source."
+              exit 1
+            fi
+          }
+
+          if ! git ls-remote --exit-code --refs \
+            origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            if ! gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f ref="refs/tags/$TAG" -f sha="$RIGHTS_COMMIT" >/dev/null; then
+              # A matrix sibling may have created the exact tag first.
+              assert_tag_commit
+            fi
+          fi
+          assert_tag_commit
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            assert_tag_commit
+            if ! gh release create "$TAG" --draft --latest=false \
+              --target "$RIGHTS_COMMIT" --title "$TAG" \
+              --notes "CatGo STT GPU accelerator binaries. Each archive includes the CatGo legal and citation bundle."; then
+              # A matrix sibling may have created the release first. Accept only
+              # a real winner; the exact-tag check below validates its target.
+              gh release view "$TAG" >/dev/null 2>&1 || exit 1
+            fi
+          fi
+
+          assert_tag_commit
           gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
 
   manifest:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
+      - name: Verify target STT release rights
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          rights_commit=$(git rev-parse "$tag^{commit}")
+          target_rights_source=$(mktemp -d)
+          rmdir "$target_rights_source"
+          cleanup() {
+            git worktree remove --force \
+              "$target_rights_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_rights_source" "$rights_commit"
+          node scripts/verify-release-rights.mjs \
+            --root "$target_rights_source"
+          echo "RIGHTS_COMMIT=$rights_commit" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -126,7 +250,6 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          TAG="${INPUT_TAG:-$REF_NAME}"
           BASE="https://github.com/$REPO/releases/download/$TAG"
           python3 - "$BASE" <<'PY'
           import json, sys, glob, os
@@ -144,11 +267,25 @@ jobs:
                     open('stt-accel-manifest.json', 'w'), indent=2)
           print(open('stt-accel-manifest.json').read())
           PY
-      - name: Upload manifest
+      - name: Upload manifest and publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}  # manifest job has no checkout → tell gh the repo
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release upload "${INPUT_TAG:-$REF_NAME}" stt-accel-manifest.json --clobber
+          set -euo pipefail
+          assert_tag_commit() {
+            git fetch --force origin \
+              "+refs/tags/$TAG:refs/tags/$TAG"
+            actual_commit=$(git rev-parse "$TAG^{commit}")
+            if [ "$actual_commit" != "$RIGHTS_COMMIT" ]; then
+              echo "::error::STT release tag moved away from the rights-cleared source."
+              exit 1
+            fi
+          }
+
+          assert_tag_commit
+          gh release upload "$TAG" stt-accel-manifest.json --clobber
+          if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+            assert_tag_commit
+            gh release edit "$TAG" --draft=false --latest=false
+          fi

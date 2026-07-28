@@ -1,5 +1,6 @@
 <script lang="ts">
   import { STATIC_ONLY } from '$lib/api/config'
+  import { DOWNLOAD_HUB_URL } from '$lib/download-links'
   import Icon from '$lib/Icon.svelte'
 
   interface Props {
@@ -25,7 +26,7 @@
       <p class="banner-message">{message}</p>
       {#if show_download}
         <div class="banner-actions">
-          <a href="https://github.com/Hello-QM/catgo-LRG/releases" target="_blank" rel="noopener" class="download-link">
+          <a href={DOWNLOAD_HUB_URL} target="_blank" rel="noopener" class="download-link">
             <Icon icon="Download" /> Download Desktop App
           </a>
           <a href="https://marketplace.visualstudio.com/items?itemName=Hello-QM.catgo-vscode" target="_blank" rel="noopener" class="vscode-link">

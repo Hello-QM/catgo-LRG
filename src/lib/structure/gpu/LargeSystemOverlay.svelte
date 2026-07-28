@@ -1,7 +1,10 @@
 <script lang="ts">
   import { Color, type Camera } from 'three'
   import type { AnyStructure, ElementSymbol } from '$lib/structure'
-  import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
+  import {
+    get_webgpu_lease,
+    invalidate_webgpu_lease,
+  } from '$lib/structure/gpu/webgpu-context'
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
   import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
@@ -15,6 +18,11 @@
     type LargeSystemRenderer,
     type LargeSystemShading,
   } from '$lib/structure/gpu/large-system-renderer'
+  import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
+  import type {
+    ImageInstanceTable,
+    RenderPacket,
+  } from '$lib/structure/scene/render-packet'
 
   let {
     enabled = false,
@@ -32,8 +40,9 @@
     background_opacity = 0.1,
     show_cell = false,
     cell_edge_color = `#808080`,
+    frame_positions = undefined,
+    frame_lattice = undefined,
     trajectory_positions_version = undefined,
-    get_displayed_frame_positions = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
     selected_sites = [],
@@ -45,13 +54,9 @@
   }: {
     enabled?: boolean
     camera?: Camera | undefined
-    /** Current displayed structure whose atoms render as impostor spheres.
-     *  During trajectory playback this carries the BASE/displayed topology
-     *  (elements, count, supercell/PBC-image layout, and frame-0 xyz) — the
-     *  per-frame xyz come from get_displayed_frame_positions, NOT from this
-     *  object (whose identity / .sites[i].xyz stay static across frames in the
-     *  fast path). The element/count/layout here MUST match the resolver's
-     *  array index-for-index (both are the displayed-structure site order). */
+    /** BASE scientific structure (never displayed_structure / never appended
+     *  image sites). Exactly N sites define packet topology; visual replicas
+     *  and sparse ghosts are independent GPU instance channels. */
     structure?: AnyStructure | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
@@ -103,28 +108,19 @@
      *  (DEFAULTS.structure.cell_edge_color = `#808080` grey). Converted to linear
      *  RGB the SAME way atom colors are. */
     cell_edge_color?: string
+    /** Direct BASE trajectory frame positions (exactly 3N floats). Never
+     *  derived from the WebGL/displayed renderer. null/undefined falls back to
+     *  the base structure's static site xyz. */
+    frame_positions?: Float32Array | null | undefined
+    /** CURRENT frame lattice for variable-cell trajectories (rows a,b,c).
+     *  null/undefined falls back to the base structure lattice. */
+    frame_lattice?: number[][] | null | undefined
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
-     *  it — not the structure ref — is the signal that drives per-frame
-     *  re-upload. `.all` (edit-all fan-out) is not needed here; we always
-     *  re-extract the whole frame. */
+     *  it — not the structure ref — drives the packet frame version. */
     trajectory_positions_version?: { v: number; all: boolean } | undefined
-    /** Authoritative per-DISPLAYED-atom position source. Returns the current
-     *  frame's xyz as a flat Float32Array(3 × n_displayed) indexed identically
-     *  to `structure.sites` (the SAME array the WebGL atoms/bonds are drawn at:
-     *  StructureScene.atom_positions_buffer — displayed-topology base overlaid
-     *  with the manager's per-frame positions via site_ids_buffer). The overlay
-     *  consumes this directly instead of re-deriving from base-only trajectory
-     *  data, so its atoms/bonds match the WebGL view atom-for-atom — including
-     *  the supercell base-block-animates / replica-static behaviour the WebGL
-     *  position-write loop decides. null/undefined ⇒ fall back to the
-     *  structure's own static sites xyz (no trajectory, or pre-mount). */
-    get_displayed_frame_positions?: (() => Float32Array) | null | undefined
-    /** Current trajectory frame index. -1 when no trajectory is active. Used
-     *  (with trajectory_positions_version.v) only as the per-frame REFRESH
-     *  TRIGGER — when it changes the overlay re-pulls get_displayed_frame_positions.
-     *  The position values themselves come from that getter, not this index. */
+    /** Current trajectory frame index. -1 when no trajectory is active. */
     trajectory_step_idx?: number
     on_fallback?: (reason: string) => void
     /** App selection state (base site indices, same as the WebGL path's
@@ -143,11 +139,10 @@
      *  offset by ix·a + iy·b + iz·c. Default [1,1,1] ⇒ ncells = 1 ⇒ atom = inst,
      *  zero offset ⇒ byte-identical to the non-supercell draw. */
     supercell?: [number, number, number]
-    /** Whether DISPLAYED PBC image atoms exist (the viewer's `show_image_atoms`).
-     *  When true (non-supercell only), the renderer draws cross-cell bonds as FULL
-     *  cylinders reaching the imaged partner where the displayed image atom sits,
-     *  so image atoms gain bonds (matching the WebGL view). Default false ⇒ stubs
-     *  ⇒ zero change; supercell mode is unaffected (Phase-2 logic is authoritative). */
+    /** Viewer `show_image_atoms` policy. true selects packet boundary policy
+     *  `ghost-images`: sparse ghosts draw beyond the outer boundary and outside
+     *  bonds complete to them for ANY visual-supercell dims. false selects
+     *  `stub` (the existing incomplete edge). */
     show_image_atoms?: boolean
     /** Getter for the viewer's resolved atom-shading state (StructureScene's
      *  `get_shading_state` bridge): view-space headlamp, ambient / directional
@@ -155,11 +150,10 @@
      *  values the WebGL atom shader's matching uniforms receive. Mirrored rather
      *  than re-derived here so the two renderers cannot drift apart.
      *
-     *  A GETTER, not a plain value, for the same reason
-     *  get_displayed_frame_positions is: the depth-cue near/far plane track the
-     *  CAMERA DISTANCE, so they change on every orbit/zoom — with no prop
-     *  identity change to drive a re-render. The overlay's frame loop calls this
-     *  each frame and gets a fresh, authoritative answer.
+     *  A GETTER, not a plain value: the depth-cue near/far planes track the
+     *  CAMERA DISTANCE, so they change on every orbit/zoom with no prop identity
+     *  change to drive a re-render. The overlay's frame loop calls this each
+     *  frame and gets a fresh, authoritative answer.
      *
      *  undefined / null ⇒ the renderer keeps its neutral defaults (a `glossy`
      *  profile with depth cueing off), i.e. the pre-bridge behaviour. */
@@ -180,13 +174,30 @@
   let resize_observer: ResizeObserver | null = null
   let session_token = 0
 
+  // ── Render-packet channel (design §5) ──────────────────────────────────────
+  // One packet builder per pane. Structure passes the BASE scientific
+  // structure, direct 3N trajectory positions, and CURRENT frame lattice — no
+  // WebGL/displayed reverse read or decorative boundary metadata. The renderer
+  // derives sparse ghosts from the active bond graph at publication. build()
+  // memoizes per sub-object: partial changes bump exactly one version, so the
+  // renderer uploads topology buffers only on a topology change, positions +
+  // current lattice only on a frame change, and dims/policy/indirect counts
+  // only on a replica change. This replaces the old set_atoms / set_positions /
+  // set_supercell / set_show_images fan-out.
+  const packet_builder = create_render_packet_builder()
+  let last_pushed_packet: RenderPacket | null = null
+  const EMPTY_IMAGE_TABLE: ImageInstanceTable = {
+    count: 0,
+    base_sites: new Uint32Array(0),
+    jimages: new Int8Array(0),
+  }
+
   // Cached atom buffers, rebuilt only when the structure identity changes (not
   // every frame). `atom_source` is the identity sentinel we last built from.
+  // radii/colors are the ADAPTER-resolved packet inputs (palette + overrides).
   let atom_source: AnyStructure | undefined = undefined
-  let atom_positions: Float32Array = new Float32Array(0)
   let atom_radii: Float32Array = new Float32Array(0)
   let atom_colors: Float32Array = new Float32Array(0)
-  let atom_count = 0
   // Track the colors-object identity too, so a color-scheme swap rebuilds.
   let atom_colors_source: Partial<Record<ElementSymbol, string>> | undefined = undefined
   // Signature of the radius-affecting inputs we last built from; when it
@@ -315,49 +326,9 @@
   // refresh_frame_positions — including variable-cell trajectories).
   let cell_sig = ``
 
-  // ── GPU supercell state (Phase 1) ──────────────────────────────────────────
-  // Signature of the supercell dims + base lattice last pushed, so set_supercell
-  // is re-pushed only when one actually changes (dims swap, or the base lattice
-  // moves — e.g. cell edit / variable-cell). Default [1,1,1] ⇒ ncells 1 ⇒ the
-  // renderer draws exactly as before.
-  let supercell_sig = ``
-
-  /** Push the GPU supercell dims + base lattice to the renderer when they
-   *  changed. The base lattice is packed from `structure.lattice` (the parent
-   *  keeps `structure` at the BASE cell while GPU-supercell is active). Returns
-   *  true if it re-pushed (caller marks a redraw). */
-  function sync_supercell(): boolean {
-    if (!renderer) return false
-    const dims: [number, number, number] = [
-      Math.max(1, Math.floor(supercell?.[0] ?? 1)),
-      Math.max(1, Math.floor(supercell?.[1] ?? 1)),
-      Math.max(1, Math.floor(supercell?.[2] ?? 1)),
-    ]
-    const lat = (structure as { lattice?: PymatgenLattice } | undefined)?.lattice
-    const base_lat = pack_lattice(lat)
-    let sig = `${dims[0]}x${dims[1]}x${dims[2]}|`
-    for (let i = 0; i < 9; i++) sig += `${base_lat[i]};`
-    if (sig === supercell_sig) return false
-    supercell_sig = sig
-    renderer.set_supercell(dims, base_lat)
-    return true
-  }
-
-  // Last show_image_atoms flag pushed to the renderer, so set_show_images fires
-  // only when it actually flips. -1 = never pushed (forces the first sync).
-  let show_images_sig = -1
-
-  /** Push the viewer's show_image_atoms flag to the renderer when it changed.
-   *  The renderer uses it (non-supercell path only) to draw cross-cell bonds full
-   *  to the displayed image atom instead of as stubs. Returns true if re-pushed. */
-  function sync_show_images(): boolean {
-    if (!renderer) return false
-    const next = show_image_atoms ? 1 : 0
-    if (next === show_images_sig) return false
-    show_images_sig = next
-    renderer.set_show_images(!!show_image_atoms)
-    return true
-  }
+  // (GPU supercell dims / base lattice and the show_image_atoms flag are now
+  // carried by the render packet — replica version → dims + boundary policy,
+  // frame version → current lattice. No per-setter sync functions remain.)
 
   // ── Selection highlight state ──────────────────────────────────────────────
   // Signature of the selection last pushed to the renderer, so set_selection is
@@ -394,10 +365,11 @@
   }
 
   // ── Per-frame trajectory state (milestone 9.4) ──────────────────────────
-  // The last position-version we re-uploaded. When the parent bumps
+  // The last position-version we re-extracted. When the parent bumps
   // trajectory_positions_version.v (playback / scrub / in-place edit) this
-  // diverges and we re-extract + re-upload ONLY the xyz (set_positions) — radii
-  // and colors are NOT rebuilt, since elements don't change between frames.
+  // diverges and we re-extract ONLY the xyz — the packet's frame version moves
+  // and the renderer uploads only 3N floats; radii and colors are NOT rebuilt,
+  // since elements don't change between frames.
   let last_pos_version = -1
   // The last frame index we re-uploaded. Normal playback ADVANCES the frame
   // index (trajectory_step_idx) without necessarily bumping
@@ -406,83 +378,52 @@
   // must re-extract on EITHER signal diverging, mirroring the CPU/WebGL bond
   // cache which keys on both get_step_idx AND get_positions_version.
   let last_step_idx = -1
-  // Current-frame xyz, indexed identically to structure.sites. Reused buffer.
-  let frame_positions: Float32Array = new Float32Array(0)
-  // Set when frame_positions changed and must be re-uploaded to the GPU.
-  let positions_dirty = false
+  let last_frame_positions_source: Float32Array | null | undefined = undefined
+  let last_frame_lattice_source: number[][] | null | undefined = undefined
+  // Current BASE-frame xyz (exactly 3N). Direct trajectory arrays are consumed
+  // zero-copy; a static fallback is packed only when the direct input is absent.
+  // In-place edits are keyed by positions_version; identity swaps are visible
+  // directly to the packet builder.
+  let packet_frame_positions: Float32Array = new Float32Array(0)
   // Lattice signature last pushed for bonds; for variable-cell trajectories the
   // lattice changes per frame and the bond compute + bond render need the new
   // one. Compared per frame so a static cell never re-uploads.
   let frame_lattice_sig = ``
 
-  /** Re-extract the current frame's per-DISPLAYED-atom xyz from the shared
-   *  WebGL resolver and mark positions (+ bonds) dirty. Falls back to the
-   *  structure's own static sites xyz when the getter is unavailable (no
-   *  trajectory active, or pre-mount before StructureScene bound the getter —
-   *  in which case structure.sites already holds the static positions and this
-   *  is a harmless re-upload). For variable-cell trajectories also re-checks the
-   *  lattice and re-pushes bond data when it moved. */
+  /** Adopt the directly-owned BASE frame as the packet buffer (zero-copy). The
+   *  input is exactly 3N floats from Structure; no displayed/WebGL reverse
+   *  read exists. A missing or length-mismatched trajectory frame falls back
+   *  to the base structure's static site xyz. For variable-cell trajectories,
+   *  the direct CURRENT frame lattice also updates the bond compute/render
+   *  inputs (the packet builder consumes the same lattice below). */
   function refresh_frame_positions(): void {
     last_pos_version = trajectory_positions_version?.v ?? -1
     last_step_idx = trajectory_step_idx
+    last_frame_positions_source = frame_positions
+    last_frame_lattice_source = frame_lattice
     const sites = structure?.sites
     if (!sites || sites.length === 0) return
-    // SINGLE SOURCE OF TRUTH: get_displayed_frame_positions() returns the exact
-    // per-displayed-atom position array the WebGL atoms/bonds are drawn at
-    // (StructureScene.atom_positions_buffer) — already resolved for supercell /
-    // PBC-image atoms (base atoms carry the current trajectory frame, replicas
-    // stay at their topology positions, exactly as the WebGL view shows). We
-    // consume it as-is: no base→displayed remapping, no partial-apply guess.
-    let pos: Float32Array | null = null
-    if (get_displayed_frame_positions) pos = get_displayed_frame_positions()
-    // Guard against a length mismatch (e.g. the resolver lagging a supercell
-    // change by one tick): if the resolved array doesn't cover the current
-    // displayed atom set, fall back to the structure's own static sites xyz so
-    // we never index out of bounds or upload a short buffer. The topology_dirty
-    // path re-fires once the resolver catches up.
-    if (pos && pos.length === sites.length * 3) {
-      // Copy into a private buffer so a later in-place mutation of the shared
-      // $derived array can't corrupt what we already uploaded.
-      if (frame_positions.length !== pos.length) frame_positions = new Float32Array(pos.length)
-      frame_positions.set(pos)
-    } else {
-      frame_positions = pack_positions(sites)
-    }
-    positions_dirty = true
+    const expected = sites.length * 3
+    packet_frame_positions = frame_positions?.length === expected
+      ? frame_positions
+      : pack_positions(sites)
 
-    // Variable-cell: if the displayed lattice changed, the bond compute + bond
-    // render must use the new lattice. Re-pack and flag bonds for re-push. (A
-    // static cell leaves frame_lattice_sig unchanged ⇒ no bond-input churn.)
-    const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    const packed = pack_lattice(lat)
+    const structure_lattice =
+      (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
+    const packed = frame_lattice && frame_lattice.length === 3
+      ? new Float32Array([
+        frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
+        frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
+        frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
+      ])
+      : pack_lattice(structure_lattice)
     let sig = ``
     for (let i = 0; i < 9; i++) sig += `${packed[i]};`
     if (sig !== frame_lattice_sig) {
       frame_lattice_sig = sig
       bond_lattice = packed
-      bond_periodic = !!lat
+      bond_periodic = !!structure_lattice
       bonds_dirty = true
-      // Phase 3 — variable-cell supercell tracking: the GPU supercell uniform's
-      // base lattice (rows a,b,c) feeds each replica's offset (ix·a + iy·b +
-      // iz·c). For a VARIABLE-CELL trajectory that base cell changes per frame,
-      // so the uniform must be re-uploaded with the new lattice or the replicas
-      // keep their frame-0 spacing (drift / overlap as the cell breathes). Only
-      // when a real supercell is active (product > 1) — at 1×1×1 ncells is 1 and
-      // the offset is always zero, so this is a no-op cost we skip entirely. We
-      // reuse the lattice we JUST packed (no second pack_lattice) and keep the
-      // dims unchanged (they're constant during playback). sync_supercell() runs
-      // later in frame(); refreshing supercell_sig here keeps the two in lockstep
-      // so it doesn't redundantly re-push the same lattice it sees this frame.
-      const nx = Math.max(1, Math.floor(supercell?.[0] ?? 1))
-      const ny = Math.max(1, Math.floor(supercell?.[1] ?? 1))
-      const nz = Math.max(1, Math.floor(supercell?.[2] ?? 1))
-      if (renderer && nx * ny * nz > 1) {
-        const dims: [number, number, number] = [nx, ny, nz]
-        renderer.set_supercell(dims, packed)
-        let scs = `${nx}x${ny}x${nz}|`
-        for (let i = 0; i < 9; i++) scs += `${packed[i]};`
-        supercell_sig = scs
-      }
     }
   }
 
@@ -519,8 +460,16 @@
     const bond_sites = home_n < sites.length ? sites.slice(0, home_n) : sites
     bond_covalent = build_atom_radii(bond_sites)
     // Periodic only when the structure carries a lattice (molecules don't).
+    // A variable-cell trajectory's DIRECT current-frame lattice overrides the
+    // base structure lattice here too, including the first rendered frame.
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    bond_lattice = pack_lattice(lat)
+    bond_lattice = frame_lattice && frame_lattice.length === 3
+      ? new Float32Array([
+        frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
+        frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
+        frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
+      ])
+      : pack_lattice(lat)
     bond_periodic = !!lat
     bond_compute_opts = to_compute_options(bonding_options ?? {})
     // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
@@ -664,13 +613,10 @@
     atoms_dirty = true
     const sites = structure?.sites
     if (!sites || sites.length === 0) {
-      atom_positions = new Float32Array(0)
       atom_radii = new Float32Array(0)
       atom_colors = new Float32Array(0)
-      atom_count = 0
       return
     }
-    atom_positions = pack_positions(sites)
     // VISUAL sphere radius — matches the WebGL ball-and-stick display sizing
     // (atomic_radii[element] * atom_radius, with same_size / overrides). NOT
     // the covalent bond-cutoff radius (build_atom_radii) used by 9.3.
@@ -680,7 +626,6 @@
       element_radius_overrides,
       site_radius_overrides,
     })
-    atom_count = sites.length
     const cols = new Float32Array(sites.length * 3)
     for (let i = 0; i < sites.length; i++) {
       const elem = sites[i].species[0]?.element
@@ -694,7 +639,7 @@
   }
 
   function stop_session(): void {
-    session_token++ // invalidate any in-flight acquire_webgpu_device()
+    session_token++ // invalidate any in-flight get_webgpu_lease()
     if (raf_id) {
       cancelAnimationFrame(raf_id)
       raf_id = 0
@@ -778,8 +723,11 @@
     const scale_y = rect.height > 0 ? canvas.height / rect.height : 1
     const x = (client_x - rect.left) * scale_x
     const y = (client_y - rect.top) * scale_y
-    const idx = await renderer.pick(x, y)
-    on_pick(idx)
+    // pick() returns a ReplicaPickResult {kind, base_site, cell, ghost}. This
+    // pane renders visual-shared-base replicas, so every replica AND ghost
+    // folds back to its base site (design §7.3) — base_site IS the logical id.
+    const result = await renderer.pick(x, y)
+    on_pick(result.kind === `atom` ? result.base_site : -1)
   }
 
   /** True if `next` differs from the last uploaded camera uniform (epsilon
@@ -834,59 +782,84 @@
     let dirty = needs_render
     needs_render = false
 
-    // Rebuild atom buffers only when the structure / colors / radius inputs
-    // changed; re-upload + mark dirty on that same change. This uploads the
-    // BASE-frame positions packed from structure.sites — the per-frame override
-    // below replaces them with the live trajectory frame in the same frame.
+    // Rebuild the ADAPTER-resolved packet inputs (display radii + palette
+    // colors) only when the structure / colors / radius inputs changed. The
+    // rebuilt arrays get new identities, so the packet builder below bumps the
+    // topology version and the renderer re-uploads exactly those buffers.
     rebuild_atoms_if_needed()
     if (atoms_dirty) {
-      renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
       atoms_dirty = false
       dirty = true
     }
     // Structure IDENTITY / atom COUNT changed (supercell repeats, structure
-    // swap). The atom buffers above are now sized to the NEW set, but the
-    // per-frame POSITION buffer + GPU bond compute are still aligned to the OLD
-    // set — left stale they connect atoms at wrong positions (garbled
-    // bonds/spikes) until a later frame event bumps the version. So re-extract
-    // the CURRENT frame's positions for the NEW set NOW and force a bond
-    // recompute, in this same frame, AFTER set_atoms (buffers sized) and BEFORE
-    // the per-frame/bond push below. We reset the version/step trackers first so
-    // this forced refresh isn't skipped by the "≠ last_*" guard, and so the
-    // SUBSEQUENT genuine frame change (≠ these reset values) still triggers
-    // refresh_frame_positions normally.
+    // swap): the per-frame POSITION buffer + GPU bond compute are still aligned
+    // to the OLD set — left stale they connect atoms at wrong positions
+    // (garbled bonds/spikes) until a later frame event bumps the version. So
+    // re-extract the CURRENT frame's positions for the NEW set NOW and force a
+    // bond recompute, in this same frame, BEFORE the packet build below. We
+    // reset the version/step trackers first so this forced refresh isn't
+    // skipped by the "≠ last_*" guard, and so the SUBSEQUENT genuine frame
+    // change (≠ these reset values) still triggers refresh_frame_positions
+    // normally.
     if (topology_dirty) {
       topology_dirty = false
       last_pos_version = -1
       last_step_idx = -1
-      refresh_frame_positions() // sets positions_dirty (+ bonds_dirty if lattice moved)
+      refresh_frame_positions() // refills frame_positions (+ bonds_dirty if lattice moved)
       bonds_dirty = true // force the GPU bond compute against the consistent new positions
       dirty = true
     }
 
-    // Per-frame positions: re-upload ONLY xyz when the trajectory frame moved —
+    // Per-frame positions: re-extract ONLY when the trajectory frame moved —
     // EITHER the frame index advanced (normal playback / single-step / scrub)
     // OR the current frame's positions changed in place (version bump on edit).
-    // radii + colors stay as last uploaded. set_positions also flags the
-    // renderer's bonds dirty so the GPU bond compute re-runs against the moved
-    // atoms (bonds form/break as atoms move).
     if (
       trajectory_step_idx !== last_step_idx ||
-      (trajectory_positions_version?.v ?? -1) !== last_pos_version
+      (trajectory_positions_version?.v ?? -1) !== last_pos_version ||
+      frame_positions !== last_frame_positions_source ||
+      frame_lattice !== last_frame_lattice_source
     ) {
       refresh_frame_positions()
     }
-    if (positions_dirty) {
-      renderer.set_positions(frame_positions, atom_count)
-      positions_dirty = false
-      dirty = true
+
+    // ── Packet push (design §5): ONE version-gated upload channel replaces the
+    // old set_atoms / set_positions / set_supercell / set_show_images fan-out.
+    // The builder memoizes per sub-object: an unchanged scene returns the
+    // IDENTICAL packet, so this is identity-check cheap on idle frames; a plain
+    // frame advance re-uploads only 3N position floats (+ lattice when the cell
+    // moved); a supercell/policy change touches only replica state (never the
+    // bond graph). Bond detection stays on the renderer's GPU path — the packet
+    // carries no bond_graph here (set_bond_data below provides the inputs).
+    if (structure) {
+      const dims: [number, number, number] = [
+        Math.max(1, Math.floor(supercell?.[0] ?? 1)),
+        Math.max(1, Math.floor(supercell?.[1] ?? 1)),
+        Math.max(1, Math.floor(supercell?.[2] ?? 1)),
+      ]
+      const packet = packet_builder.build({
+        structure,
+        frame_positions: packet_frame_positions.length > 0
+          ? packet_frame_positions
+          : null,
+        frame_lattice,
+        frame_idx: trajectory_step_idx,
+        positions_version: trajectory_positions_version?.v ?? 0,
+        dims,
+        boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
+        colors: atom_colors.length > 0 ? atom_colors : null,
+        radii: atom_radii.length > 0 ? atom_radii : null,
+      })
+      if (packet !== last_pushed_packet) {
+        renderer.set_packet(packet, EMPTY_IMAGE_TABLE)
+        last_pushed_packet = packet
+        dirty = true
+      }
     }
 
     // Bond inputs: rebuild on structure/option change, then push to the renderer
-    // (which re-runs the GPU bond compute on its own dirty flag). Also re-push
-    // when atoms were re-uploaded, since set_atoms moves positions the compute
-    // depends on (the renderer already flags itself dirty there, but pushing
-    // keeps the covalent radii / count in lockstep with the atom buffer).
+    // (which re-runs the GPU bond compute on its own dirty flag). The packet
+    // push above already marks the renderer graph-dirty when positions moved;
+    // pushing here keeps the covalent radii / count in lockstep with the atoms.
     // Sync bond visibility (should_show_bonds) to the renderer FIRST. Toggling it
     // gates the renderer's bond compute pass AND bond draw; a flip always forces a
     // repaint so bonds appear/disappear immediately. On re-enable, the renderer
@@ -927,18 +900,8 @@
     // changed. Runs after the bond rebuild above so bond_lattice (the cell's
     // lattice source) is current for this frame — including variable-cell
     // trajectories where refresh_frame_positions re-packs it per frame.
+    // (Supercell dims + show_image_atoms travel in the packet above.)
     if (sync_cell()) dirty = true
-
-    // GPU supercell: push the instancing dims + base lattice when they changed.
-    // ncells > 1 makes the renderer draw base_count × nx·ny·nz sphere instances,
-    // each offset by ix·a + iy·b + iz·c (the CPU stays at the base cell). Default
-    // [1,1,1] ⇒ ncells 1 ⇒ identical draw to today.
-    if (sync_supercell()) dirty = true
-
-    // PBC image atoms: push the viewer's show_image_atoms flag so cross-cell bonds
-    // reach the displayed image atoms (full cylinders) when it is on, or stay stubs
-    // when off. Non-supercell only; supercell mode ignores it. Default off ⇒ stubs.
-    if (sync_show_images()) dirty = true
 
     // Selection highlight: mirror the app's selected_sites into the GPU highlight
     // buffer when it changed (overlay click OR external selection change).
@@ -1008,35 +971,35 @@
     // frame, and re-detect the lattice for variable-cell bonds.
     last_pos_version = -1
     last_step_idx = -1
+    last_frame_positions_source = undefined
+    last_frame_lattice_source = undefined
     frame_lattice_sig = ``
-    positions_dirty = false
+    // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
+    // the (possibly memoized-identical) packet is re-pushed and fully uploads.
+    last_pushed_packet = null
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
     last_bg = null
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
-    // Fresh renderer ⇒ its supercell defaults to [1,1,1]; force a re-push of the
-    // current dims + base lattice on the first frame.
-    supercell_sig = ``
-    // Fresh renderer ⇒ its show_image_atoms defaults to false; force a re-push of
-    // the current flag on the first frame.
-    show_images_sig = -1
+    // (Supercell dims + show_image_atoms travel in the packet — the cleared
+    // last_pushed_packet above already forces their full re-upload.)
     // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the
     // current selection on the first frame.
     selection_sig = ``
     needs_render = true
     stable_frames = 0
-    const device = await acquire_webgpu_device()
+    const lease = await get_webgpu_lease()
     // Bail if disabled / unmounted / superseded while awaiting.
     if (token !== session_token) return
-    if (!device) {
+    if (!lease) {
       on_fallback?.(`Large-system performance mode unavailable on this device — using the standard viewer.`)
       return
     }
     let r: LargeSystemRenderer
     try {
-      r = create_large_system_renderer(device, el)
+      r = create_large_system_renderer(lease.device, el)
     } catch (err) {
       on_fallback?.(`Large-system performance mode failed to start — using the standard viewer. (${err instanceof Error ? err.message : String(err)})`)
       return
@@ -1047,6 +1010,45 @@
     // the first size derivation (`renderer` is not reactive state, so the
     // hud_safe $effect below only covers LATER changes, not this initial value).
     r.set_gizmo_layout({ safe_left: hud_safe.l, safe_bottom: hud_safe.b })
+    // ── Device-loss transaction (Bonds T6) ─────────────────────────────────
+    // The renderer holds the ONE `device.lost` subscription for this lease
+    // and has already gated every submission (render/pick/setters no-op,
+    // in-flight readbacks discarded) by the time this fires — while RETAINING
+    // the packet/bond-graph owner, so nothing is cleared mid-swap. Here we:
+    //   1. stop this session's rAF loop (no further frame() work);
+    //   2. invalidate exactly THIS lease generation — a stale loss can never
+    //      clobber a newer lease, and a later re-enable acquires fresh;
+    //   3. notify the host EXACTLY ONCE (renderer-enforced). The host's swap
+    //      is atomic: the WebGL2+WASM renderer underneath stays mounted
+    //      (kept-warm canvas, same packet source), so one state flip resumes
+    //      it and unmounts this overlay in a single flush — no frame where
+    //      neither renderer is visible, none where both fight.
+    // Superseded sessions (token mismatch) ignore the stale event entirely.
+    r.on_device_lost(() => {
+      if (token !== session_token) return
+      if (raf_id) {
+        cancelAnimationFrame(raf_id)
+        raf_id = 0
+      }
+      invalidate_webgpu_lease(lease.generation)
+      on_fallback?.(
+        `Large-system WebGPU device was lost — switching to the standard viewer.`,
+      )
+    })
+    // Bond-work wake: candidate bond graphs validate ASYNC after the render
+    // that dispatched them (publication / overflow rerun happen in a LATER
+    // render). This dirty-gated loop suspends on stable frames, so on a
+    // static scene that later render would never come — the first bond graph
+    // (or a rules edit / overflow retry) would starve until the user moved
+    // the camera. The renderer signals each such transition; run one more
+    // dirty frame so it publishes/reruns. Fires once per resolved validation
+    // (never per render), so an idle published graph still lets the loop
+    // settle through the normal grace period. destroy() (stop_session)
+    // unregisters it.
+    r.on_bond_work(() => {
+      needs_render = true
+      wake()
+    })
     size_to_client(el)
 
     // Resize: repaint the new backing store and wake the loop if it had slept.
@@ -1132,15 +1134,15 @@
   })
 
   $effect(() => {
-    // Per-frame wake trigger. Track ONLY the position version (and the step
-    // index it indexes) so a trajectory frame change — playback tick, scrub, or
-    // single step — revives a suspended loop and renders that one frame. The
-    // `frame` does the actual re-extract + re-upload via refresh_frame_positions
-    // (gated on .v ≠ last_pos_version). Force the next frame to draw. Reading
-    // these here (not in the session effect) wakes without restarting the GPU
-    // session; when playback stops, .v stops bumping ⇒ no more wakes ⇒ the loop
-    // suspends after its grace period (idle-quiet).
-    void [trajectory_positions_version?.v, trajectory_step_idx]
+    // Per-frame wake trigger. Track the DIRECT base-frame inputs plus their
+    // version/index so playback, scrub, in-place edits, and variable-cell changes
+    // revive a suspended loop. No WebGL resolver participates.
+    void [
+      frame_positions,
+      frame_lattice,
+      trajectory_positions_version?.v,
+      trajectory_step_idx,
+    ]
     if (renderer) {
       needs_render = true
       wake()
@@ -1188,10 +1190,10 @@
 
   $effect(() => {
     // GPU-supercell wake trigger. Track the supercell dims so changing the
-    // requested supercell (e.g. 1×1×1 → 5×5×5) revives a suspended loop; the frame
-    // re-pushes via sync_supercell and repaints once with the new instance count.
-    // (Base-lattice changes are caught by the structure wake, which also drives
-    // the atom/cell rebuilds.)
+    // requested supercell (e.g. 1×1×1 → 5×5×5) revives a suspended loop; the
+    // frame's packet build bumps the replica version and repaints once with the
+    // new instance count. (Base-lattice changes are caught by the structure
+    // wake, which also drives the atom/cell rebuilds.)
     void [supercell[0], supercell[1], supercell[2]]
     if (renderer) {
       needs_render = true
@@ -1201,9 +1203,9 @@
 
   $effect(() => {
     // show_image_atoms wake trigger. Track the flag so toggling displayed PBC
-    // image atoms revives a suspended loop; the frame re-pushes via sync_show_images
-    // (which marks the renderer bonds dirty) and repaints once with full-to-image
-    // bonds (on) or stubs (off).
+    // image atoms revives a suspended loop; the frame's packet build flips the
+    // boundary policy (replica version bump — replica-only, no bond re-detect)
+    // and repaints once with full-to-image bonds (on) or stubs (off).
     void show_image_atoms
     if (renderer) {
       needs_render = true
@@ -1226,9 +1228,15 @@
 </script>
 
 {#if enabled}
+  <!-- Visual T6 render-surface marks: while mounted (enabled) this overlay IS
+       the visible renderer — the WebGL canvas below is suspended and marked
+       inactive in the same flush (StructureScene). Raster capture selects by
+       these attributes (scene/render-surface.ts). -->
   <canvas
     bind:this={canvas}
     class="large-system-overlay"
+    data-render-backend="webgpu"
+    data-render-active="true"
     style="position: absolute; inset: 0; width: 100%; height: 100%;"
   ></canvas>
 {/if}

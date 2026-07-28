@@ -10,12 +10,9 @@
     wrap_molecule_with_lattice_params,
     type LatticeParams
   } from './lattice-ops'
-  import { create_supercell_matrix, wasm_reorient_lattice, is_ok } from './ferrox-wasm'
-  import {
-    make_supercell as make_supercell_ts,
-    CPU_SUPERCELL_CELL_WARN_THRESHOLD,
-    GPU_SUPERCELL_MAX_INSTANCES,
-  } from './supercell'
+  import { wasm_reorient_lattice, is_ok } from './ferrox-wasm'
+  import type { SupercellOp, SupercellRequestResult } from './supercell-operation'
+  import { create_supercell_request_handler } from './workers/supercell-worker-api'
   import type { Crystal } from './index'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
@@ -36,17 +33,19 @@
     on_structure_change,
     on_push_undo,
     on_reset_view,
+    on_supercell_request,
     ...rest
   }: Omit<HTMLAttributes<HTMLDivElement>, 'onclose'> & {
     structure?: AnyStructure
     pane_open?: boolean
     center_camera_trigger?: number
-    // Logical supercell factor ("NxNxN"). When the WebGPU overlay is ON, a
-    // diagonal-integer transform sets this instead of materializing atoms on the
-    // CPU — routing to the GPU instancing path (no freeze).
+    // Logical supercell factor ("NxNxN") for the renderer's VISUAL replication
+    // control. Kept bindable for host compatibility, but Build → Supercell no
+    // longer writes it: a Build supercell is always a true edit (design §9.1).
     supercell_scaling?: string
-    // WebGPU large-system overlay state. ON ⇒ diagonal supercell goes to GPU
-    // instancing. OFF ⇒ CPU build (guarded against huge factors).
+    // WebGPU large-system overlay state. Renderer selection ONLY — it must
+    // never alter Build semantics (design §9.2), so no supercell code path
+    // reads it anymore.
     large_system_mode?: boolean
     embedded?: boolean
     toggle_props?: ComponentProps<typeof DraggablePane>['toggle_props']
@@ -54,6 +53,12 @@
     on_structure_change?: (structure: PymatgenStructure) => void
     on_push_undo?: () => void
     on_reset_view?: () => void
+    // §9.1 explicit operation channel: when provided, Build → Supercell
+    // delegates the SupercellOp here BEFORE any local mutation, undo push, or
+    // renderer-specific shortcut. The host (Structure/Trajectory) owns
+    // execution, publication, and history. When absent (bare LatticePane), a
+    // local staged executor runs through the same operation type.
+    on_supercell_request?: (op: SupercellOp) => Promise<SupercellRequestResult>
   } = $props()
 
   // Active tab
@@ -118,150 +123,82 @@
     return reorient_lattice(s)
   }
 
-  // Helper to check if matrix is diagonal (allowing small floating point errors)
-  function is_diagonal_matrix(m: typeof transform): boolean {
-    const eps = 1e-6
-    return Math.abs(m[0][1]) < eps && Math.abs(m[0][2]) < eps &&
-           Math.abs(m[1][0]) < eps && Math.abs(m[1][2]) < eps &&
-           Math.abs(m[2][0]) < eps && Math.abs(m[2][1]) < eps
+  // Snap near-integer number-input values so "2.0000001" isn't rejected as a
+  // non-integer supercell entry; a genuinely fractional value passes through
+  // and is rejected by validation with a clear message.
+  function snap_int(value: number): number {
+    return Math.abs(value - Math.round(value)) < 1e-6 ? Math.round(value) : value
   }
 
-  // Helper to check if a value is a positive integer (allowing small fp errors)
-  function is_positive_integer(n: number): boolean {
-    return Math.abs(n - Math.round(n)) < 1e-6 && Math.round(n) >= 1
-  }
+  // Monotonic token for locally executed supercell history entries.
+  let local_supercell_seq = 0
 
-  // A pure diagonal supercell: diagonal matrix with positive integers on the
-  // diagonal ⇒ factors (nx,ny,nz) = (m00,m11,m22). GPU axis-aligned instancing
-  // can represent exactly this; non-diagonal / non-integer ⇒ null.
-  function diagonal_supercell_factors(
-    m: typeof transform,
-  ): [number, number, number] | null {
-    if (!is_diagonal_matrix(m)) return null
-    const [nx, ny, nz] = [m[0][0], m[1][1], m[2][2]]
-    if (!is_positive_integer(nx) || !is_positive_integer(ny) || !is_positive_integer(nz)) {
-      return null
-    }
-    return [Math.round(nx), Math.round(ny), Math.round(nz)]
-  }
+  /** §9.1 handler (shared wrapper, see create_supercell_request_handler):
+   *  delegates to the host when `on_supercell_request` is provided (a throwing
+   *  host counts as rejection — nothing mutated either way); otherwise runs
+   *  the staged executor locally and publishes ATOMICALLY — undo entry
+   *  (pre-op state) + single structure replacement only after success, and
+   *  only if the structure was not replaced mid-flight (stale completions
+   *  publish nothing; a superseding request aborts the in-flight one). */
+  const handle_supercell = create_supercell_request_handler({
+    delegate: () => on_supercell_request,
+    get_structure: () => structure,
+    snapshot: (live) => $state.snapshot(live) as PymatgenStructure,
+    push_undo: () => on_push_undo?.(),
+    publish: ({ structure: new_structure }) => {
+      structure = new_structure
+      on_structure_change?.(new_structure)
+    },
+    history_token: () => `lattice-pane-supercell-${++local_supercell_seq}`,
+  })
 
   async function apply_transform() {
     if (!structure || !has_lattice) return
 
     if (transform_mode === 'supercell') {
-      const diag = diagonal_supercell_factors(transform)
+      // Build the explicit operation (design §9.1). `large_system_mode` is
+      // renderer state and must NOT route here: a Build supercell is always a
+      // true edit, never visual replication.
+      const op: SupercellOp = {
+        kind: 'supercell',
+        matrix: [
+          [snap_int(transform[0][0]), snap_int(transform[0][1]), snap_int(transform[0][2])],
+          [snap_int(transform[1][0]), snap_int(transform[1][1]), snap_int(transform[1][2])],
+          [snap_int(transform[2][0]), snap_int(transform[2][1]), snap_int(transform[2][2])],
+        ],
+        reorient: true,
+      }
 
-      // ── Diagonal-integer supercell: route by overlay state ──────────────────
-      if (diag) {
-        const [nx, ny, nz] = diag
-        const ncells = nx * ny * nz
-        const base_sites = (structure as PymatgenStructure).sites?.length ?? 0
-
-        if (large_system_mode) {
-          // Overlay ON: skip the CPU expand entirely. Set the logical factor so
-          // Structure.svelte's gpu_supercell_active routes to GPU instancing
-          // (CPU keeps the base cell — no materialization, no freeze).
-          const est_instances = base_sites * ncells
-          if (
-            est_instances > 0 &&
-            est_instances > GPU_SUPERCELL_MAX_INSTANCES
-          ) {
-            console.warn(
-              `[LatticePane] Refusing supercell ${nx}x${ny}x${nz}: ` +
-                `~${est_instances.toLocaleString()} GPU instances exceeds the soft cap of ` +
-                `${GPU_SUPERCELL_MAX_INSTANCES.toLocaleString()}. Reduce the factor to avoid a GPU hang.`,
-            )
-            return
-          }
-          on_push_undo?.()
-          supercell_scaling = `${nx}x${ny}x${nz}`
+      transform_loading = true
+      try {
+        // Delegation-first (§9.1) and the staged local path both live in the
+        // shared handler — it never throws (a misbehaving host callback
+        // surfaces as 'rejected'), so no local mutation or undo push can
+        // precede the host's decision.
+        const result = await handle_supercell(op)
+        if (result.status === 'applied') {
           on_reset_view?.()
           center_camera_trigger++
           transform = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-          return
+        } else if (result.status === 'rejected') {
+          // Keep the entered matrix so the user can correct it.
+          console.warn(`[LatticePane] Supercell rejected: ${result.message}`)
         }
-
-        // Overlay OFF: a large CPU build would freeze the tab. Guard + warn.
-        if (ncells > CPU_SUPERCELL_CELL_WARN_THRESHOLD) {
-          console.warn(
-            `[LatticePane] Refusing supercell ${nx}x${ny}x${nz} (${ncells} cells): WebGPU ` +
-              `large-system mode is OFF, so this would build on the CPU and freeze the tab. ` +
-              `Enable WebGPU large-system mode to view without freezing.`,
-          )
-          return
-        }
-        // else: small diagonal factor, overlay off ⇒ fall through to CPU build.
-      }
-
-      // Use WASM for supercell generation (non-diagonal lattice transform, or a
-      // small diagonal factor with the overlay off).
-      on_push_undo?.()
-      transform_loading = true
-
-      // Helper to apply TypeScript fallback
-      const apply_ts_fallback = async () => {
-        const [nx, ny, nz] = [transform[0][0], transform[1][1], transform[2][2]]
-        console.log(`[LatticePane] Attempting TypeScript fallback with diagonal [${nx}, ${ny}, ${nz}]`)
-
-        if (!is_diagonal_matrix(transform)) {
-          console.error(`[LatticePane] Cannot use TypeScript fallback: matrix is not diagonal`)
-          console.error(`[LatticePane] Matrix: [[${transform[0].join(',')}], [${transform[1].join(',')}], [${transform[2].join(',')}]]`)
-          return false
-        }
-
-        const is_integer = (n: number): boolean => Math.abs(n - Math.round(n)) < 1e-6
-        if (!is_integer(nx) || !is_integer(ny) || !is_integer(nz)) {
-          console.error(`[LatticePane] Cannot use TypeScript fallback: diagonal values are not integers`)
-          return false
-        }
-
-        try {
-          const supercell = make_supercell_ts(structure as PymatgenStructure, [Math.round(nx), Math.round(ny), Math.round(nz)])
-          const new_structure = await reorient_with_fallback(supercell)
-          structure = new_structure
-          on_structure_change?.(new_structure)
-          console.log('[LatticePane] TypeScript supercell succeeded')
-          return true
-        } catch (tsError) {
-          console.error('[LatticePane] TypeScript supercell failed:', tsError)
-          return false
-        }
-      }
-
-      try {
-        const result = await create_supercell_matrix(structure as Crystal, transform)
-        if (is_ok(result)) {
-          const new_structure = await reorient_with_fallback(result.ok as PymatgenStructure)
-          structure = new_structure
-          on_structure_change?.(new_structure)
-          on_reset_view?.()
-          center_camera_trigger++
-        } else {
-          console.error('[LatticePane] WASM supercell failed:', result.error)
-          if (await apply_ts_fallback()) {
-            on_reset_view?.()
-            center_camera_trigger++
-          }
-        }
-      } catch (error) {
-        console.error('[LatticePane] WASM supercell threw exception:', error)
-        if (await apply_ts_fallback()) {
-          on_reset_view?.()
-          center_camera_trigger++
-        }
+        // 'stale': superseded by a newer operation — publish/reset nothing.
       } finally {
         transform_loading = false
       }
-    } else {
-      // Lattice-only transform (TypeScript) — also try WASM reorient
-      on_push_undo?.()
-      const transformed = apply_transform_matrix(structure as PymatgenStructure, transform)
-      const new_structure = await reorient_with_fallback(transformed)
-      structure = new_structure
-      on_structure_change?.(new_structure)
-      on_reset_view?.()
-      center_camera_trigger++
+      return
     }
+
+    // Lattice-only transform (TypeScript) — also try WASM reorient
+    on_push_undo?.()
+    const transformed = apply_transform_matrix(structure as PymatgenStructure, transform)
+    const new_structure = await reorient_with_fallback(transformed)
+    structure = new_structure
+    on_structure_change?.(new_structure)
+    on_reset_view?.()
+    center_camera_trigger++
 
     // Reset transform matrix
     transform = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]

@@ -26,6 +26,13 @@
  *   indices they occupied. Used instead of a full structure snapshot
  *   on Delete keystrokes to avoid O(N) cloning for large structures.
  *
+ * - `kind: 'external'` — a `history_token` correlating an edit that an
+ *   OUTSIDE owner (the trajectory pane's supercell transaction system)
+ *   applied and knows how to reverse. Deliberately carries NO structure
+ *   snapshot: the owner toggles its own ledger entry / restores its own
+ *   immutable frame references and republishes. Undo/redo of these
+ *   entries round-trips the token through `on_external_history_toggle`.
+ *
  * On Ctrl+Z the dispatcher in `Structure.svelte` pops the top entry
  * and routes to the appropriate restore path based on `kind`.
  *
@@ -85,18 +92,29 @@ export type UndoEntry =
   | { kind: 'structure'; structure: AnyStructure }
   | { kind: 'bond'; array_inverse: BondArrayInverse }
   | { kind: 'atom'; atom_inverse: AtomArrayInverse }
+  | { kind: 'external'; history_token: string }
+
+/**
+ * Redo stack entries. `structure` wraps a forward snapshot (the state the
+ * user undid FROM — legacy geometry redo); `external` re-applies an
+ * owner-side edit by token, holding no snapshot at all.
+ */
+export type RedoEntry =
+  | { kind: 'structure'; structure: AnyStructure }
+  | { kind: 'external'; history_token: string }
 
 // ─── Factory ───
 
 export function create_selection_state() {
   // Tagged undo history (see module-level doc)
   let undo_history: UndoEntry[] = $state([])
-  // Redo stack of forward structure snapshots. Captured by undo() (the state
-  // the user undid FROM) so redo() can restore it. Snapshot-based: covers all
-  // geometry edits (slab/supercell/lattice/substitute/atom add·move·delete);
-  // manual pencil bond edits are not part of redo. Any fresh edit
-  // (push_*_entry) invalidates the redo branch.
-  let redo_history: AnyStructure[] = $state([])
+  // Redo stack (tagged union, see RedoEntry). Structure-kind entries are
+  // forward snapshots captured by undo() (the state the user undid FROM) so
+  // redo() can restore them: covers all geometry edits (slab/supercell/
+  // lattice/substitute/atom add·move·delete); manual pencil bond edits are
+  // not part of redo. External-kind entries carry only the owner's
+  // history_token. Any fresh edit (push_*_entry) invalidates the redo branch.
+  let redo_history: RedoEntry[] = $state([])
   let selection_history: number[][] = $state([])
 
   // Selection opacity slider value
@@ -138,6 +156,14 @@ export function create_selection_state() {
     redo_history = []
   }
 
+  // External (owner-managed) edit: record only the correlation token — never
+  // a structure snapshot. `clear_redo` mirrors push_structure_entry: true for
+  // a genuine new edit, false when redo() re-pushes its own undo entry.
+  function push_external_entry(history_token: string, clear_redo = true): void {
+    undo_history = trim([...undo_history, { kind: 'external', history_token }])
+    if (clear_redo) redo_history = []
+  }
+
   /** Pop the most recent entry, or null if empty. Caller dispatches on `kind`. */
   function pop_entry(): UndoEntry | null {
     if (undo_history.length === 0) return null
@@ -146,20 +172,37 @@ export function create_selection_state() {
     return entry
   }
 
+  function push_redo_entry(entry: RedoEntry): void {
+    redo_history = redo_history.length >= MAX_UNDO_HISTORY
+      ? [...redo_history.slice(1), entry]
+      : [...redo_history, entry]
+  }
+
   /** Push a forward structure snapshot onto the redo stack (called by undo()). */
   function push_redo(structure: AnyStructure): void {
     const snapshot = $state.snapshot(structure) as AnyStructure
-    redo_history = redo_history.length >= MAX_UNDO_HISTORY
-      ? [...redo_history.slice(1), snapshot]
-      : [...redo_history, snapshot]
+    push_redo_entry({ kind: 'structure', structure: snapshot })
   }
 
-  /** Pop the most recent redo snapshot, or null. */
-  function pop_redo(): AnyStructure | null {
+  /** Push an external redo token onto the redo stack (undo() of an external entry). */
+  function push_external_redo(history_token: string): void {
+    push_redo_entry({ kind: 'external', history_token })
+  }
+
+  /** Pop the most recent redo entry, or null. Caller dispatches on `kind`. */
+  function pop_redo_entry(): RedoEntry | null {
     if (redo_history.length === 0) return null
-    const s = redo_history[redo_history.length - 1]
+    const entry = redo_history[redo_history.length - 1]
     redo_history = redo_history.slice(0, -1)
-    return s
+    return entry
+  }
+
+  /** Legacy snapshot-only pop: returns the structure of a structure-kind
+   * entry, or null (an external entry is consumed but yields no snapshot).
+   * Production dispatch uses pop_redo_entry. */
+  function pop_redo(): AnyStructure | null {
+    const entry = pop_redo_entry()
+    return entry?.kind === 'structure' ? entry.structure : null
   }
 
   function push_selection_to_undo(selected_sites: number[]) {
@@ -200,9 +243,12 @@ export function create_selection_state() {
     push_structure_entry,
     push_bond_entry,
     push_atom_entry,
+    push_external_entry,
     pop_entry,
     push_redo,
+    push_external_redo,
     pop_redo,
+    pop_redo_entry,
     push_selection_to_undo,
     MAX_UNDO_HISTORY,
   }

@@ -10,6 +10,43 @@
 import type { AnyStructure } from '$lib/structure'
 import type { Vec3 } from '$lib/math'
 import { get_center_of_mass } from '$lib/structure'
+import { parse_supercell_scaling } from '$lib/structure/supercell'
+
+// ─── Visual Replication Routing (Visual T6) ───
+
+/**
+ * Parse the viewer's bottom-right visual supercell control ("2x2x2", "3",
+ * …) into replica dims. Malformed input falls back to the identity
+ * [1, 1, 1] (no replication) instead of throwing — the control is a live
+ * text input.
+ */
+export function parse_visual_dims(scaling: string): Vec3 {
+  try {
+    return parse_supercell_scaling(scaling)
+  } catch {
+    return [1, 1, 1]
+  }
+}
+
+/**
+ * Semantic routing for visual replication. View-only by construction: the
+ * decision depends ONLY on structure periodicity, the requested replica
+ * dims, and whether a trajectory packet owns the base cell — NEVER on the
+ * render backend (WebGPU overlay vs WebGL2 vs legacy). When true, the
+ * replica dims travel exclusively as a `ReplicaLayout` inside the render
+ * packet; the scientific structure stays at the base effective frame.
+ * (True scientific supercells are the explicit Build/LatticePane operation
+ * channel — a separate transaction path.)
+ */
+export function visual_replication_active(opts: {
+  has_lattice: boolean
+  dims: Vec3
+  trajectory_packet_active: boolean
+}): boolean {
+  if (!opts.has_lattice) return false
+  if (opts.trajectory_packet_active) return true
+  return opts.dims[0] * opts.dims[1] * opts.dims[2] > 1
+}
 
 // ─── Image Atom Helpers ───
 

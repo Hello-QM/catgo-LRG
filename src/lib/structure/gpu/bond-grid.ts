@@ -98,7 +98,9 @@ export function compute_aabb(
   let minx = Infinity, miny = Infinity, minz = Infinity
   let maxx = -Infinity, maxy = -Infinity, maxz = -Infinity
   for (let i = 0; i < n; i++) {
-    const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2]
+    const x = positions[i * 3],
+      y = positions[i * 3 + 1],
+      z = positions[i * 3 + 2]
     if (x < minx) minx = x
     if (y < miny) miny = y
     if (z < minz) minz = z
@@ -122,23 +124,38 @@ export function aabb_grid_dims(
   return [dim(min[0], max[0]), dim(min[1], max[1]), dim(min[2], max[2])]
 }
 
-/** Build the full grid plan for one bond-detection dispatch.
- *  - periodic: dims from lattice vector lengths; use_grid only when ALL dims ≥ 3.
- *  - non-periodic: dims from the atom AABB; use_grid always true.
- *  positions/n are only consulted for the non-periodic AABB. */
-export function plan_grid(args: {
+/** Inputs to one grid-sizing / bond-dispatch decision. Shared by `plan_grid`
+ *  (which sizes the uniform grid) and the backend dispatch policy (which decides
+ *  GPU grid vs. Rust WASM vs. direct all-pairs from the same fields).
+ *  - `periodic`: bin in fractional space against `lattice`; else bin over the AABB.
+ *  - `lattice`: row-major rows a,b,c (9 floats). Only read when periodic.
+ *  - `positions`/`n`: interleaved xyz (3·n floats). Only read for the AABB when
+ *    non-periodic. */
+export type GridInput = {
   periodic: boolean
   lattice: Float32Array
   max_bond_dist: number
   positions: Float32Array
   n: number
-}): GridPlan {
+}
+
+/** Build the full grid plan for one bond-detection dispatch.
+ *  - periodic: dims from lattice vector lengths; use_grid only when ALL dims ≥ 3.
+ *  - non-periodic: dims from the atom AABB; use_grid always true.
+ *  positions/n are only consulted for the non-periodic AABB.
+ *
+ *  NOTE: a periodic thin cell (any dim < MIN_GRID_DIM) still reports
+ *  `use_grid: false` here — that is the grid-unusable SIGNAL. The dispatch policy
+ *  (`plan_bond_dispatch`) reads it and routes those cases to Rust WASM rather than
+ *  the old O(N²) all-pairs GPU shader; see bond-backend-policy.ts. */
+export function plan_grid(args: GridInput): GridPlan {
   const { periodic, lattice, max_bond_dist, positions, n } = args
   const inv_h = max_bond_dist > 0 ? 1 / max_bond_dist : 0
 
   if (periodic) {
     const dims = periodic_grid_dims(lattice, max_bond_dist)
-    const use_grid = dims[0] >= MIN_GRID_DIM && dims[1] >= MIN_GRID_DIM && dims[2] >= MIN_GRID_DIM
+    const use_grid = dims[0] >= MIN_GRID_DIM && dims[1] >= MIN_GRID_DIM &&
+      dims[2] >= MIN_GRID_DIM
     return {
       use_grid,
       dims,

@@ -12,7 +12,7 @@
 >
 > **Desktop client only** — the surrounding workbench *shell*, which the extension does **not** load: the **multi-pane tabbed workspace** (tabs / split-view / pop-out windows), the standalone **visual workflow DAG editor**, and the **HPC terminal & job manager**.
 >
-> For the full workbench use the **[CatGo desktop client](https://github.com/Hello-QM/catgo-LRG/releases)** (Windows / macOS / Linux) or the **[web app](https://app.catgo-ucsd.org)**.
+> For the full workbench use the **[CatGo desktop client](https://dl.catgo-ucsd.org/)** (Windows / macOS / Linux) or the **[web app](https://app.catgo-ucsd.org)**.
 
 ## ✨ Features
 
@@ -189,7 +189,17 @@ If you encounter any issues with CatGo, you can use the built-in bug reporting c
 
 ## 📄 License
 
-This extension is licensed under the [GNU AGPL-3.0](./license), matching the [catgo-LRG repository](https://github.com/Hello-QM/catgo-LRG).
+This extension is distributed under [AGPL-3.0-or-later](./license). If CatGo
+contributes to your work, please include the acknowledgement and preferred
+citation below. This request is not an additional condition of the AGPL
+license.
+
+> This work used CatGo (https://catgo-ucsd.org).
+
+Please cite CatGo using the preferred ChemRxiv DOI
+[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1).
+See the repository's [CITATION.cff](../../CITATION.cff) for the canonical
+citation metadata.
 
 ## 🔗 Related Projects
 

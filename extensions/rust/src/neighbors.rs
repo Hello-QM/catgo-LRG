@@ -105,6 +105,209 @@ impl NeighborList {
         self.distances.extend(other.distances);
         self.images.extend(other.images);
     }
+
+    fn clear(&mut self) {
+        self.center_indices.clear();
+        self.neighbor_indices.clear();
+        self.distances.clear();
+        self.images.clear();
+    }
+
+    fn extend_from(&mut self, other: &NeighborList) {
+        self.center_indices.extend_from_slice(&other.center_indices);
+        self.neighbor_indices
+            .extend_from_slice(&other.neighbor_indices);
+        self.distances.extend_from_slice(&other.distances);
+        self.images.extend_from_slice(&other.images);
+    }
+}
+
+/// Allocation and fixed-grid reuse counters for a neighbor-search workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NeighborWorkspaceStats {
+    /// Number of frames that reused an identical fully periodic grid plan.
+    pub grid_cache_hits: u64,
+    /// Number of grid plans built from lattice and/or coordinate geometry.
+    pub grid_rebuilds: u64,
+    /// Number of workspace vectors whose capacity grew.
+    pub capacity_growths: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FixedPeriodicGridKey {
+    atom_count: usize,
+    cutoff_bits: u64,
+    lattice_bits: [u64; 9],
+    pbc: [bool; 3],
+}
+
+impl FixedPeriodicGridKey {
+    fn new(atom_count: usize, lattice: &Lattice, cutoff: f64) -> Self {
+        let matrix = lattice.matrix();
+        let mut lattice_bits = [0u64; 9];
+        for (bits, value) in lattice_bits.iter_mut().zip(matrix.iter()) {
+            *bits = value.to_bits();
+        }
+        Self {
+            atom_count,
+            cutoff_bits: cutoff.to_bits(),
+            lattice_bits,
+            pbc: lattice.pbc,
+        }
+    }
+}
+
+struct CellGridPlan {
+    n_bins: [usize; 3],
+    origin_frac: [f64; 3],
+    extent_frac: [f64; 3],
+    bin_size_frac: [f64; 3],
+    stencil: Vec<[i32; 3]>,
+    pbc: [bool; 3],
+}
+
+impl CellGridPlan {
+    fn build(frac_coords: &[Vector3<f64>], lattice: &Lattice, cutoff: f64) -> Self {
+        let n_atoms = frac_coords.len();
+        let pbc = lattice.pbc;
+        let matrix = lattice.matrix();
+        let lattice_vecs = [
+            matrix.row(0).transpose(),
+            matrix.row(1).transpose(),
+            matrix.row(2).transpose(),
+        ];
+        let volume = lattice.volume();
+        let heights: [f64; 3] = std::array::from_fn(|idx| {
+            let cross = lattice_vecs[(idx + 1) % 3].cross(&lattice_vecs[(idx + 2) % 3]);
+            volume / cross.norm()
+        });
+
+        let mut origin_frac = [0.0f64; 3];
+        let mut extent_frac = [1.0f64; 3];
+        for axis in 0..3 {
+            if !pbc[axis] {
+                let mut fmin = f64::MAX;
+                let mut fmax = f64::MIN;
+                for frac in frac_coords {
+                    fmin = fmin.min(frac[axis]);
+                    fmax = fmax.max(frac[axis]);
+                }
+                if n_atoms == 0 {
+                    fmin = 0.0;
+                    fmax = 1.0;
+                }
+                origin_frac[axis] = fmin;
+                extent_frac[axis] = (fmax - fmin).max(1e-9);
+            }
+        }
+
+        let axis_cap = (((n_atoms as f64).cbrt().ceil() as usize) * 2).max(1);
+        let n_bins: [usize; 3] = std::array::from_fn(|axis| {
+            let domain_cart = heights[axis] * extent_frac[axis];
+            ((domain_cart / cutoff).floor() as usize).clamp(1, axis_cap)
+        });
+        let bin_size_frac: [f64; 3] =
+            std::array::from_fn(|axis| extent_frac[axis] / n_bins[axis] as f64);
+        let radius: [i32; 3] = std::array::from_fn(|axis| {
+            let bin_cart = heights[axis] * bin_size_frac[axis];
+            let radius = (cutoff / bin_cart).floor() as i32 + 1;
+            if pbc[axis] {
+                radius
+            } else {
+                radius.min(n_bins[axis] as i32 - 1).max(0)
+            }
+        });
+        let mut stencil = Vec::with_capacity(
+            ((2 * radius[0] + 1) * (2 * radius[1] + 1) * (2 * radius[2] + 1)) as usize,
+        );
+        for dx in -radius[0]..=radius[0] {
+            for dy in -radius[1]..=radius[1] {
+                for dz in -radius[2]..=radius[2] {
+                    stencil.push([dx, dy, dz]);
+                }
+            }
+        }
+
+        Self {
+            n_bins,
+            origin_frac,
+            extent_frac,
+            bin_size_frac,
+            stencil,
+            pbc,
+        }
+    }
+}
+
+fn reserve_total_tracked<T>(
+    values: &mut Vec<T>,
+    needed: usize,
+    stats: &mut NeighborWorkspaceStats,
+) {
+    if values.capacity() < needed {
+        values.reserve(needed.saturating_sub(values.len()));
+        stats.capacity_growths += 1;
+    }
+}
+
+fn clear_and_reserve_tracked<T>(
+    values: &mut Vec<T>,
+    needed: usize,
+    stats: &mut NeighborWorkspaceStats,
+) {
+    values.clear();
+    reserve_total_tracked(values, needed, stats);
+}
+
+fn clear_and_resize_tracked<T: Clone>(
+    values: &mut Vec<T>,
+    needed: usize,
+    value: T,
+    stats: &mut NeighborWorkspaceStats,
+) {
+    clear_and_reserve_tracked(values, needed, stats);
+    values.resize(needed, value);
+}
+
+fn neighbor_capacities(neighbors: &NeighborList) -> [usize; 4] {
+    [
+        neighbors.center_indices.capacity(),
+        neighbors.neighbor_indices.capacity(),
+        neighbors.distances.capacity(),
+        neighbors.images.capacity(),
+    ]
+}
+
+fn capacity_change_count(before: [usize; 4], after: [usize; 4]) -> u64 {
+    before
+        .into_iter()
+        .zip(after)
+        .filter(|(old, new)| new > old)
+        .count() as u64
+}
+
+fn prepare_neighbor_list(
+    neighbors: &mut NeighborList,
+    estimated_pairs: usize,
+    stats: &mut NeighborWorkspaceStats,
+) {
+    neighbors.clear();
+    reserve_total_tracked(&mut neighbors.center_indices, estimated_pairs, stats);
+    reserve_total_tracked(&mut neighbors.neighbor_indices, estimated_pairs, stats);
+    reserve_total_tracked(&mut neighbors.distances, estimated_pairs, stats);
+    reserve_total_tracked(&mut neighbors.images, estimated_pairs, stats);
+}
+
+/// Grow-only scratch and grid cache for repeated exact neighbor searches.
+#[derive(Default)]
+pub struct NeighborSearchWorkspace {
+    fixed_periodic_key: Option<FixedPeriodicGridKey>,
+    grid_plan: Option<CellGridPlan>,
+    cell_list: CellList,
+    neighbors: NeighborList,
+    #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
+    rayon_partials: Vec<NeighborList>,
+    stats: NeighborWorkspaceStats,
 }
 
 /// Internal cell-list structure for spatial binning.
@@ -130,14 +333,17 @@ impl NeighborList {
 /// arrays (`xs`/`ys`/`zs`), so the inner distance loop streams contiguous
 /// memory — cache-friendly, bounds-check-free, and SIMD-vectorizable (see
 /// `scan_bin_hits` for the wasm simd128 f64x2 path).
+#[derive(Default)]
 struct CellList {
     /// CSR bin offsets into `bin_atoms`/`xs`/`ys`/`zs`; length total_bins + 1.
     bin_start: Vec<u32>,
     /// Atom indices sorted by bin (ascending within each bin — the counting
     /// sort is stable, matching the previous `Vec<Vec<usize>>` push order).
     bin_atoms: Vec<u32>,
-    /// Number of bins along each axis [nx, ny, nz].
-    n_bins: [usize; 3],
+    /// Per-atom linear bin index used by the stable counting sort.
+    atom_linear_bin: Vec<u32>,
+    /// Counting-sort cursor scratch, one entry per bin.
+    cursor: Vec<u32>,
     /// Per-atom 3D bin coordinates (original atom order).
     atom_bins: Vec<[usize; 3]>,
     /// Per-atom integer wrap shift on periodic axes (s = floor(frac)).
@@ -149,159 +355,86 @@ struct CellList {
     zs: Vec<f64>,
     /// Wrapped Cartesian per original atom index (center-side lookups).
     wrapped_cart: Vec<Vector3<f64>>,
-    /// Bin-offset stencil covering the cutoff, including [0,0,0].
-    stencil: Vec<[i32; 3]>,
-    pbc: [bool; 3],
 }
 
 impl CellList {
-    /// Build a cell list from fractional coordinates.
-    fn build(frac_coords: &[Vector3<f64>], lattice: &Lattice, cutoff: f64) -> Self {
+    /// Rebuild frame occupancy while retaining all vector allocations.
+    fn rebuild(
+        &mut self,
+        frac_coords: &[Vector3<f64>],
+        lattice: &Lattice,
+        plan: &CellGridPlan,
+        stats: &mut NeighborWorkspaceStats,
+    ) {
         let n_atoms = frac_coords.len();
-        let pbc = lattice.pbc;
-
         let matrix = lattice.matrix();
-        let lattice_vecs = [
-            matrix.row(0).transpose(),
-            matrix.row(1).transpose(),
-            matrix.row(2).transpose(),
-        ];
-        let volume = lattice.volume();
-
-        // Perpendicular height per axis: height_i = volume / |a_{i+1} × a_{i+2}|.
-        // This is the correct per-axis distance metric for skewed cells.
-        let heights: [f64; 3] = std::array::from_fn(|idx| {
-            let cross = lattice_vecs[(idx + 1) % 3].cross(&lattice_vecs[(idx + 2) % 3]);
-            volume / cross.norm()
-        });
-
-        // Axis domains: periodic → the full cell [0,1); non-periodic → the
-        // atoms' fractional extent (a molecule in a huge bounding box only
-        // bins the region that actually contains atoms).
-        let mut origin_frac = [0.0f64; 3];
-        let mut extent_frac = [1.0f64; 3];
-        for axis in 0..3 {
-            if !pbc[axis] {
-                let mut fmin = f64::MAX;
-                let mut fmax = f64::MIN;
-                for frac in frac_coords {
-                    fmin = fmin.min(frac[axis]);
-                    fmax = fmax.max(frac[axis]);
-                }
-                if n_atoms == 0 {
-                    fmin = 0.0;
-                    fmax = 1.0;
-                }
-                origin_frac[axis] = fmin;
-                extent_frac[axis] = (fmax - fmin).max(1e-9);
-            }
-        }
-
-        // Bin counts: bin span ≥ cutoff where the domain allows. Cap the
-        // grid at ~2·∛n per axis so a sparse gas in a huge box doesn't
-        // allocate an absurd number of empty bins (bigger bins stay correct
-        // — the stencil radius shrinks to match).
-        let axis_cap = (((n_atoms as f64).cbrt().ceil() as usize) * 2).max(1);
-        let n_bins: [usize; 3] = std::array::from_fn(|axis| {
-            let domain_cart = heights[axis] * extent_frac[axis];
-            ((domain_cart / cutoff).floor() as usize).clamp(1, axis_cap)
-        });
-        let bin_size_frac: [f64; 3] =
-            std::array::from_fn(|axis| extent_frac[axis] / n_bins[axis] as f64);
-
-        // Stencil radius per axis: how many bin slabs the cutoff can span.
-        // Atoms sit anywhere inside their bins, so bins offset by k contain
-        // candidates whenever (k-1)·bin_height ≤ cutoff → R = ⌊cutoff/bin⌋+1.
-        // Non-periodic axes never need offsets beyond the grid itself.
-        let radius: [i32; 3] = std::array::from_fn(|axis| {
-            let bin_cart = heights[axis] * bin_size_frac[axis];
-            let r = (cutoff / bin_cart).floor() as i32 + 1;
-            if pbc[axis] { r } else { r.min(n_bins[axis] as i32 - 1).max(0) }
-        });
-        let mut stencil = Vec::with_capacity(
-            ((2 * radius[0] + 1) * (2 * radius[1] + 1) * (2 * radius[2] + 1)) as usize,
-        );
-        for dx in -radius[0]..=radius[0] {
-            for dy in -radius[1]..=radius[1] {
-                for dz in -radius[2]..=radius[2] {
-                    stencil.push([dx, dy, dz]);
-                }
-            }
-        }
-
-        let total_bins = n_bins[0] * n_bins[1] * n_bins[2];
-        let mut atom_bins = Vec::with_capacity(n_atoms);
-        let mut wrap_shifts = Vec::with_capacity(n_atoms);
-        let mut wrapped_cart = Vec::with_capacity(n_atoms);
-        let mut atom_linear_bin: Vec<u32> = Vec::with_capacity(n_atoms);
+        let total_bins = plan.n_bins[0] * plan.n_bins[1] * plan.n_bins[2];
+        clear_and_resize_tracked(&mut self.bin_start, total_bins + 1, 0, stats);
+        clear_and_reserve_tracked(&mut self.atom_bins, n_atoms, stats);
+        clear_and_reserve_tracked(&mut self.wrap_shifts, n_atoms, stats);
+        clear_and_reserve_tracked(&mut self.wrapped_cart, n_atoms, stats);
+        clear_and_reserve_tracked(&mut self.atom_linear_bin, n_atoms, stats);
         // bin_start doubles as the counting-sort histogram (offset by one).
-        let mut bin_start = vec![0u32; total_bins + 1];
 
         for frac in frac_coords {
             let mut wrapped = *frac;
             let mut shift = [0i32; 3];
             let mut bin = [0usize; 3];
             for axis in 0..3 {
-                if pbc[axis] {
+                debug_assert!(
+                    (plan.bin_size_frac[axis] * plan.n_bins[axis] as f64 - plan.extent_frac[axis])
+                        .abs()
+                        <= f64::EPSILON * plan.extent_frac[axis].abs().max(1.0)
+                );
+                if plan.pbc[axis] {
                     let s = frac[axis].floor();
                     shift[axis] = s as i32;
                     wrapped[axis] = frac[axis] - s;
-                    bin[axis] = ((wrapped[axis] / bin_size_frac[axis]).floor() as usize)
-                        .min(n_bins[axis] - 1);
+                    bin[axis] = ((wrapped[axis] / plan.bin_size_frac[axis]).floor() as usize)
+                        .min(plan.n_bins[axis] - 1);
                 } else {
                     // Clamp instead of wrap — outliers land in edge bins.
-                    let rel = frac[axis] - origin_frac[axis];
-                    bin[axis] = ((rel / bin_size_frac[axis]).floor() as isize)
-                        .clamp(0, n_bins[axis] as isize - 1) as usize;
+                    let rel = frac[axis] - plan.origin_frac[axis];
+                    bin[axis] = ((rel / plan.bin_size_frac[axis]).floor() as isize)
+                        .clamp(0, plan.n_bins[axis] as isize - 1)
+                        as usize;
                 }
             }
-            wrapped_cart.push(matrix.transpose() * wrapped);
-            let bin_idx = bin[0] + bin[1] * n_bins[0] + bin[2] * n_bins[0] * n_bins[1];
-            atom_linear_bin.push(bin_idx as u32);
-            bin_start[bin_idx + 1] += 1;
-            atom_bins.push(bin);
-            wrap_shifts.push(shift);
+            self.wrapped_cart.push(matrix.transpose() * wrapped);
+            let bin_idx =
+                bin[0] + bin[1] * plan.n_bins[0] + bin[2] * plan.n_bins[0] * plan.n_bins[1];
+            self.atom_linear_bin.push(bin_idx as u32);
+            self.bin_start[bin_idx + 1] += 1;
+            self.atom_bins.push(bin);
+            self.wrap_shifts.push(shift);
         }
 
         // CSR prefix sum, then a stable counting sort placing atom indices and
         // their wrapped coordinates (SoA) into bin-sorted slots.
         for b in 0..total_bins {
-            bin_start[b + 1] += bin_start[b];
+            self.bin_start[b + 1] += self.bin_start[b];
         }
-        let mut cursor: Vec<u32> = bin_start[..total_bins].to_vec();
-        let mut bin_atoms = vec![0u32; n_atoms];
-        let mut xs = vec![0.0f64; n_atoms];
-        let mut ys = vec![0.0f64; n_atoms];
-        let mut zs = vec![0.0f64; n_atoms];
-        for (atom_idx, &b) in atom_linear_bin.iter().enumerate() {
-            let slot = cursor[b as usize] as usize;
-            cursor[b as usize] += 1;
-            bin_atoms[slot] = atom_idx as u32;
-            let cart = wrapped_cart[atom_idx];
-            xs[slot] = cart.x;
-            ys[slot] = cart.y;
-            zs[slot] = cart.z;
-        }
-
-        Self {
-            bin_start,
-            bin_atoms,
-            n_bins,
-            atom_bins,
-            wrap_shifts,
-            xs,
-            ys,
-            zs,
-            wrapped_cart,
-            stencil,
-            pbc,
+        clear_and_reserve_tracked(&mut self.cursor, total_bins, stats);
+        self.cursor.extend_from_slice(&self.bin_start[..total_bins]);
+        clear_and_resize_tracked(&mut self.bin_atoms, n_atoms, 0, stats);
+        clear_and_resize_tracked(&mut self.xs, n_atoms, 0.0, stats);
+        clear_and_resize_tracked(&mut self.ys, n_atoms, 0.0, stats);
+        clear_and_resize_tracked(&mut self.zs, n_atoms, 0.0, stats);
+        for (atom_idx, &bin_idx) in self.atom_linear_bin.iter().enumerate() {
+            let slot = self.cursor[bin_idx as usize] as usize;
+            self.cursor[bin_idx as usize] += 1;
+            self.bin_atoms[slot] = atom_idx as u32;
+            let cart = self.wrapped_cart[atom_idx];
+            self.xs[slot] = cart.x;
+            self.ys[slot] = cart.y;
+            self.zs[slot] = cart.z;
         }
     }
 
     /// Get the linear bin index from 3D bin coordinates.
     #[inline]
-    fn bin_index(&self, bin: [usize; 3]) -> usize {
-        bin[0] + bin[1] * self.n_bins[0] + bin[2] * self.n_bins[0] * self.n_bins[1]
+    fn bin_index(plan: &CellGridPlan, bin: [usize; 3]) -> usize {
+        bin[0] + bin[1] * plan.n_bins[0] + bin[2] * plan.n_bins[0] * plan.n_bins[1]
     }
 
     /// Collect the neighbors of `center_idx` within `cutoff` into `out`.
@@ -309,6 +442,7 @@ impl CellList {
     fn neighbors_of(
         &self,
         center_idx: usize,
+        plan: &CellGridPlan,
         lattice_vecs: &[Vector3<f64>; 3],
         config: &NeighborListConfig,
         out: &mut NeighborList,
@@ -319,14 +453,14 @@ impl CellList {
         let center_cart = self.wrapped_cart[center_idx];
         let center_shift = self.wrap_shifts[center_idx];
 
-        for offsets in &self.stencil {
+        for offsets in &plan.stencil {
             let mut bin = [0usize; 3];
             let mut base_image = [0i32; 3];
             let mut in_range = true;
             for axis in 0..3 {
                 let target = center_bin[axis] as i32 + offsets[axis];
-                let n = self.n_bins[axis] as i32;
-                if self.pbc[axis] {
+                let n = plan.n_bins[axis] as i32;
+                if plan.pbc[axis] {
                     // Each stencil offset maps to a unique (bin, image) pair,
                     // so multi-period stencils never emit duplicates.
                     base_image[axis] = target.div_euclid(n);
@@ -351,7 +485,7 @@ impl CellList {
             let cy = center_cart.y - offset_cart.y;
             let cz = center_cart.z - offset_cart.z;
 
-            let b = self.bin_index(bin);
+            let b = Self::bin_index(plan, bin);
             let start = self.bin_start[b] as usize;
             let end = self.bin_start[b + 1] as usize;
             scan_bin_hits(
@@ -378,6 +512,134 @@ impl CellList {
                 },
             );
         }
+    }
+}
+
+impl NeighborSearchWorkspace {
+    /// Rebuild an exact neighbor list from fractional coordinates.
+    ///
+    /// Fully periodic frames reuse grid geometry only when atom count,
+    /// cutoff bits, lattice bits, and PBC are all identical. Open axes
+    /// always rebuild the plan because their extents depend on positions.
+    pub fn rebuild_from_fractional<'a>(
+        &'a mut self,
+        frac_coords: &[Vector3<f64>],
+        lattice: &Lattice,
+        config: &NeighborListConfig,
+    ) -> &'a NeighborList {
+        self.neighbors.clear();
+        if config.cutoff <= 0.0 {
+            return &self.neighbors;
+        }
+
+        if lattice.pbc.iter().all(|&periodic| periodic) {
+            let key = FixedPeriodicGridKey::new(frac_coords.len(), lattice, config.cutoff);
+            if self.fixed_periodic_key.as_ref() == Some(&key) && self.grid_plan.is_some() {
+                self.stats.grid_cache_hits += 1;
+            } else {
+                self.grid_plan = Some(CellGridPlan::build(frac_coords, lattice, config.cutoff));
+                self.fixed_periodic_key = Some(key);
+                self.stats.grid_rebuilds += 1;
+            }
+        } else {
+            self.grid_plan = Some(CellGridPlan::build(frac_coords, lattice, config.cutoff));
+            self.fixed_periodic_key = None;
+            self.stats.grid_rebuilds += 1;
+        }
+
+        let plan = self
+            .grid_plan
+            .as_ref()
+            .expect("positive-cutoff search must have a grid plan");
+        self.cell_list
+            .rebuild(frac_coords, lattice, plan, &mut self.stats);
+
+        let matrix = lattice.matrix();
+        let lattice_vecs = [
+            matrix.row(0).transpose(),
+            matrix.row(1).transpose(),
+            matrix.row(2).transpose(),
+        ];
+        let n_atoms = frac_coords.len();
+        let estimated_pairs = n_atoms.saturating_mul(12);
+
+        #[cfg(feature = "rayon")]
+        {
+            let n_threads = rayon::current_num_threads().max(1);
+            let chunk_size = n_atoms.div_ceil(n_threads * 4).max(64);
+            let chunk_count = n_atoms.div_ceil(chunk_size);
+            reserve_total_tracked(&mut self.rayon_partials, chunk_count, &mut self.stats);
+            while self.rayon_partials.len() < chunk_count {
+                self.rayon_partials.push(NeighborList::default());
+            }
+            for (chunk_idx, partial) in self.rayon_partials[..chunk_count].iter_mut().enumerate() {
+                let chunk_start = chunk_idx * chunk_size;
+                let chunk_end = (chunk_start + chunk_size).min(n_atoms);
+                prepare_neighbor_list(
+                    partial,
+                    (chunk_end - chunk_start).saturating_mul(14),
+                    &mut self.stats,
+                );
+            }
+
+            let implicit_partial_growths: u64 = self.rayon_partials[..chunk_count]
+                .par_iter_mut()
+                .enumerate()
+                .map(|(chunk_idx, partial)| {
+                    let before = neighbor_capacities(partial);
+                    let chunk_start = chunk_idx * chunk_size;
+                    let chunk_end = (chunk_start + chunk_size).min(n_atoms);
+                    for center_idx in chunk_start..chunk_end {
+                        self.cell_list.neighbors_of(
+                            center_idx,
+                            plan,
+                            &lattice_vecs,
+                            config,
+                            partial,
+                        );
+                    }
+                    capacity_change_count(before, neighbor_capacities(partial))
+                })
+                .sum();
+            self.stats.capacity_growths += implicit_partial_growths;
+
+            prepare_neighbor_list(&mut self.neighbors, estimated_pairs, &mut self.stats);
+            let before = neighbor_capacities(&self.neighbors);
+            for partial in &self.rayon_partials[..chunk_count] {
+                self.neighbors.extend_from(partial);
+            }
+            self.stats.capacity_growths +=
+                capacity_change_count(before, neighbor_capacities(&self.neighbors));
+        }
+
+        #[cfg(not(feature = "rayon"))]
+        {
+            prepare_neighbor_list(&mut self.neighbors, estimated_pairs, &mut self.stats);
+            let before = neighbor_capacities(&self.neighbors);
+            for center_idx in 0..n_atoms {
+                self.cell_list.neighbors_of(
+                    center_idx,
+                    plan,
+                    &lattice_vecs,
+                    config,
+                    &mut self.neighbors,
+                );
+            }
+            self.stats.capacity_growths +=
+                capacity_change_count(before, neighbor_capacities(&self.neighbors));
+        }
+
+        &self.neighbors
+    }
+
+    /// Return current cache and capacity-growth counters.
+    pub fn stats(&self) -> NeighborWorkspaceStats {
+        self.stats
+    }
+
+    /// Consume the workspace and return its most recently rebuilt list.
+    pub fn into_neighbor_list(self) -> NeighborList {
+        self.neighbors
     }
 }
 
@@ -514,68 +776,12 @@ pub fn build_neighbor_list(structure: &Structure, config: &NeighborListConfig) -
     let use_cell_list = n_atoms > config.cell_list_threshold;
 
     if use_cell_list {
-        build_neighbor_list_celllist(frac_coords, lattice, &lattice_vecs, config)
+        let mut workspace = NeighborSearchWorkspace::default();
+        workspace.rebuild_from_fractional(frac_coords, lattice, config);
+        workspace.into_neighbor_list()
     } else {
         build_neighbor_list_bruteforce(&cart_coords, &lattice_vecs, pbc, &max_images, config)
     }
-}
-
-/// Build neighbor list using cell-list algorithm (O(n) for large systems).
-fn build_neighbor_list_celllist(
-    frac_coords: &[Vector3<f64>],
-    lattice: &Lattice,
-    lattice_vecs: &[Vector3<f64>; 3],
-    config: &NeighborListConfig,
-) -> NeighborList {
-    let n_atoms = frac_coords.len();
-
-    // Build cell list (wraps periodic axes itself, keeping shift bookkeeping)
-    let cell_list = CellList::build(frac_coords, lattice, config.cutoff);
-
-    // Estimate capacity (12 neighbors per atom is typical for close-packed structures)
-    let estimated_pairs = n_atoms * 12;
-
-    #[cfg(feature = "rayon")]
-    let result = {
-        // Chunked parallelism: one contiguous NeighborList per atom-range
-        // chunk (per-atom tasks spent more on 20k tiny 4-Vec allocations than
-        // on the search itself). Chunks are merged in ascending index order,
-        // so the output ordering is identical to the serial path — bond
-        // tables stay deterministic run to run.
-        let n_threads = rayon::current_num_threads().max(1);
-        let chunk_size = n_atoms.div_ceil(n_threads * 4).max(64);
-        let chunk_starts: Vec<usize> = (0..n_atoms).step_by(chunk_size).collect();
-        let per_chunk: Vec<NeighborList> = chunk_starts
-            .into_par_iter()
-            .map(|chunk_start| {
-                let chunk_end = (chunk_start + chunk_size).min(n_atoms);
-                let mut local_nl =
-                    NeighborList::with_capacity((chunk_end - chunk_start) * 14);
-                for center_idx in chunk_start..chunk_end {
-                    cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut local_nl);
-                }
-                local_nl
-            })
-            .collect();
-
-        // Merge chunk results in order
-        let mut result = NeighborList::with_capacity(estimated_pairs);
-        for nl in per_chunk {
-            result.extend(nl);
-        }
-        result
-    };
-
-    #[cfg(not(feature = "rayon"))]
-    let result = {
-        let mut result = NeighborList::with_capacity(estimated_pairs);
-        for center_idx in 0..n_atoms {
-            cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut result);
-        }
-        result
-    };
-
-    result
 }
 
 /// Build neighbor list using brute-force O(n²) algorithm.
@@ -2296,7 +2502,9 @@ mod tests {
         };
         let nl = build_neighbor_list(&s, &config);
         assert!(
-            nl.images.iter().any(|img| img.iter().any(|&v| v.abs() >= 2)),
+            nl.images
+                .iter()
+                .any(|img| img.iter().any(|&v| v.abs() >= 2)),
             "expected |image| >= 2 pairs in a 3-4 Å cell with 7.5 Å cutoff"
         );
     }
@@ -2390,5 +2598,256 @@ mod tests {
         lattice.pbc = [false, false, false];
         let s = make_random_structure(120, lattice, 1.0, 0.0);
         assert_parity(&s, 6.0, "sparse gas");
+    }
+
+    fn neighbor_list_bytes(neighbors: &NeighborList) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(neighbors.len() * 36);
+        for idx in 0..neighbors.len() {
+            bytes.extend_from_slice(&(neighbors.center_indices[idx] as u64).to_le_bytes());
+            bytes.extend_from_slice(&(neighbors.neighbor_indices[idx] as u64).to_le_bytes());
+            bytes.extend_from_slice(&neighbors.distances[idx].to_bits().to_le_bytes());
+            for image in neighbors.images[idx] {
+                bytes.extend_from_slice(&image.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn neighbor_bytes_digest(bytes: &[u8]) -> [u64; 2] {
+        let mut first = 0xcbf29ce484222325u64;
+        let mut second = 0x9e3779b97f4a7c15u64;
+        for &byte in bytes {
+            first = (first ^ byte as u64).wrapping_mul(0x100000001b3);
+            second ^= (byte as u64)
+                .wrapping_add(0x9e3779b97f4a7c15)
+                .wrapping_add(second << 6)
+                .wrapping_add(second >> 2);
+        }
+        [first, second]
+    }
+
+    #[test]
+    fn trajectory_workspace_periodic_crystal_matches_base_bytes_and_order() {
+        let structure = make_random_structure(96, Lattice::cubic(18.0), 1.0, 0.0);
+        let config = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut workspace = NeighborSearchWorkspace::default();
+        let actual =
+            workspace.rebuild_from_fractional(&structure.frac_coords, &structure.lattice, &config);
+        let bytes = neighbor_list_bytes(actual);
+
+        // Produced independently by the pre-refactor implementation at
+        // f5a97cabdbb70ec5ac7e17e700ce25cca9b4ace4 in both feature modes.
+        assert_eq!(actual.len(), 432);
+        assert_eq!(bytes.len(), 15_552);
+        assert_eq!(
+            neighbor_bytes_digest(&bytes),
+            [0xbc13c3dc9921c1c1, 0x2737ec52e96cd120]
+        );
+    }
+
+    #[test]
+    fn trajectory_workspace_fixed_periodic_grid_rebuild_then_hit() {
+        let lattice = Lattice::cubic(18.0);
+        let first = make_random_structure(96, lattice.clone(), 1.0, 0.0);
+        let second = make_random_structure(96, lattice.clone(), 0.98, 0.01);
+        let config = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut workspace = NeighborSearchWorkspace::default();
+
+        workspace.rebuild_from_fractional(&first.frac_coords, &lattice, &config);
+        assert_eq!(
+            workspace.stats(),
+            NeighborWorkspaceStats {
+                grid_cache_hits: 0,
+                grid_rebuilds: 1,
+                capacity_growths: workspace.stats().capacity_growths,
+            }
+        );
+
+        workspace.rebuild_from_fractional(&second.frac_coords, &lattice, &config);
+        assert_eq!(workspace.stats().grid_cache_hits, 1);
+        assert_eq!(workspace.stats().grid_rebuilds, 1);
+    }
+
+    #[test]
+    fn trajectory_workspace_changed_lattice_rebuilds_grid() {
+        let first_lattice = Lattice::cubic(18.0);
+        let second_lattice = Lattice::cubic(18.5);
+        let frame = make_random_structure(96, first_lattice.clone(), 1.0, 0.0);
+        let config = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut workspace = NeighborSearchWorkspace::default();
+
+        workspace.rebuild_from_fractional(&frame.frac_coords, &first_lattice, &config);
+        workspace.rebuild_from_fractional(&frame.frac_coords, &second_lattice, &config);
+
+        assert_eq!(workspace.stats().grid_cache_hits, 0);
+        assert_eq!(workspace.stats().grid_rebuilds, 2);
+    }
+
+    #[test]
+    fn trajectory_workspace_open_axes_rebuild_grid_every_frame() {
+        let config = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+
+        for pbc in [[true, true, false], [false, false, false]] {
+            let mut lattice = Lattice::cubic(18.0);
+            lattice.pbc = pbc;
+            let first = make_random_structure(96, lattice.clone(), 0.8, 0.1);
+            let second = make_random_structure(96, lattice.clone(), 0.6, 0.2);
+            let mut workspace = NeighborSearchWorkspace::default();
+
+            workspace.rebuild_from_fractional(&first.frac_coords, &lattice, &config);
+            workspace.rebuild_from_fractional(&second.frac_coords, &lattice, &config);
+
+            assert_eq!(workspace.stats().grid_cache_hits, 0, "pbc={pbc:?}");
+            assert_eq!(workspace.stats().grid_rebuilds, 2, "pbc={pbc:?}");
+        }
+    }
+
+    #[test]
+    fn trajectory_workspace_second_fixed_frame_has_stable_capacities() {
+        let lattice = Lattice::cubic(18.0);
+        let first = make_random_structure(96, lattice.clone(), 1.0, 0.0);
+        let second = make_random_structure(96, lattice.clone(), 0.98, 0.01);
+        let config = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut workspace = NeighborSearchWorkspace::default();
+
+        workspace.rebuild_from_fractional(&first.frac_coords, &lattice, &config);
+        let first_growths = workspace.stats().capacity_growths;
+        assert!(first_growths > 0);
+
+        workspace.rebuild_from_fractional(&second.frac_coords, &lattice, &config);
+        assert_eq!(workspace.stats().capacity_growths, first_growths);
+    }
+
+    #[test]
+    fn trajectory_workspace_handles_edge_geometries_and_unwrapped_coordinates() {
+        let config = NeighborListConfig {
+            cutoff: 4.1,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut workspace = NeighborSearchWorkspace::default();
+
+        assert!(
+            workspace
+                .rebuild_from_fractional(&[], &Lattice::cubic(10.0), &config)
+                .is_empty()
+        );
+
+        let one_atom = [Vector3::new(0.0, 0.0, 0.0)];
+        let thin = workspace.rebuild_from_fractional(&one_atom, &Lattice::cubic(2.0), &config);
+        assert_eq!(thin.len(), 32);
+        assert!(thin.images.iter().any(|image| image[0].abs() == 2));
+
+        let mut mixed = Lattice::cubic(2.0);
+        mixed.pbc = [true, false, false];
+        let mixed_neighbors = workspace.rebuild_from_fractional(&one_atom, &mixed, &config);
+        assert_eq!(mixed_neighbors.len(), 4);
+        assert!(
+            mixed_neighbors
+                .images
+                .iter()
+                .all(|image| image[1] == 0 && image[2] == 0)
+        );
+
+        let unwrapped_config = NeighborListConfig {
+            cutoff: 1.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let unwrapped = [Vector3::new(2.0, 0.0, 0.0), Vector3::new(-1.95, 0.0, 0.0)];
+        let unwrapped_neighbors =
+            workspace.rebuild_from_fractional(&unwrapped, &Lattice::cubic(10.0), &unwrapped_config);
+        assert_eq!(unwrapped_neighbors.center_indices, [0, 1]);
+        assert_eq!(unwrapped_neighbors.neighbor_indices, [1, 0]);
+        assert_eq!(unwrapped_neighbors.images, [[4, 0, 0], [-4, 0, 0]]);
+        assert!(
+            unwrapped_neighbors
+                .distances
+                .iter()
+                .all(|distance| (*distance - 0.5).abs() < 1e-10)
+        );
+    }
+
+    #[test]
+    fn trajectory_workspace_scalar_and_rayon_match_fixture_bytes() {
+        let lattice = Lattice::cubic(256.0);
+        let mut frac_coords: Vec<Vector3<f64>> = (0..130)
+            .map(|idx| {
+                Vector3::new(
+                    ((idx % 10) * 16 + 8) as f64 / 256.0,
+                    (((idx / 10) % 10) * 16 + 8) as f64 / 256.0,
+                    ((idx / 100) * 16 + 8) as f64 / 256.0,
+                )
+            })
+            .collect();
+        for (center, neighbor) in [(0, 1), (64, 65), (128, 129)] {
+            frac_coords[neighbor] = frac_coords[center] + Vector3::new(0.5 / 256.0, 0.0, 0.0);
+        }
+
+        // 130 atoms force three chunks because the Rayon chunk-size floor is
+        // 64. Each chunk has one directed pair in both center directions.
+        assert_eq!(frac_coords.len().div_ceil(64), 3);
+
+        let warmup_config = NeighborListConfig {
+            cutoff: 20.1,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let config = NeighborListConfig {
+            cutoff: 1.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let mut expected = Vec::new();
+        for (center, neighbor) in [
+            (0u64, 1u64),
+            (1, 0),
+            (64, 65),
+            (65, 64),
+            (128, 129),
+            (129, 128),
+        ] {
+            expected.extend_from_slice(&center.to_le_bytes());
+            expected.extend_from_slice(&neighbor.to_le_bytes());
+            expected.extend_from_slice(&0.5f64.to_bits().to_le_bytes());
+            for image in [0i32; 3] {
+                expected.extend_from_slice(&image.to_le_bytes());
+            }
+        }
+        let mut workspace = NeighborSearchWorkspace::default();
+
+        let warmup = workspace.rebuild_from_fractional(&frac_coords, &lattice, &warmup_config);
+        assert!(warmup.len() > 6);
+        let actual = workspace.rebuild_from_fractional(&frac_coords, &lattice, &config);
+
+        assert_eq!(neighbor_list_bytes(actual), expected);
+        #[cfg(feature = "rayon")]
+        assert_eq!(
+            workspace.rayon_partials[..3]
+                .iter()
+                .map(NeighborList::len)
+                .collect::<Vec<_>>(),
+            [2, 2, 2]
+        );
     }
 }

@@ -2,6 +2,8 @@
 name = "tauri-plugin-bg-grace"
 version = "0.1.0"
 description = "Keep CatGo alive ~30s after backgrounding on iOS (beginBackgroundTask) so SSH sessions and pending OTP handshakes survive a quick app switch"
+license = "AGPL-3.0-or-later"
+publish = false
 edition = "2021"
 links = "tauri-plugin-bg-grace"
 

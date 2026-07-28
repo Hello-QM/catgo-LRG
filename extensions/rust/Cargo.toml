@@ -6,6 +6,7 @@ rust-version = "1.93"
 authors = ["LRG <gul026@ucsd.edu>"]
 description = "High-performance structure matching for crystallographic data"
 license = "AGPL-3.0-or-later"
+publish = false
 repository = "https://github.com/Hello-QM/catgo-LRG"
 keywords = ["crystallography", "materials-science", "structure-matching"]
 include = [
@@ -52,8 +53,13 @@ glam = "0.27"  # Vector math for Voronoi (compatible with meshless_voronoi)
 # Symmetry - same underlying Rust crate as moyopy
 moyo = "0.7"
 
-# Parallelism (not used in WASM builds)
+# Parallelism. On wasm32 Rayon needs a wasm-bindgen-rayon thread pool
+# (feature `wasm-threaded`); the scalar WASM build excludes Rayon entirely.
 rayon = { version = "1.11", optional = true }
+# WASM threads: bridges Rayon onto Web Workers + SharedArrayBuffer. Pinned —
+# the generated JS glue shape (initThreadPool, workerHelpers snippet) is part
+# of the shipped artifact contract. Requires atomics/bulk-memory + build-std.
+wasm-bindgen-rayon = { version = "=1.3.0", optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -103,6 +109,14 @@ wasm = [
   "dep:wasm-bindgen",
 ]
 rayon = ["dep:rayon"]
+# Dual WASM artifacts (design §8.3). Scalar = portable SIMD, single thread.
+# Threaded = WASM threads + SIMD + Rayon; MUST be built with
+# `-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128` and
+# nightly `-Z build-std=panic_abort,std` (see scripts/build-wasm.mjs).
+# `wasm` + `rayon` WITHOUT wasm-bindgen-rayon fails to compile on wasm32 by
+# design — Rayon without a thread pool deadlocks in the browser.
+wasm-scalar = ["wasm"]
+wasm-threaded = ["wasm", "rayon", "dep:wasm-bindgen-rayon"]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

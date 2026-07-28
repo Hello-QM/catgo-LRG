@@ -3,13 +3,21 @@
 // analytic ray-sphere and GPU picking based on structure size.
 
 import type { Vec3 } from '$lib'
-import { GPUPicker } from './gpu-picker'
+import { GPUPicker, type PickPixelRenderer } from './gpu-picker'
 import { is_atom_pickable_pure } from './scene'
 import { Vector3, Euler, Quaternion, Matrix4 } from 'three'
 import type { Camera, WebGLRenderer } from 'three'
 import type { ImageAtomLayout } from './bonding/image-atom-layout'
 import type { BondManager } from './bonding/bond-manager.svelte'
 import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
+import {
+  ReplicaPickScene,
+  resolve_replica_pick_action,
+  type ReplicaPickAction,
+} from './gpu/webgl2/replica-id-picker'
+import type { RenderPacket } from './scene/render-packet'
+import type { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
+import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
 
 /** Visibility info for a single site in the cutting plane. */
 export type CuttingVisInfo = { inside: boolean; opacity: number; saturation: number }
@@ -64,6 +72,18 @@ export interface GpuPickerDeps {
   get_bond_manager?: () => BondManager | null
   get_partner_drawn_lookup?: () => PartnerDrawnLookup | null
   get_slot_to_filtered_idx?: () => Int32Array | null
+  /**
+   * Visual T5 — packet-path unified picking. When `get_render_packet` yields
+   * a non-null packet, hover AND click route through the WebGL2 replica
+   * integer-ID pass (`ReplicaPickScene`) instead of the CPU hitbox meshes /
+   * legacy CPU-composed picker scene. Every replica of a base atom folds to
+   * ONE base selection flag (visual-shared-base); bond picks resolve the base
+   * bond GRAPH index through `get_slot_to_filtered_idx`.
+   */
+  get_render_packet?: () => RenderPacket | null
+  on_packet_atom_click?: (site_idx: number, event: MouseEvent) => void
+  on_packet_bond_click?: (filtered_idx: number, event: MouseEvent) => void
+  set_hovered_bond_idx?: (filtered_idx: number | null) => void
   get_bond_thickness: () => number
   get_external_dragging: () => boolean
   get_is_rotating_atoms: () => boolean
@@ -92,6 +112,75 @@ export function create_gpu_picker() {
   const gpu_picker = new GPUPicker()
   let picker_dirty = $state(true)
   return { gpu_picker, get picker_dirty() { return picker_dirty }, set picker_dirty(v: boolean) { picker_dirty = v } }
+}
+
+/**
+ * Lazily-constructed packet-path pick scene (Visual T5). The Three objects
+ * are only allocated once a packet actually needs a pick; `sync` internally
+ * memoizes on packet identity/versions, so calling it per hover is cheap.
+ */
+export function create_replica_picker(positions: SharedPositionTexture) {
+  let scene: ReplicaPickScene | null = null
+  let created = 0
+  let syncs = 0
+  return {
+    ensure(renderer: PickPixelRenderer): ReplicaPickScene {
+      if (scene === null) {
+        scene = new ReplicaPickScene({
+          renderer: renderer as unknown as WebGLRenderer,
+          positions,
+        })
+        created += 1
+      }
+      return scene
+    },
+    sync(
+      renderer: PickPixelRenderer,
+      packet: RenderPacket,
+      opts: Parameters<ReplicaPickScene[`sync`]>[1] = {},
+    ): ReplicaPickScene {
+      const picker = this.ensure(renderer)
+      picker.sync(packet, opts)
+      syncs += 1
+      return picker
+    },
+    stats(): { created: number; syncs: number } {
+      return { created, syncs }
+    },
+    dispose(): void {
+      scene?.dispose()
+      scene = null
+    },
+  }
+}
+
+export type ReplicaPickerHandle = ReturnType<typeof create_replica_picker>
+
+/** Sync the pick scene to the packet and resolve the pick under (ndc_x, ndc_y)
+ *  to a selection action. Shared by the hover and click paths. */
+function packet_pick_action(
+  deps: GpuPickerDeps,
+  replica_picker: ReplicaPickerHandle,
+  packet: RenderPacket,
+  renderer: PickPixelRenderer,
+  cam: Camera,
+  ndc_x: number,
+  ndc_y: number,
+): ReplicaPickAction | null {
+  const incomplete_edge = deps.get_incomplete_edge()
+  const scene = replica_picker.sync(renderer, packet, {
+    bond_radius: deps.get_bond_thickness(),
+    stub_scale: incomplete_edge?.mode ? incomplete_edge.scale : 0.5,
+    rotation: deps.get_rotation(),
+    pivot: deps.get_rotation_target() ?? [0, 0, 0],
+  })
+  const picked = scene.pick(renderer, cam, ndc_x, ndc_y)
+  return resolve_replica_pick_action(
+    picked,
+    packet.replicas.semantics,
+    packet.topology.site_ids,
+    deps.get_slot_to_filtered_idx?.() ?? null,
+  )
 }
 
 /**
@@ -425,7 +514,14 @@ export function update_gpu_picker(
     }
   }
 
-  gpu_picker.update(positions, radii, bond_xforms, bond_thickness, instance_to_filtered_idx)
+  trajectory_render_diagnostics.record_picker_position_upload()
+  gpu_picker.update(
+    positions,
+    radii,
+    bond_xforms,
+    bond_thickness,
+    instance_to_filtered_idx,
+  )
 }
 
 /**
@@ -438,6 +534,7 @@ export function update_gpu_picker(
 export function setup_hover_detection(
   deps: GpuPickerDeps,
   picker: ReturnType<typeof create_gpu_picker>,
+  replica_picker?: ReplicaPickerHandle,
 ): (() => void) | undefined {
   const threlte = deps.get_threlte()
   const canvas = threlte.renderer?.domElement
@@ -479,6 +576,56 @@ export function setup_hover_detection(
     }
 
     const atom_data = deps.get_atom_data()
+
+    // ── Visual T5 packet path: unified WebGL2 replica integer-ID picking. ──
+    // Active whenever a render packet drives the replica impostor layer; the
+    // CPU hitbox meshes are gated off in this mode, so hover resolves here.
+    const packet = deps.get_render_packet?.() ?? null
+    if (packet !== null && replica_picker !== undefined) {
+      const threlte_now = deps.get_threlte()
+      const renderer = threlte_now.renderer
+      const cam = threlte_now.camera.current
+      if (!renderer || !cam) return
+      const rect = canvas!.getBoundingClientRect()
+      const ndc_x = ((x - rect.left) / rect.width) * 2 - 1
+      const ndc_y = -((y - rect.top) / rect.height) * 2 + 1
+      const action = packet_pick_action(
+        deps,
+        replica_picker,
+        packet,
+        renderer as unknown as PickPixelRenderer,
+        cam,
+        ndc_x,
+        ndc_y,
+      )
+      if (
+        action?.type === `atom` &&
+        is_atom_pickable(
+          action.site_idx,
+          deps.get_cutting_active(),
+          deps.get_cutting_visibility_map(),
+        )
+      ) {
+        deps.set_hovered_bond_idx?.(null)
+        if (deps.get_hovered_idx() !== action.site_idx) {
+          deps.set_hovered_idx(action.site_idx)
+          deps.set_active_tooltip(`atom`)
+        }
+      } else if (action?.type === `bond`) {
+        deps.set_hovered_bond_idx?.(action.filtered_idx)
+        if (deps.get_hovered_idx() !== null) {
+          deps.set_hovered_idx(null)
+          deps.set_active_tooltip(null)
+        }
+      } else {
+        deps.set_hovered_bond_idx?.(null)
+        if (deps.get_hovered_idx() !== null) {
+          deps.set_hovered_idx(null)
+          deps.set_active_tooltip(null)
+        }
+      }
+      return
+    }
 
     if (deps.get_is_large_structure()) {
       // GPU picking path for large structures
@@ -558,13 +705,70 @@ export function setup_hover_detection(
       deps.set_hovered_idx(null)
       deps.set_active_tooltip(null)
     }
+    deps.set_hovered_bond_idx?.(null)
+  }
+
+  // ── Visual T5 packet path: canvas-level click → GPU ID pick routing. ──
+  // The invisible CPU hitbox meshes are gated off while a packet is active,
+  // so atom/bond clicks resolve through the SAME replica ID pass as hover.
+  // A pointerdown/click distance guard keeps orbit drags from selecting.
+  let click_down_x = 0
+  let click_down_y = 0
+  function handle_pointer_down(event: PointerEvent) {
+    click_down_x = event.clientX
+    click_down_y = event.clientY
+  }
+  function handle_click(event: MouseEvent) {
+    const packet = deps.get_render_packet?.() ?? null
+    if (packet === null || replica_picker === undefined) return
+    if (
+      Math.hypot(event.clientX - click_down_x, event.clientY - click_down_y) > 5
+    ) return // drag, not a click
+    if (
+      deps.get_external_dragging() ||
+      deps.get_is_rotating_atoms() ||
+      deps.get_is_box_selecting()
+    ) return
+    if (!deps.get_show_bulk_atoms()) return
+    const threlte_now = deps.get_threlte()
+    const renderer = threlte_now.renderer
+    const cam = threlte_now.camera.current
+    if (!renderer || !cam) return
+    const rect = canvas!.getBoundingClientRect()
+    const ndc_x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+    const ndc_y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+    const action = packet_pick_action(
+      deps,
+      replica_picker,
+      packet,
+      renderer as unknown as PickPixelRenderer,
+      cam,
+      ndc_x,
+      ndc_y,
+    )
+    if (
+      action?.type === `atom` &&
+      is_atom_pickable(
+        action.site_idx,
+        deps.get_cutting_active(),
+        deps.get_cutting_visibility_map(),
+      )
+    ) {
+      deps.on_packet_atom_click?.(action.site_idx, event)
+    } else if (action?.type === `bond`) {
+      deps.on_packet_bond_click?.(action.filtered_idx, event)
+    }
   }
 
   canvas.addEventListener(`pointermove`, handle_hover)
   canvas.addEventListener(`pointerleave`, handle_hover_leave)
+  canvas.addEventListener(`pointerdown`, handle_pointer_down)
+  canvas.addEventListener(`click`, handle_click)
   return () => {
     canvas.removeEventListener(`pointermove`, handle_hover)
     canvas.removeEventListener(`pointerleave`, handle_hover_leave)
+    canvas.removeEventListener(`pointerdown`, handle_pointer_down)
+    canvas.removeEventListener(`click`, handle_click)
     if (raf_id !== 0) {
       cancelAnimationFrame(raf_id)
       raf_id = 0

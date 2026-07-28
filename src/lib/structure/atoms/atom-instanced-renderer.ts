@@ -51,8 +51,10 @@ const EMPTY = new Int32Array(0)
  *  billboard extent. Mirrors `AtomImpostors.svelte:403`
  *  (`visual_radius = atom.radius * 0.5`) so the new render path produces
  *  the same on-screen atom size as the legacy path. Without this scale,
- *  atoms render at exactly 2× their intended size. */
-const VISUAL_RADIUS_SCALE = 0.5
+ *  atoms render at exactly 2× their intended size.
+ *  Exported so the WebGL2 replica impostor path (gpu/webgl2) renders atoms
+ *  at the same on-screen size as this renderer. */
+export const VISUAL_RADIUS_SCALE = 0.5
 
 /** Per-atom cutting-plane modulation (mirrors `CuttingVisibility` in
  *  `AtomImpostors.svelte`). Opacity and saturation are independent multipliers
@@ -92,6 +94,13 @@ export class AtomInstancedRenderer {
 
 	#last_synced_version = -1
 	#last_synced_count = 0
+
+	// Replica-layer bypass (gpu/WebGLReplicaLayer.svelte). While suspended,
+	// sync()/force_full_resync() early-return WITHOUT clearing dirty state or
+	// advancing #last_synced_version, so the resume flush (the caller's
+	// force_full_resync after set_suspended(false)) sees everything that
+	// changed. The mesh is hidden by the caller while suspended.
+	#suspended = false
 
 	constructor(
 		mesh: THREE.InstancedMesh,
@@ -172,6 +181,13 @@ export class AtomInstancedRenderer {
 		this.#atom_opacity_overrides = map
 	}
 
+	/** Replica-layer bypass: while suspended, all sync work is skipped and
+	 *  dirty state accumulates. Caller must `force_full_resync()` after
+	 *  releasing suspension. */
+	set_suspended(suspended: boolean): void {
+		this.#suspended = suspended
+	}
+
 	/**
 	 * Compute the effective opacity for an atom at `site_id`. Mirrors
 	 * `AtomImpostors.svelte:get_effective_opacity` (L286-301) exactly:
@@ -242,6 +258,7 @@ export class AtomInstancedRenderer {
 	}
 
 	sync(): void {
+		if (this.#suspended) return
 		const manager = this.#manager
 		if (manager.version === this.#last_synced_version) return
 
@@ -404,6 +421,7 @@ export class AtomInstancedRenderer {
 	}
 
 	force_full_resync(): void {
+		if (this.#suspended) return
 		const manager = this.#manager
 		const mesh = this.#mesh
 		const capacity = mesh.instanceMatrix.count

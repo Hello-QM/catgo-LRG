@@ -1,31 +1,213 @@
 name: pypi-publish
 
 # Build the frontend, bundle it into the `catgo` wheel, and publish to PyPI.
-# Triggers on a published GitHub Release, or manually via workflow_dispatch.
+# A real upload starts only after the release finalizer has committed and
+# attested the public release. Manual runs default to build-only dry runs.
 #
-# Auth: set the `PYPI_API_TOKEN` repo secret (a PyPI project/API token). Or drop
-# the `password:` line and configure Trusted Publishing (OIDC) on the PyPI
-# project — the `id-token: write` permission below already enables it.
+# Auth: set the `PYPI_API_TOKEN` repo secret (a PyPI project/API token).
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows:
+      - Finalize verified CatGo release
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
         description: 'Build the wheel but do not publish'
         type: boolean
-        default: false
+        default: true
+      release_tag:
+        description: 'Exact tag to build (for example, v1.4.6)'
+        type: string
+        required: true
+      finalizer_run_id:
+        description: 'Required finalizer run ID when dry_run is false'
+        type: string
+        default: ''
 
 permissions:
+  actions: read
   contents: read
-  id-token: write   # required for PyPI Trusted Publishing (OIDC)
+
+env:
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
 
 jobs:
   build-and-publish:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Resolve finalizer run
+        id: finalizer
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_DRY_RUN: ${{ inputs.dry_run }}
+          MANUAL_FINALIZER_RUN_ID: ${{ inputs.finalizer_run_id }}
+          TRIGGERED_FINALIZER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          require_proof=false
+          publish=false
+          run_id=
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            require_proof=true
+            publish=true
+            run_id="$TRIGGERED_FINALIZER_RUN_ID"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            case "$MANUAL_DRY_RUN" in
+              true)
+                ;;
+              false)
+                require_proof=true
+                publish=true
+                run_id="$MANUAL_FINALIZER_RUN_ID"
+                if [ -z "$run_id" ]; then
+                  echo "::error::finalizer_run_id is required for a manual publish."
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "::error::dry_run must be true or false."
+                exit 1
+                ;;
+            esac
+          else
+            echo "::error::Unsupported event: $EVENT_NAME"
+            exit 1
+          fi
+
+          if [ "$require_proof" = "true" ] &&
+             ! [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Finalizer run ID must be a positive integer."
+            exit 1
+          fi
+
+          echo "FINALIZER_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          echo "REQUIRE_FINALIZER_PROOF=$require_proof" >> "$GITHUB_ENV"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "require_proof=$require_proof" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Download finalization attestation
+        if: ${{ steps.finalizer.outputs.require_proof == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: catgo-release-finalization
+          path: finalizer-proof
+          run-id: ${{ steps.finalizer.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify finalizer proof
+        id: proof
+        if: ${{ steps.finalizer.outputs.require_proof == 'true' }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_json=$(mktemp)
+          trap 'rm -f "$run_json"' EXIT
+          gh api "repos/$REPOSITORY/actions/runs/$FINALIZER_RUN_ID" \
+            > "$run_json"
+          jq -e \
+            --arg defaultBranch "$DEFAULT_BRANCH" \
+            --arg runId "$FINALIZER_RUN_ID" \
+            '.id == ($runId | tonumber) and
+             .path == ".github/workflows/finalize-release.yml" and
+             .event == "workflow_dispatch" and
+             .status == "completed" and
+             .conclusion == "success" and
+             .head_branch == $defaultBranch' \
+            "$run_json" > /dev/null
+
+          proof_file=finalizer-proof/catgo-release-finalization.json
+          if [ ! -f "$proof_file" ] || [ -L "$proof_file" ]; then
+            echo "::error::Finalizer attestation is missing or unsafe."
+            exit 1
+          fi
+          if [ "$(find finalizer-proof -type f | wc -l)" -ne 1 ]; then
+            echo "::error::Finalizer artifact must contain exactly one file."
+            exit 1
+          fi
+          jq -e \
+            --arg runId "$FINALIZER_RUN_ID" \
+            '.schemaVersion == 1 and
+             (.releaseTag | type == "string" and
+              test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+             (.sourceCommit | type == "string" and
+              test("^[0-9a-f]{40}$")) and
+             (.assetSnapshot | type == "string" and
+              test("^[0-9a-f]{64}$")) and
+             .githubRunId == $runId' \
+            "$proof_file" > /dev/null
+
+          release_tag=$(jq -r '.releaseTag' "$proof_file")
+          source_commit=$(jq -r '.sourceCommit' "$proof_file")
+          asset_snapshot=$(jq -r '.assetSnapshot' "$proof_file")
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "asset_snapshot=$asset_snapshot" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          PROOF_ASSET_SNAPSHOT: ${{ steps.proof.outputs.asset_snapshot }}
+          PROOF_RELEASE_TAG: ${{ steps.proof.outputs.release_tag }}
+          PROOF_SOURCE_COMMIT: ${{ steps.proof.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUIRE_FINALIZER_PROOF" = "true" ]; then
+            release_tag="$PROOF_RELEASE_TAG"
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] &&
+               [ "$INPUT_RELEASE_TAG" != "$release_tag" ]; then
+              echo "::error::Manual release_tag does not match the finalizer attestation."
+              exit 1
+            fi
+          else
+            release_tag="$INPUT_RELEASE_TAG"
+          fi
+          if ! [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid CatGo release tag: $release_tag"
+            exit 1
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$PROOF_SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "asset_snapshot=$PROOF_ASSET_SNAPSHOT" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.request.outputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ steps.request.outputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: true
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ steps.request.outputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: true
+        run: node scripts/verify-release-source.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -35,6 +217,17 @@ jobs:
         with:
           node-version: 'lts/*'
           cache: 'pnpm'
+
+      # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
+      # rebuilt with atomics via -Z build-std. Installed before stable so
+      # stable stays the default toolchain for everything else. Pinned via
+      # CATGO_WASM_NIGHTLY_TOOLCHAIN — see env at the top of this file.
+      - name: Setup Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
 
       - name: Setup Rust (+ wasm target)
         uses: dtolnay/rust-toolchain@stable
@@ -52,17 +245,22 @@ jobs:
       - name: Install JS deps
         run: pnpm install --no-frozen-lockfile
 
+      # Single canonical entry point for ALL wasm builds (design §8.3): it
+      # builds ferrox twice with explicit feature sets (wasm-scalar →
+      # pkg-scalar/+pkg/, wasm-threaded → pkg-threaded/) plus chgdiff +
+      # catrender. Never invoke wasm-pack directly here — `--features wasm`
+      # without --no-default-features is a compile error by design (lib.rs
+      # guard against default-Rayon wasm with no thread pool).
       - name: Build WASM crates
         run: |
           if ! command -v wasm-pack &> /dev/null; then
             curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           fi
-          cd extensions/rust
-          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
-          cd ../chgdiff-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
-          cd ../catrender-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+          export PATH=$PATH:$HOME/.cargo/bin
+          pnpm build:wasm
+
+      - name: Verify WASM artifacts (scalar + threaded ferrox)
+        run: node scripts/verify-wasm-artifacts.mjs
 
       - name: Build doc chunks
         run: pnpm run build:doc-chunks
@@ -87,10 +285,50 @@ jobs:
           python -m pip install --upgrade twine
           twine check server/dist/*
 
+      - name: Revalidate finalized public release
+        if: ${{ steps.finalizer.outputs.require_proof == 'true' }}
+        env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ steps.request.outputs.asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ steps.request.outputs.source_commit }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          head_commit=$(git rev-parse HEAD)
+          tag_commit=$(git rev-parse "$RELEASE_TAG^{commit}")
+          if [ "$head_commit" != "$EXPECTED_SOURCE_COMMIT" ] ||
+             [ "$tag_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Built source does not match the finalized tag commit."
+            exit 1
+          fi
+
+          release_json=$(mktemp)
+          trap 'rm -f "$release_json"' EXIT
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$release_json"
+          jq -e \
+            '.draft == false and .published_at != null' \
+            "$release_json" > /dev/null
+          current_asset_snapshot=$(
+            jq -c \
+              '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$current_asset_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Public release assets changed after finalization."
+            exit 1
+          fi
+
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' || !inputs.dry_run }}
+        if: >-
+          steps.finalizer.outputs.publish == 'true' &&
+          steps.finalizer.outputs.require_proof == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: server/dist/
-          # Remove `password:` to use Trusted Publishing (OIDC) instead.
           password: ${{ secrets.PYPI_API_TOKEN }}

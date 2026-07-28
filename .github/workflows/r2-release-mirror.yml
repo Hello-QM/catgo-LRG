@@ -1,12 +1,12 @@
 # Mirror release assets to Cloudflare R2 so users in mainland China (where
 # GitHub is often unreachable) can download CatGo and receive in-app updates.
 #
-# Layout in the bucket (keep-only-latest policy):
-#   <tag>/<asset>   e.g. v1.4.5/CatGo_1.4.5_x64-setup.exe
+# Layout in the bucket (latest app artifacts + retained versioned sidecars):
+#   <tag>/<asset>   e.g. v1.4.6/CatGo_1.4.6_x64-setup.exe
 #   latest.json     updater manifest with URLs rewritten to the mirror
-#   index.html      minimal bilingual download page listing the current assets
-# Older <tag>/ prefixes are pruned after a successful sync, so storage stays
-# within R2's 10 GB free tier (~2.8 GB per release). Egress from R2 is free.
+#   index.html      self-contained bilingual all-platform download page
+# Versioned release prefixes remain available for rollback and for older VS
+# Code extensions that must recover a version-coupled catgo-server sidecar.
 #
 # One-time setup (Cloudflare dashboard):
 #   1. R2 → Create bucket `catgo-releases`.
@@ -16,81 +16,504 @@
 #      bucket; add its credentials as repo secrets:
 #        R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
 #      (CLOUDFLARE_ACCOUNT_ID already exists as a secret.)
-#   Optional repo variables (defaults in env below): R2_BUCKET, R2_PUBLIC_BASE_URL.
+#   Optional repo variable: R2_BUCKET.
 #
-# Triggers: `release: published` — but note releases published by workflows
-# using GITHUB_TOKEN do NOT fire this event (same gotcha as pypi-publish.yml),
-# and manual asset uploads (e.g. the iOS .ipa) may land after publication.
-# When in doubt, run the workflow_dispatch form with the tag — the sync is
-# idempotent and safe to re-run any number of times.
+# Triggers include release publication, manual dispatch, and successful
+# completion of every workflow that can attach assets to the CatGo release.
+# Build STT accelerator is intentionally absent: it owns a separate
+# `stt-accel-v*` release series.
 
 name: Mirror release to R2
+run-name: >-
+  ${{ inputs.promote_root &&
+      format('R2 promote {0} [{1}]', inputs.tag, inputs.promotion_id) ||
+      inputs.rollback_root &&
+      format('R2 rollback {0} [{1}]', inputs.tag, inputs.promotion_id) ||
+      format('R2 mirror {0}', inputs.tag || github.ref_name) }}
 
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows:
+      - Build Desktop App
+      - Android build
+      - Build HPC Bundle
+      - Publish VSCode Extension
+      - Build VSCode Sidecar Binaries
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to mirror (e.g. v1.4.5); empty = latest release'
+        description: 'Cleared NCL release tag to mirror (e.g. v1.4.6); empty = latest release'
+        required: false
+        default: ''
+      promote_root:
+        description: 'Promote this fully verified draft to the public Cloudflare root'
+        type: boolean
+        required: false
+        default: false
+      rollback_root:
+        description: 'Restore the root backed up by this exact promotion'
+        type: boolean
+        required: false
+        default: false
+      expected_source_commit:
+        description: 'Finalizer-bound target tag commit (required for promotion)'
+        type: string
+        required: false
+        default: ''
+      expected_asset_snapshot:
+        description: 'Finalizer-bound draft asset snapshot (required for promotion)'
+        type: string
+        required: false
+        default: ''
+      promotion_id:
+        description: 'Unique finalizer correlation id (required for promotion)'
+        type: string
         required: false
         default: ''
 
 concurrency:
-  group: r2-release-mirror
-  cancel-in-progress: true
+  group: >-
+    ${{ (inputs.promote_root || inputs.rollback_root) &&
+        'r2-root-mutation' ||
+        format('r2-release-mirror-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  # GitHub hides draft releases from tokens without push-equivalent access.
+  # This workflow never mutates GitHub releases; tests enforce that boundary.
+  contents: write
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  APP_TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+$'
   R2_BUCKET: ${{ vars.R2_BUCKET || 'catgo-releases' }}
-  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://dl.catgo-ucsd.org' }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-  AWS_DEFAULT_REGION: auto
-  AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-  # aws-cli >= 2.23 sends CRC checksums by default, which R2's S3 API rejects.
-  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  # Security boundary: official updater/download metadata must never be
+  # redirected through a mutable repository variable.
+  R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
 
 jobs:
   mirror:
+    if: >-
+      (github.event_name != 'workflow_run' ||
+        github.event.workflow_run.conclusion == 'success') &&
+      (github.event_name != 'release' ||
+        startsWith(github.event.release.tag_name, 'v'))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - name: Check R2 credentials configured
         id: creds
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          PROMOTE_ROOT: ${{ inputs.promote_root }}
+          ROLLBACK_ROOT: ${{ inputs.rollback_root }}
         run: |
+          set -euo pipefail
+          if [ "$PROMOTE_ROOT" = "true" ] &&
+             [ "$ROLLBACK_ROOT" = "true" ]; then
+            echo "::error::promote_root and rollback_root are mutually exclusive."
+            exit 1
+          fi
+          if [ "$PROMOTE_ROOT" = "true" ]; then
+            root_action=promote_root
+          elif [ "$ROLLBACK_ROOT" = "true" ]; then
+            root_action=rollback_root
+          else
+            root_action=none
+          fi
+          echo "root_action=$root_action" >> "$GITHUB_OUTPUT"
           if [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+            if [ "$root_action" != "none" ]; then
+              echo "::error::R2 credentials are required for root mutation."
+              exit 1
+            fi
             echo "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY secrets not set — skipping mirror." >> "$GITHUB_STEP_SUMMARY"
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.configured == 'true'
+        with:
+          # Keep the verifier trusted: execute scripts from the default branch,
+          # then read legal material from the resolved release tag separately.
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
       - name: Resolve tag
         id: tag
         if: steps.creds.outputs.configured == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          ROOT_ACTION: ${{ steps.creds.outputs.root_action }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            tag="${{ github.event.release.tag_name }}"
-          elif [ -n "${{ inputs.tag }}" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          set -euo pipefail
+          root_request=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] &&
+             [ "$ROOT_ACTION" != "none" ]; then
+            root_request=true
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          latest_app_tag=
+          if [ "$root_request" != "true" ]; then
+            latest_app_tag=$(
+              gh api --paginate "repos/$REPOSITORY/releases?per_page=100" \
+                --jq '.[] |
+                  select(.draft == false and .prerelease == false) |
+                  .tag_name |
+                  select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+                sort -V |
+                tail -n 1
+            )
+            if [ -z "$latest_app_tag" ]; then
+              echo "No published CatGo app release found." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+
+          if [ "$root_request" = "true" ]; then
+            if [ -z "$REQUESTED_TAG" ] ||
+               ! [[ "$EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+               ! [[ "$EXPECTED_ASSET_SNAPSHOT" =~ ^[0-9a-f]{64}$ ]] ||
+               ! [[ "$PROMOTION_ID" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$ ]]; then
+              echo "::error::Root mutation requires tag, source commit, asset snapshot, and promotion id."
+              exit 1
+            fi
+            tag="$REQUESTED_TAG"
+          elif [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_EVENT_TAG"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            tag="$latest_app_tag"
+          elif [ -n "$REQUESTED_TAG" ]; then
+            tag="$REQUESTED_TAG"
+          else
+            tag="$latest_app_tag"
+          fi
+          if ! [[ "$tag" =~ $APP_TAG_PATTERN ]]; then
+            echo "Refusing non-CatGo release tag: $tag" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "latest_app_tag=$latest_app_tag"
+          } >> "$GITHUB_OUTPUT"
           echo "Mirroring release: $tag"
+
+      - name: Verify target release rights before any R2 mutation
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          ROOT_ACTION: ${{ steps.creds.outputs.root_action }}
+        run: |
+          set -euo pipefail
+          if [ "$ROOT_ACTION" = "rollback_root" ]; then
+            echo "Rollback uses the exact promotion receipt and backup hashes; release-rights publication gates do not block safe restoration."
+            exit 0
+          fi
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          if [ "$ROOT_ACTION" = "none" ]; then
+            rights_commit=$(git rev-parse "$tag^{commit}")
+          else
+            rights_commit="$EXPECTED_SOURCE_COMMIT"
+            git cat-file -e "$rights_commit^{commit}"
+          fi
+          target_rights_source=$(mktemp -d)
+          rmdir "$target_rights_source"
+          cleanup() {
+            git worktree remove --force \
+              "$target_rights_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_rights_source" "$rights_commit"
+          node scripts/verify-release-rights.mjs \
+            --root "$target_rights_source"
+
+      - name: Restore previous Cloudflare root
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          inputs.rollback_root
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          backup_prefix="promotion-backups/$PROMOTION_ID"
+          receipt_key="promotion-receipts/$PROMOTION_ID.json"
+
+          aws s3 cp "s3://$R2_BUCKET/$receipt_key" "$work/receipt.json"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/previous-root.json" \
+            "$work/previous-root.json"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-latest.json" \
+            "$work/promoted-latest.json"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-index.html" \
+            "$work/promoted-index.html"
+          mkdir "$work/assets"
+          aws s3 sync \
+            "s3://$R2_BUCKET/$MIRROR_TAG/" \
+            "$work/assets/" \
+            --only-show-errors
+
+          verify_args=(
+            verify
+            --receipt "$work/receipt.json"
+            --assets-dir "$work/assets"
+            --tag "$MIRROR_TAG"
+            --source-commit "$EXPECTED_SOURCE_COMMIT"
+            --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT"
+            --promotion-id "$PROMOTION_ID"
+            --latest "$work/promoted-latest.json"
+            --index "$work/promoted-index.html"
+            --previous-state "$work/previous-root.json"
+          )
+          if jq -e '.latest.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "s3://$R2_BUCKET/$backup_prefix/latest.json" \
+              "$work/previous-latest.json"
+            verify_args+=(--previous-latest "$work/previous-latest.json")
+          fi
+          if jq -e '.index.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "s3://$R2_BUCKET/$backup_prefix/index.html" \
+              "$work/previous-index.html"
+            verify_args+=(--previous-index "$work/previous-index.html")
+          fi
+          node scripts/verify-release-promotion-receipt.mjs \
+            "${verify_args[@]}"
+
+          inspect_root_object() {
+            key=$1
+            promoted_hash=$2
+            previous_present=$3
+            previous_hash=$4
+            output=$5
+            error_log=$6
+            if aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$key" > /dev/null 2>"$error_log"; then
+              aws s3 cp \
+                "s3://$R2_BUCKET/$key" \
+                "$output" \
+                --only-show-errors
+              current_hash=$(sha256sum "$output" | cut -d ' ' -f 1)
+              if [ "$current_hash" = "$promoted_hash" ]; then
+                return 0
+              fi
+              if [ "$previous_present" = "true" ] &&
+                 [ "$current_hash" = "$previous_hash" ]; then
+                return 0
+              fi
+            elif grep -Eqi '404|Not Found|NoSuchKey' "$error_log" &&
+                 [ "$previous_present" = "false" ]; then
+              return 0
+            else
+              cat "$error_log" >&2
+            fi
+            echo "::error::Unexpected current R2 root object: $key"
+            return 1
+          }
+          promoted_latest_hash=$(
+            jq -r '.latestSha256' "$work/receipt.json"
+          )
+          promoted_index_hash=$(
+            jq -r '.indexSha256' "$work/receipt.json"
+          )
+          previous_latest_present=$(
+            jq -r '.latest.present' "$work/previous-root.json"
+          )
+          previous_latest_hash=$(
+            jq -r '.latest.sha256 // ""' "$work/previous-root.json"
+          )
+          previous_index_present=$(
+            jq -r '.index.present' "$work/previous-root.json"
+          )
+          previous_index_hash=$(
+            jq -r '.index.sha256 // ""' "$work/previous-root.json"
+          )
+          # Each object may independently be either the promoted or previous
+          # byte sequence. This makes a partially completed rollback safe to
+          # retry without accepting unrelated root content.
+          inspect_root_object \
+            latest.json \
+            "$promoted_latest_hash" \
+            "$previous_latest_present" \
+            "$previous_latest_hash" \
+            "$work/current-latest.json" \
+            "$work/current-latest.error"
+          inspect_root_object \
+            index.html \
+            "$promoted_index_hash" \
+            "$previous_index_present" \
+            "$previous_index_hash" \
+            "$work/current-index.html" \
+            "$work/current-index.error"
+
+          if jq -e '.index.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "$work/previous-index.html" \
+              "s3://$R2_BUCKET/index.html" \
+              --content-type 'text/html; charset=utf-8' \
+              --cache-control 'public, max-age=300'
+          else
+            aws s3 rm "s3://$R2_BUCKET/index.html"
+          fi
+          # Rollback commit marker: restore/delete latest.json last.
+          if jq -e '.latest.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "$work/previous-latest.json" \
+              "s3://$R2_BUCKET/latest.json" \
+              --content-type application/json \
+              --cache-control 'public, max-age=300'
+          else
+            aws s3 rm "s3://$R2_BUCKET/latest.json"
+          fi
+
+          verify_public_object() {
+            name=$1
+            state_key=$2
+            output=$3
+            expected_present=$(jq -r ".$state_key.present" "$work/previous-root.json")
+            expected_hash=$(jq -r ".$state_key.sha256" "$work/previous-root.json")
+            status=$(
+              curl --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                --output "$output" \
+                --write-out '%{http_code}' \
+                "$R2_PUBLIC_BASE_URL/$name?rollback=$PROMOTION_ID"
+            )
+            if [ "$expected_present" = "true" ]; then
+              [ "$status" = "200" ] &&
+                [ "$(sha256sum "$output" | cut -d ' ' -f 1)" = "$expected_hash" ]
+            else
+              [ "$status" = "404" ]
+            fi
+          }
+          restored=false
+          for attempt in $(seq 1 60); do
+            if verify_public_object \
+                 index.html index "$work/public-index.html" &&
+               verify_public_object \
+                 latest.json latest "$work/public-latest.json"; then
+              restored=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$restored" != "true" ]; then
+            echo "::error::Cloudflare root rollback could not be verified."
+            exit 1
+          fi
+
+          jq -n \
+            --arg promotionId "$PROMOTION_ID" \
+            --arg releaseTag "$MIRROR_TAG" \
+            --arg sourceCommit "$EXPECTED_SOURCE_COMMIT" \
+            --arg assetSnapshot "$EXPECTED_ASSET_SNAPSHOT" \
+            --slurpfile previousRoot "$work/previous-root.json" \
+            '{
+              schemaVersion: 1,
+              promotionId: $promotionId,
+              releaseTag: $releaseTag,
+              sourceCommit: $sourceCommit,
+              assetSnapshot: $assetSnapshot,
+              status: "restored",
+              restoredRoot: $previousRoot[0]
+            }' > "$work/rollback-receipt.json"
+          aws s3 cp \
+            "$work/rollback-receipt.json" \
+            "s3://$R2_BUCKET/rollback-receipts/$PROMOTION_ID.json" \
+            --content-type application/json \
+            --cache-control 'no-store'
+
+      - name: Confirm requested promotion identity
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          inputs.promote_root
+        env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          actual_source_commit=$(git rev-parse "$tag^{commit}")
+          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Promotion tag does not match the finalizer source commit."
+            exit 1
+          fi
+          release_json=$(mktemp)
+          release_id=$(gh release view "$tag" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Could not resolve release database id for $tag."
+            exit 1
+          fi
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          if [ "$(jq -r '.tag_name' "$release_json")" != "$tag" ]; then
+            echo "::error::Release database id is no longer bound to $tag."
+            exit 1
+          fi
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Promotion target must remain a draft release."
+            exit 1
+          fi
+          asset_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$asset_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Promotion assets do not match the finalizer snapshot."
+            exit 1
+          fi
 
       - name: Wait for asset list to stabilize
         # Build workflows attach assets asynchronously after the release is
         # published. Poll until the asset count is unchanged for 3 consecutive
         # minutes (skipped on manual dispatch — by then the release is done).
         if: steps.creds.outputs.configured == 'true' && github.event_name == 'release'
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          tag="$MIRROR_TAG"
           prev=-1; stable=0
           for i in $(seq 1 30); do
-            count=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.assets | length')
+            count=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq '.assets | length')
             echo "poll $i: $count assets"
             if [ "$count" = "$prev" ]; then
               stable=$((stable + 1))
@@ -103,91 +526,637 @@ jobs:
           done
 
       - name: Download release assets
-        if: steps.creds.outputs.configured == 'true'
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p dist
-          gh release download '${{ steps.tag.outputs.tag }}' \
-            --repo '${{ github.repository }}' --dir dist
+          gh release download "$MIRROR_TAG" \
+            --repo "$REPOSITORY" --dir dist
           ls -lh dist
 
-      - name: Rewrite latest.json URLs to the mirror
-        # latest.json is the Tauri updater manifest; its asset URLs point at
-        # github.com, which defeats the purpose for users behind the GFW.
-        # Point them at the mirror instead and serve the manifest from the
-        # bucket root (the updater endpoint in tauri.conf.json).
-        if: steps.creds.outputs.configured == 'true'
+      - name: Rewrite latest.json URLs for Cloudflare
+        # Rewrite before validation so the verifier sees exactly what R2 will
+        # serve. A stale source tag remains stale after the host substitution
+        # and is rejected by verify-mirrored-release.mjs.
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          if [ -f dist/latest.json ]; then
-            jq --arg base "$R2_PUBLIC_BASE_URL" '
-              .platforms |= map_values(
-                .url |= sub("https://github.com/[^/]+/[^/]+/releases/download/"; $base + "/")
-              )' dist/latest.json > latest.mirror.json
-            jq . latest.mirror.json > /dev/null
-          else
-            echo "no latest.json in this release — skipping manifest rewrite"
+          set -euo pipefail
+          if [ ! -f dist/latest.json ]; then
+            echo "Release has no latest.json; refusing to publish a broken updater mirror." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+
+          rewritten=$(mktemp)
+          trap 'rm -f "$rewritten"' EXIT
+          jq --arg base "${R2_PUBLIC_BASE_URL%/}" '
+            .platforms |= map_values(
+              .url |= sub(
+                "^https://github.com/[^/]+/[^/]+/releases/download/";
+                $base + "/"
+              )
+            )
+          ' dist/latest.json > "$rewritten"
+          mv "$rewritten" dist/latest.json
+          jq . dist/latest.json > /dev/null
+
+      - name: Validate release assets against target tag
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          target_source=$(mktemp -d)
+          rmdir "$target_source"
+          cleanup() {
+            git worktree remove --force "$target_source" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$target_source" "$tag^{commit}"
+          # Historical pre-NCL redistribution is disabled; manual dispatch
+          # provides no exemption. Eligible NCL tags must still clear their
+          # own rights ledger before any further validation or publication.
+          node scripts/verify-release-rights.mjs --root "$target_source"
+          node scripts/verify-release-version.mjs \
+            --root "$target_source" \
+            --tag "$tag" \
+            --require-tag
+          node scripts/verify-release-source.mjs \
+            --root "$target_source" \
+            --tag "$tag" \
+            --require-tag
+          node scripts/verify-mirrored-release.mjs \
+            --tag "$tag" \
+            --assets-dir dist \
+            --source-root "$target_source"
+          source_commit=$(git rev-parse "$tag^{commit}")
+          if [ -z "$MACOS_SIGNING_IDENTITY" ] ||
+             [ -z "$APPLE_DEVELOPMENT_TEAM" ]; then
+            echo "::error::macOS signing identity and team are required."
+            exit 1
+          fi
+          node scripts/verify-macos-signing-attestation.mjs \
+            --tag "$tag" \
+            --source-commit "$source_commit" \
+            --assets-dir dist \
+            --expected-signer "$MACOS_SIGNING_IDENTITY" \
+            --expected-team "$APPLE_DEVELOPMENT_TEAM"
+          mac_attestation="dist/catgo-macos-signing-${tag}.json"
+          mac_run_id=$(jq -er \
+            '.githubRunId |
+             select(type == "string" and test("^[1-9][0-9]*$"))' \
+            "$mac_attestation")
+          mac_run_json=$(mktemp)
+          mac_jobs_json=$(mktemp)
+          gh api \
+            "repos/$REPOSITORY/actions/runs/$mac_run_id" \
+            > "$mac_run_json"
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$mac_run_id/jobs?per_page=100" \
+            > "$mac_jobs_json"
+          node scripts/verify-macos-signing-run.mjs \
+            --attestation "$mac_attestation" \
+            --run "$mac_run_json" \
+            --jobs "$mac_jobs_json" \
+            --source-commit "$source_commit" \
+            --target-workflow \
+              "$target_source/.github/workflows/tauri-build.yml"
+          node scripts/verify-ios-testflight-attestation.mjs \
+            --tag "$tag" \
+            --source-commit "$source_commit" \
+            --assets-dir dist
+          node scripts/verify-trusted-ios-workflow.mjs \
+            --source-root "$target_source"
+          attestation="dist/catgo-ios-testflight-${tag}.json"
+          run_id=$(jq -er '.githubRunId | select(type == "string" and test("^[1-9][0-9]*$"))' "$attestation")
+          run_json=$(mktemp)
+          jobs_json=$(mktemp)
+          gh api "repos/$REPOSITORY/actions/runs/$run_id" > "$run_json"
+          gh api --paginate --slurp \
+            "repos/$REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+            > "$jobs_json"
+          run_head_sha=$(jq -er \
+            '.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$run_json")
+          run_source=$(mktemp -d)
+          mkdir -p "$run_source/.github/workflows"
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$REPOSITORY/contents/.github/workflows/ios-build.yml?ref=$run_head_sha" \
+            > "$run_source/.github/workflows/ios-build.yml"
+          node scripts/verify-trusted-ios-workflow.mjs \
+            --source-root "$run_source"
+          node scripts/verify-ios-testflight-run.mjs \
+            --attestation "$attestation" \
+            --run "$run_json" \
+            --jobs "$jobs_json" \
+            --source-commit "$source_commit" \
+            --run-workflow "$run_source/.github/workflows/ios-build.yml"
 
       - name: Generate index.html download page
-        if: steps.creds.outputs.configured == 'true'
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
-          {
-            echo '<!doctype html><meta charset="utf-8">'
-            echo "<title>CatGo downloads — $tag</title>"
-            echo '<style>body{font-family:system-ui;max-width:720px;margin:3rem auto;padding:0 1rem}td{padding:.3rem .8rem}</style>'
-            echo "<h1>CatGo $tag</h1>"
-            echo '<p>中国大陆下载镜像 / China download mirror.'
-            echo '完整发布说明见 <a href="https://github.com/${{ github.repository }}/releases">GitHub Releases</a>.</p>'
-            echo '<table>'
-            for f in dist/*; do
-              name=$(basename "$f")
-              size=$(du -h "$f" | cut -f1)
-              echo "<tr><td><a href=\"$tag/$name\">$name</a></td><td>$size</td></tr>"
-            done
-            echo '</table>'
-          } > index.html
+          tag="$MIRROR_TAG"
+          node scripts/generate-download-page.mjs \
+            --assets-dir dist \
+            --tag "$tag" \
+            --base-url "$R2_PUBLIC_BASE_URL" \
+            --output index.html
 
-      - name: Sync to R2
-        if: steps.creds.outputs.configured == 'true'
+      - name: Re-confirm promotion identity before R2 mutation
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          inputs.promote_root
+        env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          actual_source_commit=$(git rev-parse "$tag^{commit}")
+          if [ "$actual_source_commit" != "$EXPECTED_SOURCE_COMMIT" ]; then
+            echo "::error::Promotion tag moved during validation."
+            exit 1
+          fi
+          release_json=$(mktemp)
+          release_id=$(gh release view "$tag" \
+            --repo "$REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')
+          if ! [[ "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Could not resolve release database id for $tag."
+            exit 1
+          fi
+          gh api "repos/$REPOSITORY/releases/$release_id" > "$release_json"
+          if [ "$(jq -r '.tag_name' "$release_json")" != "$tag" ]; then
+            echo "::error::Release database id is no longer bound to $tag."
+            exit 1
+          fi
+          if [ "$(jq -r '.draft' "$release_json")" != "true" ]; then
+            echo "::error::Promotion target stopped being a draft."
+            exit 1
+          fi
+          asset_snapshot=$(
+            jq -c '[.assets[] | {id, name, size, digest, updated_at}] | sort_by(.name)' \
+              "$release_json" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )
+          if [ "$asset_snapshot" != "$EXPECTED_ASSET_SNAPSHOT" ]; then
+            echo "::error::Promotion assets changed during validation."
+            exit 1
+          fi
+
+      - name: Sync versioned release to R2
+        id: sync
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$MIRROR_TAG"
+          aws s3 sync dist/ "s3://$R2_BUCKET/$tag/" --delete
+          # R2 can race a same-key upload and --delete operation within one
+          # concurrent sync. Reconcile once without deletion so every source
+          # object is guaranteed to be the final operation for its key.
           aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"
-          if [ -f latest.mirror.json ]; then
-            aws s3 cp latest.mirror.json "s3://$R2_BUCKET/latest.json" \
-              --content-type application/json --cache-control 'public, max-age=300'
-          fi
-          aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
-            --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'
 
-      - name: Prune older releases (keep only the latest)
-        # Only prune when the tag we just synced IS the repo's latest release —
-        # a manual backfill of an old tag must not delete the current one.
-        if: steps.creds.outputs.configured == 'true'
+      - name: Back up and promote Cloudflare root
+        id: promote
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          inputs.promote_root
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
-          latest=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
-          if [ "$tag" != "$latest" ]; then
-            echo "synced $tag but latest is $latest — skipping prune"
-            exit 0
-          fi
-          aws s3api list-objects-v2 --bucket "$R2_BUCKET" --delimiter / \
-            --query 'CommonPrefixes[].Prefix' --output text 2>/dev/null | tr '\t' '\n' | \
-          while read -r prefix; do
-            [ -z "$prefix" ] || [ "$prefix" = "None" ] && continue
-            if [ "$prefix" != "$tag/" ]; then
-              echo "pruning stale prefix: $prefix"
-              aws s3 rm "s3://$R2_BUCKET/$prefix" --recursive
+          set -Eeuo pipefail
+          work=$(mktemp -d)
+          backup_prefix="promotion-backups/$PROMOTION_ID"
+          receipt_key="promotion-receipts/$PROMOTION_ID.json"
+          root_mutated=false
+
+          restore_previous_root() {
+            if jq -e '.index.present == true' \
+                "$work/previous-root.json" > /dev/null; then
+              aws s3 cp \
+                "$work/previous-index.html" \
+                "s3://$R2_BUCKET/index.html" \
+                --content-type 'text/html; charset=utf-8' \
+                --cache-control 'public, max-age=300'
+            else
+              aws s3 rm "s3://$R2_BUCKET/index.html" || true
             fi
+            if jq -e '.latest.present == true' \
+                "$work/previous-root.json" > /dev/null; then
+              aws s3 cp \
+                "$work/previous-latest.json" \
+                "s3://$R2_BUCKET/latest.json" \
+                --content-type application/json \
+                --cache-control 'public, max-age=300'
+            else
+              aws s3 rm "s3://$R2_BUCKET/latest.json" || true
+            fi
+          }
+          rollback_partial_promotion() {
+            status=$?
+            trap - ERR
+            set +e
+            if [ "$root_mutated" = "true" ]; then
+              echo "::warning::R2 promotion failed; restoring previous root."
+              restore_previous_root
+            fi
+            rm -rf "$work"
+            exit "$status"
+          }
+          trap rollback_partial_promotion ERR
+
+          require_unused_key() {
+            key=$1
+            error_log=$2
+            if aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$key" > /dev/null 2>"$error_log"; then
+              echo "::error::Promotion storage already exists: $key"
+              return 1
+            elif grep -Eqi '404|Not Found|NoSuchKey' "$error_log"; then
+              return 0
+            fi
+            cat "$error_log" >&2
+            return 1
+          }
+          require_unused_key "$receipt_key" "$work/receipt-head.error"
+          require_unused_key \
+            "$backup_prefix/previous-root.json" \
+            "$work/backup-head.error"
+          require_unused_key \
+            "$backup_prefix/promoted-latest.json" \
+            "$work/promoted-latest-head.error"
+          require_unused_key \
+            "$backup_prefix/promoted-index.html" \
+            "$work/promoted-index-head.error"
+
+          backup_root_object() {
+            key=$1
+            output=$2
+            error_log=$3
+            if aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$key" > /dev/null 2>"$error_log"; then
+              aws s3 cp "s3://$R2_BUCKET/$key" "$output" > /dev/null
+              sha256sum "$output" | cut -d ' ' -f 1
+            elif grep -Eqi '404|Not Found|NoSuchKey' "$error_log"; then
+              printf 'absent'
+            else
+              cat "$error_log" >&2
+              return 1
+            fi
+          }
+          previous_latest_hash=$(
+            backup_root_object \
+              latest.json "$work/previous-latest.json" "$work/latest.error"
+          )
+          previous_index_hash=$(
+            backup_root_object \
+              index.html "$work/previous-index.html" "$work/index.error"
+          )
+          jq -n \
+            --arg latest "$previous_latest_hash" \
+            --arg index "$previous_index_hash" \
+            '{
+              latest: {
+                present: ($latest != "absent"),
+                sha256: (if $latest == "absent" then null else $latest end)
+              },
+              index: {
+                present: ($index != "absent"),
+                sha256: (if $index == "absent" then null else $index end)
+              }
+            }' > "$work/previous-root.json"
+
+          aws s3 cp \
+            "$work/previous-root.json" \
+            "s3://$R2_BUCKET/$backup_prefix/previous-root.json" \
+            --content-type application/json
+          if [ "$previous_latest_hash" != "absent" ]; then
+            aws s3 cp \
+              "$work/previous-latest.json" \
+              "s3://$R2_BUCKET/$backup_prefix/latest.json"
+          fi
+          if [ "$previous_index_hash" != "absent" ]; then
+            aws s3 cp \
+              "$work/previous-index.html" \
+              "s3://$R2_BUCKET/$backup_prefix/index.html"
+          fi
+          aws s3 cp \
+            dist/latest.json \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-latest.json" \
+            --content-type application/json
+          aws s3 cp \
+            index.html \
+            "s3://$R2_BUCKET/$backup_prefix/promoted-index.html" \
+            --content-type 'text/html; charset=utf-8'
+
+          receipt_args=(
+            create
+            --receipt "$work/receipt.json"
+            --tag "$MIRROR_TAG"
+            --source-commit "$EXPECTED_SOURCE_COMMIT"
+            --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT"
+            --promotion-id "$PROMOTION_ID"
+            --latest dist/latest.json
+            --index index.html
+            --assets-dir dist
+            --previous-state "$work/previous-root.json"
+          )
+          if [ "$previous_latest_hash" != "absent" ]; then
+            receipt_args+=(--previous-latest "$work/previous-latest.json")
+          fi
+          if [ "$previous_index_hash" != "absent" ]; then
+            receipt_args+=(--previous-index "$work/previous-index.html")
+          fi
+          node scripts/verify-release-promotion-receipt.mjs \
+            "${receipt_args[@]}"
+
+          # Durable recovery marker: publish the fully verified receipt while
+          # the public root is still untouched. A cancelled runner can then
+          # always be reconciled by the independent finalizer compensator.
+          aws s3 cp \
+            "$work/receipt.json" \
+            "s3://$R2_BUCKET/$receipt_key" \
+            --content-type application/json \
+            --cache-control 'no-store'
+          echo "backup_ready=true" >> "$GITHUB_OUTPUT"
+          root_mutated=true
+          aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
+            --content-type 'text/html; charset=utf-8' \
+            --cache-control 'public, max-age=300'
+          # Commit marker: clients observe the new root only after its index.
+          aws s3 cp dist/latest.json "s3://$R2_BUCKET/latest.json" \
+            --content-type application/json \
+            --cache-control 'public, max-age=300'
+          echo "root_published=true" >> "$GITHUB_OUTPUT"
+          trap - ERR
+          rm -rf "$work"
+
+      - name: Verify promoted Cloudflare endpoints
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          inputs.promote_root &&
+          steps.promote.outputs.root_published == 'true'
+        env:
+          EXPECTED_ASSET_SNAPSHOT: ${{ inputs.expected_asset_snapshot }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.expected_source_commit }}
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
+        run: |
+          set -euo pipefail
+          receipt=$(mktemp)
+          manifest=$(mktemp)
+          index_page=$(mktemp)
+          assets_dir=$(mktemp -d)
+          trap 'rm -rf "$assets_dir"; rm -f "$receipt" "$manifest" "$index_page"' EXIT
+          verified=false
+          probe_required_assets() {
+            RECEIPT_PATH=$1 node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const receipt = JSON.parse(
+            readFileSync(process.env.RECEIPT_PATH, 'utf8'),
+          )
+          const base = process.env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '')
+          const tag = process.env.MIRROR_TAG
+          const promotionId = process.env.PROMOTION_ID
+          for (const asset of receipt.requiredAssets) {
+            if (
+              typeof asset.name !== 'string' ||
+              !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(asset.name) ||
+              !Number.isSafeInteger(asset.size) ||
+              asset.size < 0
+            ) {
+              throw new Error('Invalid required asset metadata')
+            }
+            const url =
+              `${base}/${encodeURIComponent(tag)}/` +
+              `${encodeURIComponent(asset.name)}` +
+              `?promotion=${encodeURIComponent(promotionId)}`
+            const response = await fetch(url, {
+              method: 'HEAD',
+              headers: { 'Cache-Control': 'no-cache' },
+            })
+            const contentLength = Number(
+              response.headers.get('content-length'),
+            )
+            if (response.status !== 200 || contentLength !== asset.size) {
+              throw new Error(
+                `Required asset is unavailable or has the wrong size: ` +
+                `${asset.name} (${response.status}, ${contentLength})`,
+              )
+            }
+          }
+          NODE
+          }
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                "$R2_PUBLIC_BASE_URL/latest.json?promotion=$PROMOTION_ID" \
+                --output "$manifest" &&
+               jq -e \
+                 --arg version "${MIRROR_TAG#v}" \
+                 --arg prefix "$R2_PUBLIC_BASE_URL/$MIRROR_TAG/" \
+                 '.version == $version and
+                  (.platforms | type == "object") and
+                  ([.platforms[].url | startswith($prefix)] | all)' \
+                 "$manifest" > /dev/null &&
+               curl --fail --silent --show-error \
+                 --header 'Cache-Control: no-cache' \
+                 "$R2_PUBLIC_BASE_URL/index.html?promotion=$PROMOTION_ID" \
+                 --output "$index_page" &&
+               curl --fail --silent --show-error \
+                 --header 'Cache-Control: no-cache' \
+                 "$R2_PUBLIC_BASE_URL/promotion-receipts/$PROMOTION_ID.json?promotion=$PROMOTION_ID" \
+                 --output "$receipt" &&
+               jq -e \
+                 '.schemaVersion == 2 and
+                  (.requiredAssets | type == "array")' \
+                 "$receipt" > /dev/null &&
+               probe_required_assets "$receipt" &&
+               grep -Fq "$MIRROR_TAG" "$index_page" &&
+               rm -rf "$assets_dir" &&
+               mkdir "$assets_dir"; then
+              assets_available=true
+              while IFS= read -r asset; do
+                if ! [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+                  assets_available=false
+                  break
+                fi
+                asset_path="$assets_dir/$asset"
+                if ! curl --fail --location --silent --show-error \
+                    --header 'Cache-Control: no-cache' \
+                    --output "$asset_path" \
+                    "$R2_PUBLIC_BASE_URL/$MIRROR_TAG/$asset?promotion=$PROMOTION_ID"; then
+                  assets_available=false
+                  break
+                fi
+              done < <(jq -r '.requiredAssets[].name' "$receipt")
+              if [ "$assets_available" = "true" ] &&
+                 node scripts/verify-release-promotion-receipt.mjs \
+                   verify \
+                   --receipt "$receipt" \
+                   --assets-dir "$assets_dir" \
+                   --tag "$MIRROR_TAG" \
+                   --source-commit "$EXPECTED_SOURCE_COMMIT" \
+                   --asset-snapshot "$EXPECTED_ASSET_SNAPSHOT" \
+                   --promotion-id "$PROMOTION_ID" \
+                   --latest "$manifest" \
+                   --index "$index_page"; then
+                verified=true
+                break
+              fi
+            fi
+            sleep 5
           done
+          if [ "$verified" != "true" ]; then
+            echo "::error::Cloudflare root endpoints do not expose $MIRROR_TAG."
+            exit 1
+          fi
+
+      - name: Roll back failed Cloudflare promotion
+        if: >-
+          failure() &&
+          inputs.promote_root &&
+          steps.promote.outputs.backup_ready == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          PROMOTION_ID: ${{ inputs.promotion_id }}
+          R2_PUBLIC_BASE_URL: https://dl.catgo-ucsd.org
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          backup_prefix="promotion-backups/$PROMOTION_ID"
+          aws s3 cp \
+            "s3://$R2_BUCKET/$backup_prefix/previous-root.json" \
+            "$work/previous-root.json"
+          if jq -e '.index.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "s3://$R2_BUCKET/$backup_prefix/index.html" \
+              "s3://$R2_BUCKET/index.html" \
+              --metadata-directive REPLACE \
+              --content-type 'text/html; charset=utf-8' \
+              --cache-control 'public, max-age=300'
+          else
+            aws s3 rm "s3://$R2_BUCKET/index.html" || true
+          fi
+          if jq -e '.latest.present == true' \
+              "$work/previous-root.json" > /dev/null; then
+            aws s3 cp \
+              "s3://$R2_BUCKET/$backup_prefix/latest.json" \
+              "s3://$R2_BUCKET/latest.json" \
+              --metadata-directive REPLACE \
+              --content-type application/json \
+              --cache-control 'public, max-age=300'
+          else
+            aws s3 rm "s3://$R2_BUCKET/latest.json" || true
+          fi
+
+          verify_public_object() {
+            name=$1
+            state_key=$2
+            output=$3
+            expected_present=$(jq -r ".$state_key.present" "$work/previous-root.json")
+            expected_hash=$(jq -r ".$state_key.sha256" "$work/previous-root.json")
+            status=$(
+              curl --silent --show-error \
+                --header 'Cache-Control: no-cache' \
+                --output "$output" \
+                --write-out '%{http_code}' \
+                "$R2_PUBLIC_BASE_URL/$name?compensation=$PROMOTION_ID"
+            )
+            if [ "$expected_present" = "true" ]; then
+              [ "$status" = "200" ] &&
+                [ "$(sha256sum "$output" | cut -d ' ' -f 1)" = "$expected_hash" ]
+            else
+              [ "$status" = "404" ]
+            fi
+          }
+          restored=false
+          for attempt in $(seq 1 60); do
+            if verify_public_object \
+                 index.html index "$work/public-index.html" &&
+               verify_public_object \
+                 latest.json latest "$work/public-latest.json"; then
+              restored=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$restored" != "true" ]; then
+            echo "::error::Failed-promotion compensation was not observable."
+            exit 1
+          fi
 
       - name: Summary
-        if: steps.creds.outputs.configured == 'true'
+        if: >-
+          steps.creds.outputs.configured == 'true' &&
+          !inputs.rollback_root
+        env:
+          MIRROR_TAG: ${{ steps.tag.outputs.tag }}
+          ROOT_PUBLISHED: ${{ steps.promote.outputs.root_published }}
         run: |
-          tag='${{ steps.tag.outputs.tag }}'
+          tag="$MIRROR_TAG"
           {
             echo "### Mirrored $tag to R2"
             echo ""
-            echo "- Download page: $R2_PUBLIC_BASE_URL/"
-            echo "- Updater manifest: $R2_PUBLIC_BASE_URL/latest.json"
             echo "- Assets: $R2_PUBLIC_BASE_URL/$tag/<file>"
+            if [ "$ROOT_PUBLISHED" = "true" ]; then
+              echo "- Download page: $R2_PUBLIC_BASE_URL/"
+              echo "- Updater manifest: $R2_PUBLIC_BASE_URL/latest.json"
+            else
+              echo "- Root metadata: unchanged (versioned sync only)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -5,6 +5,7 @@ import * as math from '$lib/math'
 import type {
   FrameIndex,
   FrameLoader,
+  FramePositionData,
   ParseProgress,
   TrajectoryFrame,
   TrajectoryMetadata,
@@ -21,6 +22,7 @@ import {
 export class TrajFrameReader implements FrameLoader {
   private format: `xyz` | `ase`
   private global_numbers?: number[] // For ASE trajectories
+  private global_elements?: ElementSymbol[] // For XYZ trajectories
   // Cached per-frame character offsets into the XYZ source string.
   // Length = n_frames + 1; frame i spans [offsets[i], offsets[i + 1]).
   // Built once via a single newline-walking pass (NO whole-file split),
@@ -34,7 +36,10 @@ export class TrajFrameReader implements FrameLoader {
   }
 
   fork(): FrameLoader {
-    return new TrajFrameReader(this.filename)
+    const fork = new TrajFrameReader(this.filename)
+    fork.global_numbers = this.global_numbers ? [...this.global_numbers] : undefined
+    fork.global_elements = this.global_elements ? [...this.global_elements] : undefined
+    return fork
   }
 
   /**
@@ -180,6 +185,17 @@ export class TrajFrameReader implements FrameLoader {
     else return this.load_ase_frame(data as ArrayBuffer, frame_number)
   }
 
+  // async needed to satisfy FrameLoader interface
+  // deno-lint-ignore require-await
+  async load_frame_positions(
+    data: string | ArrayBuffer,
+    frame_number: number,
+  ): Promise<FramePositionData | null> {
+    return this.format === `xyz`
+      ? this.load_xyz_frame_positions(data as string, frame_number)
+      : this.load_ase_frame_positions(data as ArrayBuffer, frame_number)
+  }
+
   async extract_plot_metadata(
     data: string | ArrayBuffer,
     options?: { sample_rate?: number; properties?: string[] },
@@ -312,6 +328,7 @@ export class TrajFrameReader implements FrameLoader {
       }
     }
 
+    if (frame_number === 0) this.global_elements = [...elements]
     const metadata = this.parse_xyz_metadata(comment, frame_number)
     // Per-frame lattice from the extxyz comment (#536): the indexed path must
     // agree with the eager parser (parsers/xyz.ts), which attaches the lattice
@@ -328,6 +345,161 @@ export class TrajFrameReader implements FrameLoader {
       frame_number,
       metadata.properties,
     )
+  }
+
+  private load_xyz_frame_positions(
+    data: string,
+    frame_number: number,
+  ): FramePositionData | null {
+    const offsets = this.ensure_xyz_offsets(data)
+    if (frame_number < 0 || frame_number + 1 >= offsets.length) return null
+
+    const chunk = data.slice(offsets[frame_number], offsets[frame_number + 1])
+    const lines = chunk.split(/\r?\n/)
+    let head = 0
+    while (head < lines.length && !lines[head]?.trim()) head++
+    const num_atoms = parseInt(lines[head]?.trim(), 10)
+    if (isNaN(num_atoms) || head + num_atoms + 1 >= lines.length) return null
+
+    const positions = new Float32Array(num_atoms * 3)
+    const elements: ElementSymbol[] = []
+    for (let atom_idx = 0; atom_idx < num_atoms; atom_idx++) {
+      const parts = lines[head + 2 + atom_idx]?.trim().split(/\s+/)
+      if (!parts || parts.length < 4) return null
+      elements.push(parts[0] as ElementSymbol)
+      const offset = atom_idx * 3
+      positions[offset] = Number(parts[1])
+      positions[offset + 1] = Number(parts[2])
+      positions[offset + 2] = Number(parts[3])
+    }
+
+    if (frame_number === 0 || !this.global_elements) {
+      this.global_elements = [...elements]
+    }
+    const topology_changed = elements.length !== this.global_elements.length ||
+      elements.some((element, idx) => element !== this.global_elements?.[idx])
+    const metadata = this.parse_xyz_metadata(lines[head + 1] || ``, frame_number)
+    return {
+      step: metadata.step,
+      positions,
+      forces: null,
+      lattice: null,
+      metadata: metadata.properties,
+      topology_changed,
+    }
+  }
+
+  private read_ase_frame_data(
+    data: ArrayBuffer,
+    frame_number: number,
+  ): { view: DataView; frame_data: Record<string, unknown> } | null {
+    const view = new DataView(data)
+    const n_items = Number(view.getBigInt64(32, true))
+    const offsets_pos = Number(view.getBigInt64(40, true))
+    if (frame_number < 0 || frame_number >= n_items) return null
+
+    const frame_offset = Number(view.getBigInt64(offsets_pos + frame_number * 8, true))
+    const json_length = Number(view.getBigInt64(frame_offset, true))
+    const frame_data = JSON.parse(new TextDecoder().decode(
+      new Uint8Array(data, frame_offset + 8, json_length),
+    )) as Record<string, unknown>
+    return { view, frame_data }
+  }
+
+  private read_ase_float32_array(
+    view: DataView,
+    value: unknown,
+  ): Float32Array | null {
+    if (!value) return null
+    if (typeof value === `object` && `ndarray` in value) {
+      const [shape, dtype, array_offset] = (value as { ndarray: unknown[] }).ndarray as
+        [number[], string, number]
+      const total = shape.reduce((product, size) => product * size, 1)
+      const output = new Float32Array(total)
+      let offset = array_offset
+      const read = dtype === `float64`
+        ? () => {
+          const result = view.getFloat64(offset, true)
+          offset += 8
+          return result
+        }
+        : dtype === `float32`
+        ? () => {
+          const result = view.getFloat32(offset, true)
+          offset += 4
+          return result
+        }
+        : null
+      if (!read) throw new Error(`Unsupported compact position dtype: ${dtype}`)
+      for (let idx = 0; idx < total; idx++) output[idx] = read()
+      return output
+    }
+    if (!Array.isArray(value)) return null
+    const rows = value as number[] | number[][]
+    return Float32Array.from(Array.isArray(rows[0]) ? rows.flat() : rows as number[])
+  }
+
+  private load_ase_frame_positions(
+    data: ArrayBuffer,
+    frame_number: number,
+  ): FramePositionData | null {
+    try {
+      const decoded = this.read_ase_frame_data(data, frame_number)
+      if (!decoded) return null
+      const { view, frame_data } = decoded
+      const positions_ref = frame_data[`positions.`] || frame_data.positions
+      const positions = this.read_ase_float32_array(view, positions_ref)
+      if (!positions) throw new Error(`Missing positions`)
+
+      const numbers_ref = frame_data[`numbers.`] || frame_data.numbers
+      const frame_numbers: number[] | undefined = numbers_ref
+        ? (
+          typeof numbers_ref === `object` && `ndarray` in numbers_ref
+            ? read_ndarray_from_view(
+              view,
+              numbers_ref as { ndarray: unknown[] },
+            ).flat()
+            : numbers_ref as number[]
+        )
+        : undefined
+      if (frame_number === 0 && frame_numbers) {
+        this.global_numbers = [...frame_numbers]
+      } else if (!this.global_numbers && frame_numbers) {
+        this.global_numbers = [...frame_numbers]
+      }
+      if (!this.global_numbers) throw new Error(`Missing atomic numbers`)
+      const topology_changed = frame_numbers
+        ? frame_numbers.length !== this.global_numbers.length ||
+          frame_numbers.some((number, idx) => number !== this.global_numbers?.[idx])
+        : positions.length !== this.global_numbers.length * 3
+
+      const calculator = (
+        frame_data[`calculator.`] || frame_data.calculator || {}
+      ) as Record<string, unknown>
+      const forces_ref = frame_data[`forces.`] || frame_data.forces ||
+        calculator[`forces.`] || calculator.forces
+      const cell = frame_data.cell
+      const lattice = Array.isArray(cell) ? cell as number[][] : null
+      const metadata: Record<string, unknown> = {
+        step: frame_number,
+        ...calculator,
+        ...((frame_data.info || {}) as Record<string, unknown>),
+      }
+      if (lattice?.length === 3) {
+        metadata.volume = Math.abs(math.det_3x3(lattice as Matrix3x3))
+      }
+      return {
+        step: frame_number,
+        positions,
+        forces: this.read_ase_float32_array(view, forces_ref),
+        lattice,
+        metadata,
+        topology_changed,
+      }
+    } catch (error) {
+      console.warn(`Failed to load compact ASE frame ${frame_number}:`, error)
+      return null
+    }
   }
 
   private load_ase_frame(
@@ -362,7 +534,9 @@ export class TrajFrameReader implements FrameLoader {
         ? read_ndarray_from_view(view, numbers_ref).flat()
         : numbers_ref as number[]
 
-      if (numbers) this.global_numbers = numbers
+      if (numbers && (frame_number === 0 || !this.global_numbers)) {
+        this.global_numbers = [...numbers]
+      }
       if (!numbers || !positions) throw new Error(`Missing atomic numbers or positions`)
 
       // Extract cell and calculate volume if present

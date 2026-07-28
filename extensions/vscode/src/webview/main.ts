@@ -823,7 +823,7 @@ const structure_props = (defaults: DefaultSettings) => {
 
 // Map defaults to trajectory component props
 const trajectory_props = (defaults: DefaultSettings) => {
-  const { trajectory, plot, scatter } = defaults
+  const { trajectory, scatter, histogram } = defaults
   return {
     ...trajectory,
     structure_props: structure_props(defaults),
@@ -838,29 +838,22 @@ const trajectory_props = (defaults: DefaultSettings) => {
       cache_parsed_data: trajectory.cache_parsed_data,
     },
     scatter_props: {
-      markers: scatter.markers,
-      line_width: scatter.line_width,
-      point_size: scatter.point_size,
-      show_legend: scatter.show_legend,
-      enable_zoom: plot.enable_zoom,
-      zoom_factor: plot.zoom_factor,
-      auto_fit_range: plot.auto_fit_range,
-      show_grid: plot.grid_lines,
-      show_axis_labels: plot.axis_labels,
-      animation_duration: plot.animation_duration,
+      display: scatter.display,
+      styles: {
+        show_points: scatter.show_points,
+        show_lines: scatter.show_lines,
+        point: scatter.point,
+        line: scatter.line,
+      },
       legend: { show: scatter.show_legend },
     },
     histogram_props: {
-      mode: trajectory.histogram_mode,
-      show_legend: trajectory.histogram_show_legend,
-      bin_count: trajectory.histogram_bin_count,
-      enable_zoom: plot.enable_zoom,
-      zoom_factor: plot.zoom_factor,
-      auto_fit_range: plot.auto_fit_range,
-      show_grid: plot.grid_lines,
-      show_axis_labels: plot.axis_labels,
-      animation_duration: plot.animation_duration,
-      legend: { show: trajectory.histogram_show_legend },
+      mode: histogram.mode,
+      show_legend: histogram.show_legend,
+      bins: histogram.bin_count,
+      display: histogram.display,
+      bar: histogram.bar,
+      legend: { show: histogram.show_legend },
     },
     spinner_props: { show_progress: trajectory.show_parsing_progress },
     property_labels: {},

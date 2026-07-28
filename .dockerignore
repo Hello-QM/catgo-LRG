@@ -16,6 +16,8 @@ crates/*/target
 tools/*/target
 extensions/**/target
 extensions/rust-wasm/pkg
+extensions/rust-wasm/pkg-scalar
+extensions/rust-wasm/pkg-threaded
 extensions/vscode/bin
 *.vsix
 __pycache__

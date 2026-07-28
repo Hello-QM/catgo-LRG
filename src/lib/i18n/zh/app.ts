@@ -210,5 +210,6 @@ const app: Record<string, string> = {
   update_ready: `已安装 — 正在重启…`,
   update_error: `更新失败：{error}`,
   update_later_btn: `稍后`,
+  update_release_notes: `版本说明`,
 }
 export default app

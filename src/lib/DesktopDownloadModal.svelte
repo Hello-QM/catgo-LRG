@@ -1,12 +1,13 @@
 <script lang="ts">
   import { desktop_download } from '$lib/desktop-download.svelte'
+  import {
+    DOWNLOAD_HUB_URL,
+    TESTFLIGHT_URL,
+  } from '$lib/download-links'
   import Icon from '$lib/Icon.svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('app')
-
-  const REPO = `Hello-QM/catgo-LRG`
-  const RELEASES_PAGE = `https://github.com/${REPO}/releases/latest`
 
   type OS = `windows` | `mac` | `linux` | `android` | `ios`
 
@@ -22,11 +23,6 @@
   }
 
   let os = $state<OS>(detect_os())
-  let status = $state<`idle` | `fetching`>(`idle`)
-
-  // iOS ships via TestFlight public beta (an unsigned .ipa won't install), so
-  // the iOS option opens the join link rather than a release asset.
-  const TESTFLIGHT = `https://testflight.apple.com/join/FdHup5Hz`
 
   const OSES: OS[] = [`windows`, `mac`, `linux`, `android`, `ios`]
   const os_label: Record<OS, string> = {
@@ -37,52 +33,18 @@
     ios: `iOS`,
   }
 
-  // Release assets are version-stamped (CatGo_1.3.4_amd64.deb, _x64-setup.exe,
-  // _aarch64.dmg, CatGo-v1.3.4-android-universal.apk, ...). Match by extension so
-  // the URL auto-tracks each release.
-  const matchers: Record<OS, RegExp[]> = {
-    windows: [/_x64-setup\.exe$/i, /\.msi$/i, /\.exe$/i],
-    mac: [/aarch64.*\.dmg$/i, /\.dmg$/i, /\.app\.tar\.gz$/i],
-    linux: [/_amd64\.deb$/i, /\.deb$/i, /\.rpm$/i, /\.AppImage$/i],
-    android: [/android.*\.apk$/i, /\.apk$/i],
-    ios: [],
-  }
-
-  async function download() {
-    // iOS → TestFlight external testing, not a release asset.
+  function download() {
     if (os === `ios`) {
-      window.open(TESTFLIGHT, `_blank`, `noopener`)
-      desktop_download.close()
-      return
+      window.open(TESTFLIGHT_URL, `_blank`, `noopener`)
+    } else {
+      const hub_platform = os === `mac` ? `macos` : os
+      window.open(
+        `${DOWNLOAD_HUB_URL}#platform-${hub_platform}`,
+        `_blank`,
+        `noopener`,
+      )
     }
-    status = `fetching`
-    try {
-      // Always hit releases/latest so we follow the newest version automatically.
-      const resp = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
-      if (!resp.ok) throw new Error(`GitHub API ${resp.status}`)
-      const rel = await resp.json()
-      const assets: { name: string; browser_download_url: string }[] = rel.assets || []
-      let url = ``
-      for (const re of matchers[os]) {
-        const hit = assets.find((a) => re.test(a.name))
-        if (hit) {
-          url = hit.browser_download_url
-          break
-        }
-      }
-      if (url) {
-        window.location.href = url
-        desktop_download.close()
-      } else {
-        // No matching asset for this OS — fall back to the releases page.
-        window.open(RELEASES_PAGE, `_blank`, `noopener`)
-      }
-    } catch {
-      // API rate-limited / offline — fall back to the releases page.
-      window.open(RELEASES_PAGE, `_blank`, `noopener`)
-    } finally {
-      status = `idle`
-    }
+    desktop_download.close()
   }
 </script>
 
@@ -106,17 +68,15 @@
         {/each}
       </div>
 
-      <button class="ddm-download" disabled={status === `fetching`} onclick={download}>
-        {#if status === `fetching`}
-          {t('app.desktop_fetching')}
-        {:else if os === `ios`}
+      <button class="ddm-download" onclick={download}>
+        {#if os === `ios`}
           {t('app.desktop_ios_testflight')}
         {:else}
           {t('app.desktop_download_for', { os: os_label[os] })}
         {/if}
       </button>
 
-      <a class="ddm-fallback" href={RELEASES_PAGE} target="_blank" rel="noopener">
+      <a class="ddm-fallback" href={DOWNLOAD_HUB_URL} target="_blank" rel="noopener">
         {t('app.desktop_all_downloads')}
       </a>
     </div>
@@ -204,10 +164,6 @@
     color: #fff;
     font-weight: 600;
     cursor: pointer;
-  }
-  .ddm-download:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
   .ddm-fallback {
     display: block;

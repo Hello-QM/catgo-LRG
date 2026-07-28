@@ -8,6 +8,7 @@
     "email": "catgo@example.com"
   },
   "license": "AGPL-3.0-or-later",
+  "publish": false,
   "keywords": ["visualization", "charge", "oxidation"],
   "catgo": {
     "apiVersion": "1.0",

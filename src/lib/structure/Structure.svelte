@@ -20,7 +20,11 @@
     align_to_principal_axes,
     get_elem_amounts,
   } from '$lib/structure'
-  import { parse_supercell_scaling } from '$lib/structure/supercell'
+  import type { SupercellOp, SupercellRequestResult } from '$lib/structure/supercell-operation'
+  import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
+  import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
+  import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -130,6 +134,8 @@
     get_original_atoms_only as _get_original_atoms_only,
     get_import_position_outside,
     apply_charges,
+    parse_visual_dims,
+    visual_replication_active,
   } from './controllers/transform-controller'
   import {
     prune_measurements,
@@ -252,14 +258,7 @@
   // so the second allocation is discarded (small one-time cost).
   let scene_atom_manager = $state(new AtomManager())
 
-  // WebGPU overlay bridge: bound from StructureScene. Returns the live
-  // per-displayed-atom current-frame position array (3 × n_displayed) the
-  // WebGL atoms/bonds render at (StructureScene.atom_positions_buffer:
-  // displayed-topology base overlaid with the manager's per-frame positions).
-  // The overlay calls this so its positions match the WebGL view atom-for-atom
-  // instead of re-deriving from base-only trajectory data. Null until mount.
-  let scene_get_displayed_frame_positions = $state<(() => Float32Array) | null>(null)
-  // Same bridge shape for the overlay's SHADING inputs (headlamp, lighting
+  // WebGPU overlay bridge for SHADING inputs (headlamp, lighting
   // profile, render style, depth cueing, outline) — the values StructureScene
   // already resolves for the WebGL atom shader. Mirrored instead of re-derived so
   // the two renderers can't drift. Null until mount.
@@ -893,6 +892,8 @@
     on_open_workflow_editor,
     on_open_in_molstar,
     on_view_split_request,
+    on_supercell_request,
+    on_external_history_toggle,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -906,6 +907,15 @@
     trajectory_step_idx = -1,
     trajectory_positions_version = { v: 0, all: false },
     get_trajectory_frame_positions = null as ((i: number) => Float32Array | null) | null,
+    trajectory_frame_count = 0,
+    get_trajectory_frame_source = null as
+      | ((frame_idx: number) => TrajectoryFrameSource | null)
+      | null,
+    request_trajectory_frame_source = null as
+      | ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+      | null,
+    on_trajectory_frame_presented,
+    on_trajectory_buffer_state,
     initial_traj_b64 = ``,
     initial_traj_format = ``,
     vibration_data = null as { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null,
@@ -1063,6 +1073,19 @@
       // NEW TAB, leaving this tab's viewer untouched. A new tab has its own
       // panel_id; panes within ONE tab share tab.id and would clobber each other.
       on_view_split_request?: (struct: AnyStructure) => void
+      // §9.1 explicit supercell operation channel. When embedded in Trajectory,
+      // the parent supplies this and Build → Supercell requests are forwarded
+      // there untouched (trajectory scope/ledger transactions — Task 4).
+      // When absent (standalone Structure), a local staged executor runs and
+      // publishes atomically.
+      on_supercell_request?: (op: SupercellOp) => Promise<SupercellRequestResult>
+      // Build T5: undo/redo channel for delegated (external-owner) edits. An
+      // applied on_supercell_request result pushes a `{kind:'external'}` history
+      // entry holding only the returned history_token; Ctrl+Z / Ctrl+Y route the
+      // token back through this callback (`active` false = undo, true = redo).
+      // Returns whether the owner honored the toggle — an orphaned token (e.g.
+      // trajectory replaced) is dropped from history without touching state.
+      on_external_history_toggle?: (history_token: string, active: boolean) => boolean
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -1090,6 +1113,23 @@
       // the bond cache can prefetch ±N neighbour frames and recompute connectivity
       // off the main thread.
       get_trajectory_frame_positions?: ((i: number) => Float32Array | null) | null
+      trajectory_frame_count?: number
+      get_trajectory_frame_source?: ((
+        frame_idx: number,
+      ) => TrajectoryFrameSource | null) | null
+      request_trajectory_frame_source?: ((
+        frame_idx: number,
+      ) => Promise<TrajectoryFrameSource | null>) | null
+      on_trajectory_frame_presented?: (
+        frame_idx: number,
+        positions_version: number,
+      ) => void
+      on_trajectory_buffer_state?: (state: {
+        frame_idx: number
+        ready_ahead: number
+        preparing: boolean
+        error: string | null
+      }) => void
       // External trajectory data (base64) for MD analysis — set when embedded in Trajectory viewer
       initial_traj_b64?: string
       initial_traj_format?: string
@@ -1144,12 +1184,12 @@
     get_structure: () => structure,
     get_symmetry_data: () => symmetry_data,
     get_cell_type: () => cell_type,
-    get_supercell_scaling: () => supercell_scaling,
     get_show_image_atoms: () => show_image_atoms,
     get_periodic_repeats: () => periodic_repeats,
-    // Phase 1: when the GPU overlay instances the supercell, the CPU keeps the
-    // base cell (no N× Site objects) — gates the supercell + PBC-image effects.
-    get_gpu_supercell_active: () => gpu_supercell_active,
+    // Visual T6: while the render packet owns visual replication, the CPU
+    // keeps the base cell (no PBC-image Site append) — display routing only;
+    // the scientific structure stays base-sized in either state.
+    get_visual_replicas_active: () => visual_replicas_active,
     set_displayed_structure: (s) => { displayed_structure = s },
     set_saveable_structure: (s) => { saveable_structure = s },
   })
@@ -1319,6 +1359,20 @@
   // Track if structure has been aligned to prevent re-alignment
   let structure_aligned_id = $state<string | null>(null)
   let trajectory_active = $derived(trajectory_frame_positions != null)
+  let presented_frame_source = $state.raw<TrajectoryFrameSource | null>(null)
+  function handle_trajectory_frame_presented(
+    frame_idx: number,
+    positions_version: number,
+  ): void {
+    const source = get_trajectory_frame_source?.(frame_idx) ?? null
+    if (source && source.positions_version === positions_version) {
+      presented_frame_source = source
+    }
+    on_trajectory_frame_presented?.(frame_idx, positions_version)
+  }
+  $effect(() => {
+    if (!trajectory_active) presented_frame_source = null
+  })
 
   // T5 pause writeback (search "T5 pause writeback" in src/lib/trajectory/Trajectory.svelte):
   // a $effect lived here that watched trajectory_active (= trajectory_frame_positions
@@ -1342,53 +1396,36 @@
   // trajectory frame. The X2 shadow sync's positions_only branch already
   // honors realtime_position_overrides via the same precedence rule.
   //
-  // Supercell scope (W6 OQ1): the loop bounds at min(mgr.count, traj/3)
-  // — supercell-extra atoms (slots beyond traj coverage) retain whatever
-  // positions the structure pipeline put there. A dev warning fires once
-  // per trajectory_active edge to surface the limitation.
+  // Packet ownership keeps the scene manager base-sized during trajectory
+  // playback, so min(mgr.count, traj/3) covers the complete live manager. The
+  // bound remains as a defensive guard during mount/teardown transitions.
   //
   // Phase 2 is ADDITIVE — current_structure writes still active.
   // W1 must remain LOUD (Test 5.3 baseline: atom_data_fires > 10). Silence
   // here means an accidental Phase 4 leak into Phase 2.
-  let __traj_write_warned_supercell = false
   $effect(() => {
+    // The exact scene pipeline owns manager writes and publishes only after
+    // positions, lattice, and graph are ready together.
+    if (get_trajectory_frame_source) return
     // This effect writes the current frame's xyz into the WebGL atom_manager
     // (a plain typed-array scatter — no GPU paint by itself; Threlte 8 is
     // render-on-demand and autoRender is off while the overlay is active). It
     // runs in BOTH modes on purpose:
     //   - WebGL active: drives the WebGL atoms/bonds per frame as before.
     //   - WebGPU overlay active (`webgl_suspended`): the EXPENSIVE WebGL
-    //     pipelines (X2 full diff, bond-pair rebuild, bond worker) stay gated
-    //     in StructureScene, but we still keep the manager's positions current
-    //     so StructureScene's `atom_positions_buffer` resolves the live frame.
-    //     That buffer is the SINGLE SOURCE OF TRUTH the overlay now consumes
-    //     (via get_displayed_frame_positions) so its atoms/bonds match the
-    //     WebGL view atom-for-atom — including the supercell base-block /
-    //     replica-static behaviour, which is decided HERE (max_slot bound) and
-    //     reused rather than re-guessed in the overlay.
-    // We do NOT early-return on webgl_suspended: the cheap manager write is
-    // what makes the overlay's positions identical to the WebGL resolver.
+    //     pipelines (X2 full diff, bond-pair rebuild, bond worker) stay gated.
+    //     The overlay no longer reads this manager back — Structure passes the
+    //     BASE `trajectory_frame_positions` directly into its render packet —
+    //     but keeping the cheap manager write live preserves a warm WebGL state
+    //     for an atomic fallback / mode-off repaint.
+    // We do NOT early-return on webgl_suspended: the write keeps fallback state
+    // current, not because it is a render-packet source.
     const traj = trajectory_frame_positions
-    if (!traj) {
-      __traj_write_warned_supercell = false
-      return
-    }
+    if (!traj) return
     const mgr = scene_atom_manager
     if (!mgr || mgr.count === 0) return
     const overrides = interaction.realtime_position_overrides
     const max_slot = Math.min(mgr.count, Math.floor(traj.length / 3))
-    if (
-      import.meta.env?.DEV
-      && !__traj_write_warned_supercell
-      && mgr.count > max_slot
-    ) {
-      __traj_write_warned_supercell = true
-      console.warn(
-        `[trajectory] Supercell + trajectory: ${mgr.count} atom slots but ` +
-        `position cache covers only ${max_slot} base atoms. ` +
-        `Supercell-extra atoms frozen at topology-load positions.`,
-      )
-    }
     // Batched: one reactive `version` bump for the whole frame instead of
     // one $state write per atom (20k/frame).
     mgr.begin_positions_batch()
@@ -1893,30 +1930,13 @@
   })
 
   // ── WebGPU overlay selection bridge ────────────────────────────────────────
-  // The overlay renders displayed_structure.sites in order, so its picked index
-  // and its highlight buffer are DISPLAYED-site indices. The app's selection
-  // model (selected_sites) is BASE-site indices (matching the WebGL path). Map
-  // between the two: the overlay highlights every displayed site whose base index
-  // (orig_site_idx) is currently selected, and an overlay pick is mapped back to
-  // its base index before toggling selected_sites (exactly like the WebGL
-  // handle_atom_click → toggle_selection(atom.site_idx) path).
-  let overlay_selected_displayed = $derived.by(() => {
-    const sites = displayed_structure?.sites
-    if (!sites || selected_sites.length === 0) return [] as number[]
-    const sel = new Set(selected_sites)
-    const out: number[] = []
-    for (let i = 0; i < sites.length; i++) {
-      if (sel.has(get_orig_site_idx(sites[i], i))) out.push(i)
-    }
-    return out
-  })
-
-  /** Handle an atom pick from the WebGPU overlay. `displayed_idx` is the picked
-   *  displayed-site index, or -1 for empty space. Maps to the base index and
-   *  toggles selected_sites the same way the WebGL click path does; a background
-   *  click (-1) clears the selection (mirroring clicking empty space). */
-  function handle_overlay_pick(displayed_idx: number): void {
-    if (displayed_idx < 0) {
+  // Packet topology is BASE-only and ReplicaPickResult resolves every visual
+  // replica / sparse ghost to its base site, so selection is already in the
+  // app's base-site id space — no displayed-index mapping or appended-site
+  // expansion remains.
+  /** Handle a BASE site pick from the WebGPU overlay, or -1 for empty space. */
+  function handle_overlay_pick(base_idx: number): void {
+    if (base_idx < 0) {
       // Empty-space pick ⇒ would clear the selection. But the overlay watches
       // window pointerup and classifies click-vs-drag purely by movement
       // distance (it can't see the Cmd/Ctrl box-select modifier). A small/dense
@@ -1931,10 +1951,7 @@
       if (selected_sites.length > 0) selected_sites = []
       return
     }
-    const sites = displayed_structure?.sites
-    const site = sites?.[displayed_idx]
-    if (!site) return
-    const base_idx = get_orig_site_idx(site, displayed_idx)
+    if (!structure?.sites?.[base_idx]) return
     const result = toggle_site_selection(base_idx, selected_sites)
     if (result) selected_sites = result
   }
@@ -2238,26 +2255,59 @@
   // WebGL view fully resumes for the current frame. Default OFF ⇒ always false
   // ⇒ zero change to existing WebGL behavior.
   let webgl_suspended = $derived(large_system_mode)
-  // ── GPU supercell instancing (Phase 1) ──────────────────────────────────────
-  // Parsed [nx,ny,nz] from supercell_scaling. parse_supercell_scaling throws on
-  // malformed input, so guard — a bad string falls back to [1,1,1] (no supercell).
-  let gpu_supercell_factors = $derived.by((): Vec3 => {
-    try {
-      return parse_supercell_scaling(supercell_scaling)
-    } catch {
-      return [1, 1, 1]
-    }
-  })
-  // GPU-supercell is ACTIVE only when the overlay is on AND a real (>1) supercell
-  // is requested AND the structure carries a lattice (offsets need a,b,c). When
-  // active, the CPU keeps the base cell (transform-controller gate) and the GPU
-  // instances base_count × nx·ny·nz spheres. Off / overlay-off / 1×1×1 ⇒ false ⇒
-  // identical CPU + shader behaviour to today.
-  let gpu_supercell_active = $derived(
-    large_system_mode &&
-      gpu_supercell_factors[0] * gpu_supercell_factors[1] * gpu_supercell_factors[2] > 1 &&
-      !!(structure as { lattice?: unknown } | undefined)?.lattice,
+  // ── Visual replication (view-only, Visual T6) ───────────────────────────────
+  // Parsed [nx,ny,nz] replica dims from the bottom-right visual supercell
+  // control. Malformed input falls back to [1,1,1] (no replication).
+  let gpu_supercell_factors = $derived.by((): Vec3 => parse_visual_dims(supercell_scaling))
+  // Trajectory packets own the visual base cell from 1× upward. While active,
+  // the transform controller must not CPU-append PBC image atoms: replicas
+  // and ghosts are packet instancing concerns.
+  let trajectory_packet_active = $derived(
+    trajectory_frame_positions != null && !!structure?.sites?.length,
   )
+  // Semantic routing is PURE view state: periodicity + requested dims (+
+  // trajectory ownership). The render backend (WebGPU overlay vs WebGL2 vs
+  // legacy) has NO say — dims >1 route into a ReplicaLayout on every backend
+  // and the scientific structure stays at the base effective frame.
+  let visual_replicas_active = $derived(
+    visual_replication_active({
+      has_lattice: !!(structure as { lattice?: unknown } | undefined)?.lattice,
+      dims: gpu_supercell_factors,
+      trajectory_packet_active,
+    }),
+  )
+  // ── Shared render packet ────────────────────────────────────────────────────
+  // ONE packet per effective frame: the BASE scientific structure (owner) +
+  // exactly 3N current positions + the current frame lattice + visual replica
+  // dims. Static structures fall back to their site positions inside the
+  // builder. StructureScene resolves manager-ready colors/radii/final bond
+  // graph while preserving this packet's frame and replica objects.
+  const render_packet_builder = create_render_packet_builder()
+  let render_packet: RenderPacket | null = $derived.by(() => {
+    if (!structure?.sites?.length) return null
+    if (!trajectory_packet_active && !visual_replicas_active) return null
+    return render_packet_builder.build({
+      // Direct base-frame ownership: never read displayed_structure or a
+      // WebGL-resolved position buffer back into the packet. Trajectories own
+      // the raw frame owner (3N positions match it); static structures use
+      // the cell-type-transformed base effective frame.
+      structure: trajectory_packet_active
+        ? structure
+        : (transform.base_structure ?? structure),
+      frame_positions: trajectory_frame_positions,
+      frame_lattice: trajectory_frame_lattice,
+      frame_idx: trajectory_step_idx,
+      positions_version: trajectory_positions_version.v,
+      // Ordinary WebGL and the WebGPU overlay share the selected visual dims.
+      dims: gpu_supercell_factors,
+      boundary_policy: show_image_atoms
+        ? `ghost-images`
+        : scene_props.hide_incomplete_bonds
+          ? `hide`
+          : `stub`,
+    })
+  })
+
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.
@@ -2784,6 +2834,17 @@
     if (!structure) return
     const entry = sel_state.pop_entry()
     if (!entry) return
+    if (entry.kind === `external`) {
+      // External (trajectory-owned) edit: no snapshot held on either stack.
+      // The owner toggles its ledger entry / restores its immutable frame
+      // references and republishes through the transaction machinery. Only a
+      // honored toggle earns a redo token; an orphaned one is dropped so
+      // further Ctrl+Z reaches older entries instead of no-op'ing forever.
+      if (on_external_history_toggle?.(entry.history_token, false)) {
+        sel_state.push_external_redo(entry.history_token)
+      }
+      return
+    }
     // Capture the state we're undoing FROM (the forward state) so redo() can
     // restore it. Snapshot-based redo — see selection-state redo_history.
     sel_state.push_redo(structure)
@@ -2836,12 +2897,21 @@
 
   function redo() {
     if (!structure) return
-    const snap = sel_state.pop_redo()
-    if (!snap) return
+    const entry = sel_state.pop_redo_entry()
+    if (!entry) return
+    if (entry.kind === `external`) {
+      // Mirror of external undo: re-activate the owner's ledger entry, and
+      // (when honored) make the redo itself undoable WITHOUT clearing the
+      // remaining redo branch.
+      if (on_external_history_toggle?.(entry.history_token, true)) {
+        sel_state.push_external_entry(entry.history_token, false)
+      }
+      return
+    }
     // Make the redo itself undoable: push the current state as a structure-kind
     // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
     sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
-    structure = snap as typeof structure
+    structure = entry.structure as typeof structure
     notify_structure_change()
   }
 
@@ -2883,6 +2953,47 @@
   function push_selection_to_undo() {
     sel_state.selection_history = [...sel_state.selection_history, [...selected_sites]]
   }
+
+  // ── True Build supercell — §9.1 explicit operation channel ──
+  // LatticePane delegates its SupercellOp here BEFORE any local mutation or
+  // undo push. In trajectory mode the parent-supplied `on_supercell_request`
+  // receives the request untouched (Task 4 wires trajectory transactions).
+  // Standalone, the shared staged handler runs (Worker for large transforms)
+  // and publishes ATOMICALLY: undo entry (pre-op state) + one structure
+  // replacement only after success AND only if the structure was not replaced
+  // mid-flight by another surface (stale completions publish nothing; a
+  // superseding request aborts the in-flight one). On rejection/abort nothing
+  // changes, so the last complete scene and history are retained.
+  let supercell_history_seq = 0
+  const handle_supercell_request = create_supercell_request_handler({
+    // Build T5: a delegated APPLIED result records a `{kind:'external'}` undo
+    // entry carrying only the owner's history_token — no structure snapshot
+    // (the frames belong to the trajectory owner, which restores them itself
+    // on undo via on_external_history_toggle). Rejected/stale pass through
+    // without touching history, matching the local path.
+    delegate: () => {
+      const delegate = on_supercell_request
+      if (!delegate) return undefined
+      return async (op: SupercellOp) => {
+        const result = await delegate(op)
+        if (result.status === `applied`) {
+          sel_state.push_external_entry(result.history_token)
+        }
+        return result
+      }
+    },
+    get_structure: () => structure,
+    // Snapshot: the executor's worker path structured-clones the source, and
+    // reactive $state proxies are not cloneable. Cost is linear in the BASE
+    // (pre-supercell) structure, not the materialized output.
+    snapshot: (live) => $state.snapshot(live) as PymatgenStructure,
+    push_undo: push_to_undo,
+    // handle_structure_replace sets the structure and resets the renderer's
+    // visual supercell_scaling to 1x1x1 so factors don't compound.
+    publish: ({ structure: new_structure }) =>
+      build.handle_structure_replace(new_structure),
+    history_token: () => `structure-supercell-${++supercell_history_seq}`,
+  })
 
   // Vacuum box modal helpers
   function open_vacuum_box_for_tool(tool: typeof pending_tool_after_wrap) {
@@ -3627,6 +3738,7 @@
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
               on_push_undo={push_to_undo}
               on_reset_view={() => align_view_to_lattice()}
+              on_supercell_request={handle_supercell_request}
             />
           {:else if build.active_build_tab === `slab_cutter` && structure && `lattice` in structure}
             <MillerSlabCutterPane
@@ -4277,9 +4389,6 @@
             bind:crop_mode_active={interaction.crop_mode_active}
             bind:crop_region={interaction.crop_region}
             {trajectory_context}
-            {gpu_supercell_active}
-            {gpu_supercell_factors}
-            gpu_supercell_base={displayed_structure}
           />
 
           <ServerPane
@@ -4514,6 +4623,12 @@
             {trajectory_frame_forces}
             {trajectory_frame_lattice}
             {trajectory_step_idx}
+            {trajectory_frame_count}
+            {get_trajectory_frame_source}
+            {request_trajectory_frame_source}
+            on_trajectory_frame_presented={handle_trajectory_frame_presented}
+            {on_trajectory_buffer_state}
+            {render_packet}
             {...scene_props}
             initial_view={persist_settings ? saved_default_view : null}
             {show_image_atoms}
@@ -4616,7 +4731,6 @@
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
-            bind:get_displayed_frame_positions={scene_get_displayed_frame_positions}
             bind:get_shading_state={scene_get_shading_state}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
@@ -4686,8 +4800,14 @@
           <LargeSystemOverlay
             enabled={large_system_mode}
             {camera}
-            structure={displayed_structure}
-            supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
+            structure={structure}
+            frame_positions={get_trajectory_frame_source
+              ? presented_frame_source?.positions ?? null
+              : trajectory_frame_positions}
+            frame_lattice={get_trajectory_frame_source
+              ? presented_frame_source?.lattice ?? null
+              : trajectory_frame_lattice}
+            supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}
             atom_radius={scene_props.atom_radius}
@@ -4703,11 +4823,21 @@
             cell_edge_color={scene_props.cell_edge_color}
             {trajectory_positions_version}
             {trajectory_step_idx}
-            get_displayed_frame_positions={scene_get_displayed_frame_positions}
             get_shading={scene_get_shading_state}
-            selected_sites={overlay_selected_displayed}
+            {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {
+              // Atomic renderer swap (Bonds T6). The WebGL2+WASM fallback
+              // CANDIDATE already exists: the Threlte canvas below the overlay
+              // stays mounted (kept warm) and reads the SAME structure/packet
+              // source, which the WebGPU renderer RETAINS on device loss.
+              // Schedule its repaint FIRST, then flip the mode — Svelte
+              // applies both in one synchronous flush, so the overlay unmount,
+              // autoRender resume, and repaint land together: no frame where
+              // neither renderer is visible, none where both fight. The
+              // overlay fires this exactly once per lease (renderer-enforced)
+              // and has already invalidated the lost lease generation.
+              webgl_repaint_trigger++
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)
             }}

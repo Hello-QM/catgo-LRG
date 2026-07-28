@@ -6,15 +6,24 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      release:
-        description: 'Create a release'
+      release_tag:
+        description: 'Exact existing release tag to backfill (for example v1.4.6).'
+        type: string
+        required: false
+        default: ''
+      windows_only:
+        description: 'Build only Windows; intended for an exact-tag backfill.'
+        type: boolean
         required: false
         default: false
-        type: boolean
 
 env:
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
 
 jobs:
   build:
@@ -22,36 +31,27 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            backend_target: x86_64-pc-windows-msvc
-            name: Windows
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            backend_target: aarch64-apple-darwin
-            name: macOS (Apple Silicon)
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            backend_target: x86_64-unknown-linux-gnu
-            name: Linux
-            # Ship .deb + .rpm. AppImage (linuxdeploy) still excluded: it needs
-            # FUSE and hangs 20+ min on GitHub runners. Tauri v2's RPM bundler is
-            # pure-Rust (no rpmbuild), so .rpm builds fine and covers Fedora/RHEL.
-            bundles: deb rpm
+      matrix: ${{ fromJSON(inputs.windows_only && '{"include":[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","backend_target":"x86_64-pc-windows-msvc","name":"Windows"}]}' || '{"include":[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","backend_target":"x86_64-pc-windows-msvc","name":"Windows"},{"platform":"macos-latest","target":"aarch64-apple-darwin","backend_target":"aarch64-apple-darwin","name":"macOS (Apple Silicon)"},{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","backend_target":"x86_64-unknown-linux-gnu","name":"Linux","bundles":"deb rpm"}]}') }}
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.name }})
 
     env:
       NODE_OPTIONS: --max-old-space-size=6144
+      CATGO_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
 
     defaults:
       run:
         shell: bash -el {0}
 
     steps:
+      - name: Reject unsafe manual release matrix
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && !inputs.windows_only
+        shell: bash
+        run: |
+          echo "::error::Exact-tag release backfills are Windows-only."
+          exit 1
+
       - name: Free disk space (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -66,8 +66,80 @@ jobs:
           sudo docker image prune --all --force 2>/dev/null || true
           echo "Disk after:"; df -h /
 
+      - name: Preserve release evidence bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '' }}
+        run: node scripts/verify-release-source.mjs
+
+      - name: Verify tag event source identity
+        if: env.CATGO_RELEASE_TAG != ''
+        env:
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          head_commit=$(git rev-parse HEAD^{commit})
+          tag_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "::error::Checkout does not match the requested release tag."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] &&
+             [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag moved after this workflow was triggered."
+            exit 1
+          fi
+
+      - name: Preflight macOS release signing
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for secret in \
+            TAURI_SIGNING_PRIVATE_KEY \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            MACOS_CERTIFICATE \
+            MACOS_CERTIFICATE_PASSWORD \
+            MACOS_SIGNING_IDENTITY \
+            APPLE_DEVELOPMENT_TEAM
+          do
+            if [[ -z "${!secret:-}" ]]; then
+              printf 'Missing required secret: %s\n' "$secret" >&2
+              missing+=("$secret")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            exit 1
+          fi
+
+      - name: Stage legal bundle for backend and app resources
+        run: node scripts/sync-legal-bundle.mjs
 
       - name: Install Linux build deps (tauri / webkit2gtk)
         if: runner.os == 'Linux'
@@ -132,6 +204,18 @@ jobs:
           mkdir -p ../src-tauri/binaries
           cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}.exe
 
+      # Nightly (with rust-src) builds the THREADED ferrox WASM artifact —
+      # std is rebuilt with atomics via -Z build-std. Installed before stable
+      # so stable stays the default toolchain for the Tauri build itself.
+      # Pinned (not floating @nightly) via CATGO_WASM_NIGHTLY_TOOLCHAIN — see
+      # env at the top of this file.
+      - name: Install Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -145,27 +229,29 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Verify legal retention for distribution pipelines
+        run: pnpm legal:verify
+
+      # Single canonical entry point for ALL wasm builds (design §8.3):
+      # scripts/build-wasm.mjs builds ferrox TWICE with explicit feature sets
+      # (wasm-scalar → pkg-scalar/+pkg/, wasm-threaded → pkg-threaded/) plus
+      # chgdiff + catrender. Never invoke wasm-pack directly here — the old
+      # `--features wasm` call (no --no-default-features) compiled default
+      # Rayon without a thread pool, which deadlocks in the browser.
       - name: Build WASM extensions
         run: |
           if ! command -v wasm-pack &> /dev/null; then
             curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           fi
           export PATH=$PATH:$HOME/.cargo/bin
-
-          cd extensions/rust
-          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
-
-          cd ../chgdiff-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
-
-          cd ../catrender-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+          pnpm build:wasm
 
       - name: Generate documentation chunks
         run: pnpm run build:doc-chunks
 
       - name: Verify generated build assets
         run: |
+          node scripts/verify-wasm-artifacts.mjs
           ls -la extensions/rust-wasm/pkg/ferrox_bg.wasm
           ls -la src/lib/electronic/chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm
           ls -la src/lib/chat/docs-chunks.json
@@ -190,7 +276,16 @@ jobs:
           printf '%s' "$APPLE_API_KEY_P8" > "$KEY_PATH"
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Build Tauri app
+      - name: Build Tauri app (no release)
+        if: env.CATGO_RELEASE_TAG == ''
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Build and upload Tauri release
+        if: env.CATGO_RELEASE_TAG != ''
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -229,12 +324,21 @@ jobs:
           # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'CatGo ${{ github.ref_name }}'
+          tagName: ${{ env.CATGO_RELEASE_TAG }}
+          releaseName: 'CatGo ${{ env.CATGO_RELEASE_TAG }}'
           releaseBody: |
             ## CatGo — AI-driven workbench for computational materials science
 
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
+
+            ### License and citation
+            CatGo 1.4.7 distributions use **AGPL-3.0-or-later**.
+
+            If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
+
+            > This work used CatGo (https://catgo-ucsd.org).
+
+            Please cite DOI [`10.26434/chemrxiv.15002984/v1`](https://doi.org/10.26434/chemrxiv.15002984/v1). This request is not an additional condition of the AGPL license. Third-party materials retain their own terms. Historical AGPL grants remain in effect.
 
             ### Downloads
             - **Windows** — `.msi` (recommended) or `.exe`
@@ -258,23 +362,237 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.3
-            - **LAMMPS `.data` files open correctly** — force-field data files (`Atoms # full` from `write_data`) no longer freeze the viewer for minutes or show absurd elements: the style annotation wins over column guessing (image flags were read as coordinates), atoms are shifted by the box origin, and `Pair Coeffs` no longer bleeds into the Masses table. An 11k-atom kerogen renders in seconds as C/H/O/N.
-            - **Large systems no longer freeze on PBC boundary images** — the image search dropped its reactive-proxy overhead (190 s → 0.1 s for 11k atoms) and a successful zero-image WASM result no longer re-runs the search in JS.
-            - **Large systems get bonds again** — worker bond requests carry a deadline (a wedged worker left big structures bondless forever) and `solid_angle` auto-downgrades to `atom_radii` above 8,000 atoms.
-            - **Terminal Chinese input no longer swallows characters** — committing a pinyin candidate could emit synthetic backspaces that erased the tail of the just-typed text (timing-dependent). Fixed on desktop and mobile.
-            - **Doc viewer polish** — the Render toggle sits in the editor header next to Visualize/Save with proper accent styling.
-
-            ### New in 1.4.2
-            - **Terminal file opening works end-to-end** — Ctrl+click a file in a local shell opens it again (empty-session reads were rejected by the backend), and Ctrl+click a **directory** now navigates the Files sidebar to it.
-            - **"Open files in" targets are honored everywhere** — with a full-pane terminal, Split/Tab place the structure beside the terminal instead of silently doing nothing; **Overwrite replaces** the existing pane instead of splitting a new one each time; **Window + Overwrite** reuses a single popout and live-updates it on every open.
-            - **PDFs render in the doc viewer on every platform** — pages are drawn with pdf.js (fit-to-width, high-DPI), so Linux no longer shows a blank frame; local PDFs/images load correctly too. Markdown preview upgraded to GitHub-grade GFM + safe raw HTML, and the Edit toggle sits in the header next to PDF/Download.
-            - **`catgo view` is reliable** — repeat pushes update the External tab's label, and multi-file trajectory pushes (`catgo view a.xyz b.poscar …`) display instead of being dropped (SSE fan-out now reaches tab-alias subscribers).
-            - **Desktop popout windows fixed** — structure popouts had no Tauri ACL capability, so every call from them failed (the "Update failed: … not allowed by ACL" toast). Update checks now run only in the main window.
-            - **iOS: Chinese dictation into the terminal** — the transcript no longer re-appends on every recognizer refinement; Chinese takes the same reconcile path as English.
-            - **MCP `catgo_analyze` repaired** — symmetry / dft_input / optimize / rdf / coordination hit real endpoints (new standalone symmetry, single-structure RDF, CrystalNN coordination).
+            ### New in 1.4.7
+            - **Windows desktop app closes normally again** — guarded shutdown can destroy the Tauri window and clean up bundled backend processes after Exit is confirmed.
+            - **VS Code structure generation consistently loads compatible WASM** — threaded builds that import shared memory are rejected, so the scalar runtime is selected regardless of directory order.
+            - **More reliable multi-platform releases** — draft validation, artifact paths, signatures, provenance, updater metadata, and the Cloudflare R2 mirror are aligned across release jobs.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
+
+      - name: Verify macOS release signatures
+        id: macos_signing
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
+          REPOSITORY: ${{ github.repository }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          set -euo pipefail
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          apps=("$bundle_root"/macos/*.app)
+          dmgs=("$bundle_root"/dmg/*.dmg)
+
+          if (( ${#apps[@]} != 1 )); then
+            printf 'Expected exactly one built macOS app, found %s under %s\n' \
+              "${#apps[@]}" "$bundle_root/macos" >&2
+            exit 1
+          fi
+          if (( ${#dmgs[@]} != 1 )); then
+            printf 'Expected exactly one built macOS DMG, found %s under %s\n' \
+              "${#dmgs[@]}" "$bundle_root/dmg" >&2
+            exit 1
+          fi
+
+          verify_app_signature() {
+            local app_path="$1"
+            local signature_details
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            signature_details="$(codesign --display --verbose=4 "$app_path" 2>&1)"
+            if ! grep -Fqx "Authority=$MACOS_SIGNING_IDENTITY" <<<"$signature_details"; then
+              printf 'Unexpected signer for %s; expected Authority=%s\n' \
+                "$app_path" "$MACOS_SIGNING_IDENTITY" >&2
+              exit 1
+            fi
+            if ! grep -Fqx "TeamIdentifier=$APPLE_DEVELOPMENT_TEAM" <<<"$signature_details"; then
+              printf 'Unexpected team for %s; expected TeamIdentifier=%s\n' \
+                "$app_path" "$APPLE_DEVELOPMENT_TEAM" >&2
+              exit 1
+            fi
+          }
+
+          verify_app_signature "${apps[0]}"
+
+          mount_dir="$(mktemp -d "$RUNNER_TEMP/catgo-signature-dmg.XXXXXX")"
+          mounted=0
+          cleanup() {
+            if (( mounted )); then
+              hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+            fi
+            rmdir "$mount_dir" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "${dmgs[0]}" >/dev/null
+          mounted=1
+
+          dmg_apps=("$mount_dir"/*.app)
+          if (( ${#dmg_apps[@]} != 1 )); then
+            printf 'Expected exactly one app inside %s, found %s\n' \
+              "${dmgs[0]}" "${#dmg_apps[@]}" >&2
+            exit 1
+          fi
+          verify_app_signature "${dmg_apps[0]}"
+          hdiutil detach "$mount_dir"
+          mounted=0
+          rmdir "$mount_dir" 2>/dev/null || true
+          trap - EXIT
+
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid macOS release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          source_commit=$(git rev-parse HEAD^{commit})
+          version="${RELEASE_TAG#v}"
+          dmg_name="CatGo_${version}_aarch64.dmg"
+          updater_name="CatGo_aarch64.app.tar.gz"
+          release_assets=$(mktemp -d "$RUNNER_TEMP/catgo-macos-release.XXXXXX")
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$release_assets" \
+            --pattern "$dmg_name" \
+            --pattern "$updater_name"
+
+          updater_extract=$(mktemp -d "$RUNNER_TEMP/catgo-macos-updater.XXXXXX")
+          tar -xzf "$release_assets/$updater_name" -C "$updater_extract"
+          updater_apps=("$updater_extract"/*.app)
+          if (( ${#updater_apps[@]} != 1 )); then
+            printf 'Expected exactly one app inside updater archive %s, found %s\n' \
+              "$updater_name" "${#updater_apps[@]}" >&2
+            exit 1
+          fi
+          verify_app_signature "${updater_apps[0]}"
+
+          local_dmg_sha=$(shasum -a 256 "${dmgs[0]}" | awk '{print $1}')
+          remote_dmg_sha=$(shasum -a 256 "$release_assets/$dmg_name" | awk '{print $1}')
+          if [ "$local_dmg_sha" != "$remote_dmg_sha" ]; then
+            echo "::error::Uploaded DMG differs from the locally verified DMG."
+            exit 1
+          fi
+          updater_sha=$(shasum -a 256 "$release_assets/$updater_name" | awk '{print $1}')
+
+          attestation="$release_assets/catgo-macos-signing-${RELEASE_TAG}.json"
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg sourceCommit "$source_commit" \
+            --arg githubRunId "$GITHUB_RUN_ID" \
+            --arg signer "$MACOS_SIGNING_IDENTITY" \
+            --arg teamIdentifier "$APPLE_DEVELOPMENT_TEAM" \
+            --arg dmgName "$dmg_name" \
+            --arg dmgSha256 "$remote_dmg_sha" \
+            --arg updaterName "$updater_name" \
+            --arg updaterSha256 "$updater_sha" \
+            '{
+              "schemaVersion": 1,
+              "releaseTag": $releaseTag,
+              "sourceCommit": $sourceCommit,
+              "githubRunId": $githubRunId,
+              "signer": $signer,
+              "teamIdentifier": $teamIdentifier,
+              "artifacts": [
+                {"name": $dmgName, "sha256": $dmgSha256},
+                {"name": $updaterName, "sha256": $updaterSha256}
+              ]
+            }' > "$attestation"
+          node scripts/verify-macos-signing-attestation.mjs \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$source_commit" \
+            --assets-dir "$release_assets" \
+            --expected-signer "$MACOS_SIGNING_IDENTITY" \
+            --expected-team "$APPLE_DEVELOPMENT_TEAM"
+          echo "attestation=$attestation" >> "$GITHUB_OUTPUT"
+
+      - name: Upload macOS signing attestation
+        if: runner.os == 'macOS' && env.CATGO_RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ env.CATGO_RELEASE_TAG }}
+          REPOSITORY: ${{ github.repository }}
+          ATTESTATION_PATH: ${{ steps.macos_signing.outputs.attestation }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "$ATTESTATION_PATH" \
+            --repo "$REPOSITORY" \
+            --clobber
+
+      - name: Finalize canonical v1.4.6 release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.6'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-v1.4.6-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Finalize canonical release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.7'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Upload canonical legal bundle to release
+        if: runner.os == 'Linux' && env.CATGO_RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tar czf catgo-legal-bundle.tar.gz -C build/legal-bundle .
+          tar tzf catgo-legal-bundle.tar.gz
+          tag="${CATGO_RELEASE_TAG}"
+          gh release upload "$tag" catgo-legal-bundle.tar.gz --clobber
+
+  normalize-updater-manifest:
+    name: Normalize updater manifest
+    needs: [build]
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: >-
+        ${{ startsWith(github.ref, 'refs/tags/') &&
+            github.ref_name ||
+            inputs.release_tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Normalize canonical Windows updater metadata
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --pattern latest.json
+          expected_url="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/CatGo_${version}_x64-setup.exe"
+          jq -e \
+            --arg version "$version" \
+            --arg expectedUrl "$expected_url" \
+            '.version == $version and
+             (.platforms | type == "object") and
+             (.platforms["windows-x86_64-nsis"] | type == "object") and
+             .platforms["windows-x86_64-nsis"].url == $expectedUrl and
+             (.platforms["windows-x86_64-nsis"].signature |
+               type == "string" and length > 0)' \
+            latest.json > /dev/null
+          jq '
+            .platforms["windows-x86_64"] =
+              .platforms["windows-x86_64-nsis"]
+          ' latest.json > latest.normalized.json
+          mv latest.normalized.json latest.json
+          jq -e \
+            --arg expectedUrl "$expected_url" \
+            '.platforms["windows-x86_64"].url == $expectedUrl and
+             .platforms["windows-x86_64"].signature ==
+               .platforms["windows-x86_64-nsis"].signature' \
+            latest.json > /dev/null
+          gh release upload "$RELEASE_TAG" latest.json \
+            --repo "$REPOSITORY" \
+            --clobber

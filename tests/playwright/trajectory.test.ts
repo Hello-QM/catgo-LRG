@@ -2487,3 +2487,13 @@ test.describe(`Trajectory Demo Page - Unit-Aware Plotting`, () => {
     })
   })
 })
+
+// Task 4 browser matrix is specification-only in this build: the fixture does
+// not expose Build → Lattice → Supercell controls. Vitest drives the real
+// transaction core; keep these explicit fixmes until the browser fixture grows
+// that surface rather than faking a passing UI test through an internal hook.
+test.describe(`trajectory true-supercell scope specification`, () => {
+  test.fixme(`view scope rejects Build and points to bottom-right visual replication`)
+  test.fixme(`edit-current completion stays bound to its captured frame after scrub`)
+  test.fixme(`edit-all is identical in normal and large-system renderer modes`)
+})

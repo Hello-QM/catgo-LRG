@@ -1,6 +1,8 @@
 // Utility functions for working with trajectory data
 import type { AnyStructure, Trajectory } from '$lib'
 import type { ComponentProps } from 'svelte'
+import type { EffectiveFrameResolver } from './effective-frame-resolver'
+import type { OperationLedger } from './operation-ledger'
 
 export { default as Trajectory } from './Trajectory.svelte'
 export { default as TrajectoryError } from './TrajectoryError.svelte'
@@ -21,6 +23,7 @@ export interface TrajectoryFrame {
   structure: AnyStructure
   step: number
   metadata?: Record<string, unknown>
+  position_data?: FramePositionData
 }
 
 export interface FrameIndex {
@@ -33,6 +36,23 @@ export interface TrajectoryMetadata {
   frame_number: number
   step: number
   properties: Record<string, number>
+}
+
+/**
+ * Compact display payload for streamed constant-topology frames.
+ *
+ * Keeping coordinates flat avoids expanding every remote frame into tens of
+ * thousands of temporary site/species/xyz objects. Consumers that need to
+ * edit or export a frame still use `load_frame()` and receive a fully
+ * materialized `TrajectoryFrame`.
+ */
+export interface FramePositionData {
+  step: number
+  positions: Float32Array
+  forces: Float32Array | null
+  lattice: number[][] | null
+  metadata?: Record<string, unknown>
+  topology_changed?: boolean
 }
 
 // Trajectory type with streaming support
@@ -48,7 +68,22 @@ export interface TrajectoryType {
    *  the trajectory immediately and attach the in-flight scan here.
    *  `Trajectory.svelte` adopts the result into `plot_metadata` on arrival. */
   plot_metadata_promise?: Promise<TrajectoryMetadata[]>
+  /** Lazy variant used by remote streams so hidden plots do not compete with playback. */
+  plot_metadata_loader?: () => Promise<TrajectoryMetadata[]>
   is_indexed?: boolean
+  /** Runtime loader for indexed/local or remotely streamed frames. */
+  frame_loader?: FrameLoader
+  /** Immutable source consumed by frame_loader; shared by reference across panes. */
+  frame_source_data?: string | ArrayBuffer
+  /** Pane-owned ordered operation ledger over the immutable base source (§9.3). */
+  operation_ledger?: OperationLedger
+  /** The pane's ONE effective-frame resolver — every consumer of loader frames
+   *  must resolve through it; never mix raw loader frames with transformed
+   *  `frames`, which risks missing or double-applying an operation (§9.3). */
+  effective_frames?: EffectiveFrameResolver
+  /** In-memory frame cursors into operation_ledger. Persisted with the pane so
+   *  remount/duplication never replays entries over already-materialized frames. */
+  materialized_ledger_cursors?: number[]
 }
 
 // Unified handler data interface
@@ -74,6 +109,11 @@ export type TrajectoryDataExtractor = (
 
 export interface FrameLoader {
   fork?: () => FrameLoader
+  /** Optional constant-topology display path that skips full site objects. */
+  load_frame_positions?: (
+    data: string | ArrayBuffer,
+    frame_number: number,
+  ) => Promise<FramePositionData | null>
   get_total_frames: (data: string | ArrayBuffer) => Promise<number>
   build_frame_index: (
     data: string | ArrayBuffer,

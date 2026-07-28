@@ -33,4 +33,18 @@ pip install "catgo[full]"      # mdtraj, h5py, scikit-learn, custodian
 Prefer the native desktop app (Tauri) for the fastest 3D — see the project
 repository. This package is the Python/CLI + web-UI distribution.
 
-License: AGPL-3.0-or-later.
+## License and citation
+
+CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
+please include the acknowledgement and preferred citation below. This request
+is not an additional condition of the AGPL license.
+
+```
+This work used CatGo (https://catgo-ucsd.org).
+```
+
+Please cite CatGo using the preferred ChemRxiv DOI:
+[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1),
+and the canonical
+[CITATION.cff](https://github.com/Hello-QM/catgo-LRG/blob/main/CITATION.cff).
+Third-party materials retain their own terms and are excluded from this license.
