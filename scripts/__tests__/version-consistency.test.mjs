@@ -89,6 +89,9 @@ const WORKFLOW_INVENTORY = {
   'test.yml': {
     classification: 'non-publisher',
   },
+  'verify-python.yml': {
+    classification: 'non-publisher',
+  },
   'vsix-publish.yml': {
     classification: 'root-versioned-publisher',
     gate: {
