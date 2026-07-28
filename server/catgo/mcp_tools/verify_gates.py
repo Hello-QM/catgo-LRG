@@ -676,6 +676,27 @@ PROVENANCE_SPEC = {
                             "reference-mismatch artifact (their ranges overlap on the independent "
                             "corpus: accepted +6.550 V vs artifact +6.346 V) — the reaction, the "
                             "reference state and the PCET convention are what make it checkable (G2)"},
+    # Every claim type provenance.py can EMIT must be registered here, or a fully
+    # provenanced result still scores UNKNOWN-CLAIM (default-deny) and certification
+    # becomes override-only — the PR #546 real-output-contract failure at the claim
+    # layer. Field lists mirror provenance.NEEDS; a guard test enforces the pairing.
+    "free_energy":  {"all_of": [("temperature", "pressure", "gas_entropy_included")],
+                     "why": "a Gibbs free energy needs its T, p, and whether gas-phase "
+                            "entropy entered the ladder (A3/G) before it is checkable"},
+    "d_band_center": {"all_of": [("kpoint_weights_applied", "dos_window", "nelect")],
+                     "why": "a d-band center from an unweighted or truncated DOS sum is a "
+                            "recorded artefact class; the integration setup must be declared"},
+    "charge":       {"all_of": [("potcar_titels", "nelect", "xc_functional")],
+                     "why": "a partitioned charge is comparable only within one PAW set, "
+                            "electron count, and functional (A1)"},
+    "electronic_structure":
+                    {"all_of": [("kgrid", "kpoint_weights_applied", "dos_window", "nelect")],
+                     "why": "DOS-derived quantities need the k-grid and a complete, "
+                            "weight-applied integration window (recorded 74/73 uB artefacts)"},
+    "frequencies":  {"all_of": [("n_free_atoms", "n_modes", "selective_dynamics_present")],
+                     "why": "a partial Hessian is defined by which atoms were free; "
+                            "n_modes == 3*n_free is the identity that catches a POSCAR "
+                            "silently missing Selective dynamics (K5)"},
 }
 
 

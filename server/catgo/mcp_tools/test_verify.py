@@ -908,6 +908,54 @@ def test_R8_md_kmc_optimize_families_arm_geometry_actions_exempt():
         assert not enf._is_numeric("catgo_analyze", {"action": exempt}), exempt
 
 
+def test_R10_bare_fail_then_clean_reverify_clears_no_dead_end():
+    # live_mcp_probe found: a bare-dict verify that FAILed set legacy_failed, and no
+    # later clean verify could ever clear it — the FORBIDDEN message's "a clean audit
+    # clears this" was false, and the bare fix-and-reverify loop dead-ended
+    sk = "r10"; _fresh(sk)
+    enf.postmark("catgo_analyze", {"action": "rdf"}, ok=True, session_key=sk)
+    enf.mark_verified(True, failed_gates=["physical_range"], failed_taxa=["A2"], session_key=sk)
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
+    enf.mark_verified(True, session_key=sk)
+    assert enf.state(sk)["failed"] == []
+    # produced-result pending is NOT released by an unbound verify
+    assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
+
+
+def test_R11_real_oer_envelope_certifies_and_clears_end_to_end():
+    # the real catgo_catalysis oer flow: the envelope must carry producer-owned
+    # ul_* provenance (CHE module properties) so the bound result certifies and
+    # clears WITHOUT an override — previously every real oer/co2rr/nrr call
+    # declared ul_* unverifiable and the digest binding made supplying them
+    # impossible: certification was override-only
+    from catgo.mcp_tools import server_claude_code as scc
+    # use the SAME module instance scc's handlers use — the flat `enf` import is a
+    # separate instance with its own _sessions (the package/flat dual-import trap)
+    from catgo.mcp_tools import verify_enforcement as penf
+    penf._sessions.pop("default", None)
+    out = asyncio.run(scc._handle_catalysis(None, {
+        "action": "oer", "params": {"dG_OH": 0.9, "dG_O": 2.4, "dG_OOH": 4.14}}))[0].text
+    env = json.loads(out)
+    assert "unverifiable_without" not in env, env.get("unverifiable_without")
+    for k in ("ul_reaction", "ul_reference", "ul_convention"):
+        assert env["provenance"][k], k
+    recs = prov.extract_result_records(out)
+    penf.postmark("catgo_catalysis", {"action": "oer", "_result_records": recs}, ok=True)
+    assert penf.precheck("catgo_workflow", {"action": "submit"})[0] == penf.FORBIDDEN
+    verdict = scc._handle_verify({"result": env})[0].text
+    assert "PROVENANCE-ONLY" in verdict or "PASS" in verdict.splitlines()[0], verdict.splitlines()[0]
+    assert penf.precheck("catgo_workflow", {"action": "submit"})[0] == penf.ALLOW
+
+
+def test_R12_every_emitted_claim_type_is_registered():
+    # provenance.py emits claims; verify_gates certifies them. A claim emitted but
+    # not registered scores UNKNOWN-CLAIM even with complete provenance —
+    # certification becomes override-only for that whole tool family
+    emitted = set(prov.NEEDS) | set(prov.TOOL_CLAIM.values()) | set(prov.CATALYSIS_CLAIM.values())
+    missing = sorted(emitted - set(vg.PROVENANCE_SPEC))
+    assert not missing, f"emitted claim types without a PROVENANCE_SPEC entry: {missing}"
+
+
 def test_R9_declared_missing_gas_entropy_fails_the_audit():
     # gas_entropy_included=False used to score PASS + VERIFIABLE: the verifiability
     # layer only checks presence, and no value gate read the value — certifying the

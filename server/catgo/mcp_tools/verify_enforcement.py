@@ -309,15 +309,22 @@ def mark_verified(covered, failed_gates=(), failed_taxa=(), uncertified_claims=(
         st["pending_digests"].pop(result_digest, None)
         st["failed_by_digest"].pop(result_digest, None)
     else:
-        # A bare verification cannot identify which legacy result it checked.
-        # Clearing an aggregate here let "verify one, release all" bypass the gate.
-        # Successful numeric dispatch now envelopes scalar/prose payloads too; any
-        # remaining legacy producer must be fixed or explicitly waived.
-        if st["legacy_unverified"] or st["legacy_failed"]:
+        # A bare verification cannot identify which legacy PRODUCED result it
+        # checked. Clearing the produced-count here let "verify one, release all"
+        # bypass the gate. Successful numeric dispatch now envelopes scalar/prose
+        # payloads too; any remaining legacy producer must be fixed or waived.
+        if st["legacy_unverified"]:
             st["audit"].append({
                 "event": "unbound_verification_ignored",
                 "legacy_pending": st["legacy_unverified"],
             })
+    # legacy_failed is identity-less by construction (set by a bare FAILing
+    # verify), so a clean covered audit is the only clear it can ever have. The
+    # FORBIDDEN message promises "a clean audit clears this"; without this the
+    # bare fix-and-reverify loop dead-ends with override as the only exit
+    # (found by live_mcp_probe scenario provenance_loop).
+    st["legacy_failed"] = []
+    st["legacy_failed_taxa"] = []
     st["override"] = None
     _refresh(st)
 
@@ -386,6 +393,16 @@ if __name__ == "__main__":
     # failed tool runs do not count as produced results
     postmark("catgo_analyze", {"action": "dos"}, ok=False, session_key="t3")
     assert precheck("catgo_workflow_engine", {"action": "submit"}, "t3")[0] == ALLOW
+
+    # --- a bare FAIL then a clean bare re-verify clears the failure (no dead end);
+    # the produced-result pending stays strict ---
+    skb = "t-bare"
+    postmark("catgo_analyze", {"action": "rdf"}, ok=True, session_key=skb)  # no records → legacy
+    mark_verified(True, failed_gates=["physical_range"], failed_taxa=["A2"], session_key=skb)
+    assert precheck("catgo_workflow", {"action": "submit"}, skb)[0] == FORBIDDEN
+    mark_verified(True, session_key=skb)          # fixed + clean, still unbound
+    assert state(skb)["failed"] == []             # failure cleared — message kept its promise
+    assert precheck("catgo_workflow", {"action": "submit"}, skb)[0] == FORBIDDEN  # legacy pending stays
 
     # --- engine read/control actions stay usable while results are pending ---
     ske = "t-engine"

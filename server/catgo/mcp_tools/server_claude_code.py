@@ -2268,10 +2268,21 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
             "d_band_center": "workflow.catalysis.descriptors.compute_d_band_center",
             "adsorption_energy": "workflow.catalysis.oer.compute_adsorption_free_energy",
         }
+        # Producer-owned U_L provenance: these are properties of the compute
+        # module itself (CHE free-energy ladder, potentials vs RHE, reaction =
+        # the action), so the tool CAN vouch for them. Without this every real
+        # oer/co2rr/nrr call declared them unverifiable and — because the digest
+        # binds {value, claim, provenance} — the agent had no way to supply them
+        # without breaking the binding: certification was override-only.
+        ul_prov = {
+            "oer":   {"ul_reaction": "OER",   "ul_reference": "RHE", "ul_convention": "CHE"},
+            "co2rr": {"ul_reaction": "CO2RR", "ul_reference": "RHE", "ul_convention": "CHE"},
+            "nrr":   {"ul_reaction": "NRR",   "ul_reference": "RHE", "ul_convention": "CHE"},
+        }.get(action, {})
         enveloped = _prov.envelope(
             result, tool="catgo_catalysis", action=action, inputs=params,
             claim=claim, trusted_input_fields=_prov.NEEDS.get(claim, ()),
-            method=methods[action],
+            method=methods[action], **ul_prov,
         )
         return [T(type="text", text=json.dumps(enveloped, indent=2, ensure_ascii=False))]
     except ImportError as exc:
