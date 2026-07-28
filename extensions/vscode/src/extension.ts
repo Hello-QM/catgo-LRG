@@ -18,6 +18,7 @@ import { stream_file_to_buffer } from './node-io'
 import { search_optimade_structures_backend, type OptimadeSearchOptions } from './optimade-backend'
 import { search_pubchem_compounds_backend } from './pubchem-backend'
 import { CatgoDocument } from './catgo-document'
+import { select_scalar_ferrox_wasm } from './ferrox-assets'
 
 // CatgoDocument is a VS-Code-free core (its own module so unit tests can import
 // it without pulling the full extension/webview graph); re-exported here so it
@@ -373,13 +374,22 @@ export const create_html = (
         .readdirSync(assets_dir)
         .filter((f) => f.startsWith(`ferrox_bg-`) && f.endsWith(`.wasm`))
       console.log(`[CatGO] Found WASM files: ${ferrox_files.join(`, `)}`)
-      if (ferrox_files.length > 0) {
-        const wasm_path = path.join(assets_dir, ferrox_files[0])
-        const wasm_buffer = fs.readFileSync(wasm_path)
-        data_with_wasm.wasm_binary = wasm_buffer.toString(`base64`)
-        console.log(`[CatGO] Successfully loaded ferrox WASM binary (${wasm_buffer.length} bytes → ${data_with_wasm.wasm_binary.length} base64 chars)`)
+      const scalar_ferrox = select_scalar_ferrox_wasm(
+        ferrox_files.map((filename) => ({
+          filename,
+          buffer: fs.readFileSync(path.join(assets_dir, filename)),
+        })),
+        ({ filename }, error) => {
+          console.warn(`[CatGO] Ignoring invalid ferrox WASM ${filename}:`, error)
+        },
+      )
+      if (scalar_ferrox) {
+        data_with_wasm.wasm_binary = scalar_ferrox.buffer.toString(`base64`)
+        console.log(
+          `[CatGO] Successfully loaded scalar ferrox WASM ${scalar_ferrox.filename} (${scalar_ferrox.buffer.length} bytes → ${data_with_wasm.wasm_binary.length} base64 chars)`,
+        )
       } else {
-        console.warn(`[CatGO] No ferrox WASM files found in ${assets_dir}`)
+        console.warn(`[CatGO] No scalar ferrox WASM found in ${assets_dir}`)
       }
 
       // Load moyo WASM
