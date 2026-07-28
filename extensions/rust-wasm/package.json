@@ -31,7 +31,13 @@
   "files": [
     "pkg",
     "pkg-scalar",
-    "pkg-threaded"
+    "pkg-threaded",
+    "license",
+    "CITATION.cff",
+    "THIRD_PARTY_NOTICES.md",
+    "third_party/licenses",
+    "third_party/provenance",
+    "README.md"
   ],
   "scripts": {
     "build": "node ../../scripts/build-wasm.mjs --only ferrox",

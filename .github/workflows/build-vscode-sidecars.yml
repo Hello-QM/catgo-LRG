@@ -2,11 +2,12 @@ name: Build VSCode Sidecar Binaries
 
 # The VS Code / Open VSX extension ships WITHOUT the ~463 MB catgo-server
 # binary (Marketplace has a ~100 MB cap). On first activate, src/sidecar.ts
-# downloads the platform-appropriate binary from this release:
-#   https://github.com/Hello-QM/catgo-LRG/releases/download/v<version>/catgo-server-<platform>
+# downloads the platform-appropriate binary and checksum from Cloudflare:
+#   https://dl.catgo-ucsd.org/v<version>/catgo-server-<platform>
 # This workflow builds those binaries on real per-platform runners (a single
 # Linux runner cannot cross-compile a PyInstaller bundle for macOS/Windows)
-# and attaches them to the matching release.
+# and attaches them to the matching release. The generic release mirror then
+# copies both assets into the versioned R2 path.
 #
 # Triggers:
 #   - push of a v* tag  → builds + attaches to that tag's release (normal release flow)
@@ -20,9 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to attach binaries to (e.g. v1.1.1). Defaults to the pushed tag.'
+        description: 'Exact application release tag to attach binaries to (e.g. v1.4.6).'
         type: string
-        required: false
+        required: true
 
 permissions:
   contents: write
@@ -52,8 +53,33 @@ jobs:
         shell: bash -el {0}
 
     steps:
+      - name: Preserve release evidence bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          RELEASE_VERSION_REQUIRE_TAG: true
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: true
+        run: node scripts/verify-release-source.mjs
+
+      - name: Stage canonical legal bundle
+        run: node scripts/sync-legal-bundle.mjs
 
       # --- Python backend toolchain (mirrors tauri-build.yml backend build) ---
       - name: Setup Miniconda
@@ -95,13 +121,46 @@ jobs:
           fi
           ls -la "${{ matrix.asset_name }}"
 
+      - name: Verify embedded legal bundle
+        run: |
+          set -euo pipefail
+          pyi-archive_viewer -b -l "${{ matrix.asset_name }}" |
+            tr '\\' '/' > sidecar-archive.lst
+          while IFS= read -r file; do
+            rel="${file#build/legal-bundle/}"
+            if ! grep -Fq "legal/$rel" sidecar-archive.lst; then
+              echo "::error::${{ matrix.asset_name }} is missing embedded legal/$rel"
+              exit 1
+            fi
+          done < <(
+            find build/legal-bundle -type f \
+              ! -name '.catgo-legal-bundle-owned' |
+              sort
+          )
+
+      - name: Generate SHA-256 checksum
+        run: |
+          node --input-type=module - "${{ matrix.asset_name }}" <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { createReadStream } from 'node:fs'
+          import { writeFile } from 'node:fs/promises'
+          import { basename } from 'node:path'
+
+          const file = process.argv[2]
+          const hash = createHash('sha256')
+          for await (const chunk of createReadStream(file)) hash.update(chunk)
+          const digest = hash.digest('hex')
+          await writeFile(`${file}.sha256`, `${digest}  ${basename(file)}\n`)
+          NODE
+          ls -la "${{ matrix.asset_name }}.sha256"
+
       - name: Attach sidecar to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag }}"
-          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          tag="$RELEASE_TAG"
           echo "Attaching ${{ matrix.asset_name }} to release $tag"
           # The desktop build (tauri-build.yml) creates the release on tag push;
           # retry briefly in case this job wins the race, then upload.
@@ -110,4 +169,7 @@ jobs:
             gh release create "$tag" --draft --title "$tag" \
               --notes "Release $tag" && break || sleep 15
           done
-          gh release upload "$tag" "${{ matrix.asset_name }}" --clobber
+          gh release upload "$tag" \
+            "${{ matrix.asset_name }}" \
+            "${{ matrix.asset_name }}.sha256" \
+            --clobber

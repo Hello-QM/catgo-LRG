@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.6] - 2026-07-25
+
+### Added
+
+- **Exact, smooth trajectory playback** — ASE and LAMMPS dump trajectories preserve the source coordinates and cell exactly while the prepared-frame GPU path sustains at least 24 unique presented frames per second on the reference `dump.traj`.
+- **GPU impostor bonds in every structure view** — the same seamless GPU bond representation now covers both trajectory playback and standalone static structures, without the old midpoint boundary.
+- **China-friendly all-platform download center** — [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) delivers Windows, Apple Silicon macOS, Linux, Android, iOS/TestFlight, updater, HPC, VS Code, and sidecar release paths through Cloudflare R2 with resumable byte-range downloads.
+- **Path-traced publication stills** — offline high-quality structure rendering is available from the export tools.
+
+### Changed
+
+- **AGPL license and citation request** — CatGo 1.4.6 distributions use `AGPL-3.0-or-later`. If CatGo contributes to your work, please include `This work used CatGo (https://catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. This request is not an additional condition of the AGPL license. Third-party materials retain their own licenses, and historical AGPL grants remain in effect.
+- **Cloudflare-only app acquisition and updates** — normal in-app downloads, Linux update checks, and signed Tauri updater packages use the dedicated Cloudflare domain instead of the GitHub API or release pages.
+- **Release integrity gates** — every platform workflow contributes only to a draft release; the R2 mirror selects stable CatGo app tags, publishes root metadata only for the latest app release, and excludes the independent STT accelerator series.
+
+### Fixed
+
+- **Gaussian frame counting and IRC trajectories** — concatenated Gaussian jobs no longer over-count frames, and IRC points are reconstructed in the correct order without duplicate transition-state frames.
+- **Variable-cell and streamed trajectory playback** — each presented frame carries its own lattice, bonds stay synchronized, and large indexed trajectories avoid the former reactive and renderer-rebuild stalls.
+
 ## [1.4.4] - 2026-07-08
 
 ### Added

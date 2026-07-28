@@ -12,8 +12,14 @@ set -euo pipefail
 
 BACKEND="${1:?usage: build-whispercpp.sh <vulkan|metal> <out-dir> [ref]}"
 OUT="${2:?output dir required}"
-# Pin a whisper.cpp ref for reproducible release builds; override per release.
-REF="${3:-master}"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PINNED_REF="$(node -p "require('$PROJECT_ROOT/scripts/whispercpp-source.json').revision")"
+REPOSITORY="$(node -p "require('$PROJECT_ROOT/scripts/whispercpp-source.json').repository")"
+REF="${3:-$PINNED_REF}"
+[ "$REF" = "$PINNED_REF" ] || {
+  echo "whisper.cpp revision must match pinned revision $PINNED_REF" >&2
+  exit 1
+}
 
 case "$BACKEND" in
   vulkan) FLAG="-DGGML_VULKAN=1" ;;
@@ -28,8 +34,14 @@ OUT="$(cd "$OUT" && pwd)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-git clone --depth 1 --branch "$REF" https://github.com/ggml-org/whisper.cpp "$WORK/src" \
-  || git clone --depth 1 https://github.com/ggml-org/whisper.cpp "$WORK/src"
+git init -q "$WORK/src"
+git -C "$WORK/src" remote add origin "$REPOSITORY"
+git -C "$WORK/src" fetch --depth 1 origin "$REF"
+git -C "$WORK/src" checkout --detach FETCH_HEAD
+[ "$(git -C "$WORK/src" rev-parse HEAD)" = "$PINNED_REF" ] || {
+  echo "whisper.cpp checkout does not match pinned revision $PINNED_REF" >&2
+  exit 1
+}
 cd "$WORK/src"
 
 JOBS="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
@@ -46,6 +58,9 @@ done
 # Shared libs it links (ggml*, whisper) — copy whatever exists for this OS.
 find build -maxdepth 4 \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.dll' \) \
   -exec cp {} "$OUT/" \; 2>/dev/null || true
+node "$PROJECT_ROOT/scripts/stage-whispercpp-license.mjs" \
+  --source-root "$WORK/src" \
+  --output "$OUT"
 
 echo "Staged whisper.cpp ($BACKEND) to $OUT:"
 ls -la "$OUT"

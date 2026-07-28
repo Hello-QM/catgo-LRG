@@ -18,6 +18,11 @@ const node_builtins = [
 ]
 
 export default defineConfig({
+  // wasm-bindgen-rayon's threaded glue imports child worker chunks. Vite's
+  // default IIFE worker output cannot code-split, so emit module workers.
+  worker: {
+    format: `es`,
+  },
   build: {
     lib: {
       entry: resolve(__dirname, `src/extension.ts`),

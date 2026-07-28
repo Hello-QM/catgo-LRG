@@ -10,9 +10,8 @@
 //! can be unit-tested in isolation; RT9 (`svg.rs`) orchestrates them into
 //! the z-ordered document.
 //!
-//! `perceive` (distance-based bond perception) and `covalent_radius` are
-//! RETAINED unchanged — they are the no-explicit-bonds fallback consumed
-//! by `svg.rs`.
+//! `perceive` is the distance-based no-explicit-bonds fallback consumed by
+//! `svg.rs`.
 
 use crate::types::{Atom, Bond};
 
@@ -21,17 +20,7 @@ use crate::types::{Atom, Bond};
 // ---------------------------------------------------------------------------
 
 pub fn covalent_radius(el: &str) -> f64 {
-    match el {
-        "H" => 0.31,
-        "C" => 0.76,
-        "N" => 0.71,
-        "O" => 0.66,
-        "S" => 1.05,
-        "P" => 1.07,
-        "F" => 0.57,
-        "Cl" => 1.02,
-        _ => 0.85,
-    }
+    crate::element_data::covalent_radius(el).unwrap_or(0.85)
 }
 
 /// Perceive single bonds: pair (i<j) bonded if dist < 1.2·(r_i + r_j).

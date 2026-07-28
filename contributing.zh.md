@@ -136,3 +136,16 @@ CatGo 代码量大，AI 助手在你**明确指出读哪些文件**时表现最�
 - README 的 About 列了支持的量化 / DFT 引擎（VASP、ORCA、CP2K、QE、GPAW、DFTB+、SIESTA、LAMMPS）——issue 聚焦在某一个引擎能帮 reviewer 分流。
 
 祝玩得开心！
+
+---
+
+## 贡献许可
+
+- 贡献者必须有权向 CatGo 提交其工作成果。
+- 第三方代码必须保留原有声明；将其复制到 CatGo 并不会改变或重新许可该第三方代码。
+- 接受一个拉取请求本身并不证明著作权已经转让。
+- 维护者可在接受贡献前要求单独的贡献者协议，以确保项目拥有对其代码进行许可和维权的权利。
+- 对 CatGo 的贡献采用 AGPL-3.0-or-later。
+- CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明
+  “This work used CatGo (https://catgo-ucsd.org).”并引用 CITATION.cff
+  中的首选文献；该请求不构成 AGPL 许可的附加条件。

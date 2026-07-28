@@ -27,11 +27,25 @@ on:
         description: 'After a signed build, upload the IPA to App Store Connect / TestFlight (needs App Store Connect API key secrets)'
         type: boolean
         default: false
+      release_tag:
+        description: 'Exact release tag to build and upload (for example, v1.4.6)'
+        type: string
+        required: false
+        default: ''
+      exact_tag_backfill:
+        description: 'Run the trusted main workflow while building the exact release tag source'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   ios:
     runs-on: macos-15 # Apple Silicon; carries Xcode 26 (iOS 26 SDK)
     name: Build iOS app
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.release_source.outputs.commit }}
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Threaded-ferrox nightly pin (read by the rustup step AND build-wasm.mjs,
@@ -42,6 +56,56 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ inputs.upload }}
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ inputs.upload }}
+        run: node scripts/verify-release-source.mjs
+
+      - name: Record exact release source
+        id: release_source
+        env:
+          ALLOW_EXACT_TAG_BACKFILL: ${{ inputs.exact_tag_backfill }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUIRE_EVENT_SHA: ${{ inputs.upload }}
+          V146_SOURCE_COMMIT: 06c02979b9e917011a63dcbfb09aaad7cfb9430d
+          V146_TAG: v1.4.6
+        run: |
+          set -euo pipefail
+          source_commit=$(git rev-parse HEAD)
+          if [ "$REQUIRE_EVENT_SHA" = "true" ]; then
+            tag_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+            if [ "$source_commit" != "$tag_commit" ]; then
+              echo "::error::Checked-out source is not the requested release tag."
+              exit 1
+            fi
+            if [ "$source_commit" != "$GITHUB_SHA" ] &&
+               { [ "$ALLOW_EXACT_TAG_BACKFILL" != "true" ] ||
+                 [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ] ||
+                 [ "$RELEASE_TAG" != "$V146_TAG" ] ||
+                 [ "$source_commit" != "$V146_SOURCE_COMMIT" ]; }; then
+              echo "::error::TestFlight source differs from GITHUB_SHA outside a trusted default-branch exact-tag backfill."
+              exit 1
+            fi
+          fi
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Stage legal bundle for iOS resources
+        run: node scripts/sync-legal-bundle.mjs
 
       - name: Select Xcode 26 (iOS 26 SDK)
         # App Store Connect now rejects uploads built with the iOS 18.5 SDK —
@@ -195,6 +259,44 @@ jobs:
           pnpm tauri ios build --export-method app-store-connect
           --config '{"identifier":"org.catgo.app","bundle":{"iOS":{"bundleVersion":"${{ github.run_number }}"}}}'
 
+      - name: Verify legal bundle in iOS artifacts
+        run: |
+          set -euo pipefail
+          inspected=0
+          while IFS= read -r -d '' ipa; do
+            unzip -Z1 "$ipa" > ios-archive.lst
+            while IFS= read -r file; do
+              rel="${file#build/legal-bundle/}"
+              if ! grep -Fq "/legal/$rel" ios-archive.lst; then
+                echo "::error::$ipa is missing legal/$rel"
+                exit 1
+              fi
+            done < <(
+              find build/legal-bundle -type f \
+                ! -name '.catgo-legal-bundle-owned' |
+                sort
+            )
+            inspected=$((inspected + 1))
+          done < <(find src-tauri/gen/apple/build -type f -name '*.ipa' -print0)
+          while IFS= read -r -d '' app; do
+            while IFS= read -r file; do
+              rel="${file#build/legal-bundle/}"
+              if ! find "$app" -type f -path "*/legal/$rel" -print -quit | grep -q .; then
+                echo "::error::$app is missing legal/$rel"
+                exit 1
+              fi
+            done < <(
+              find build/legal-bundle -type f \
+                ! -name '.catgo-legal-bundle-owned' |
+                sort
+            )
+            inspected=$((inspected + 1))
+          done < <(find src-tauri/gen/apple/build -type d -name '*.app' -print0)
+          if [ "$inspected" -eq 0 ]; then
+            echo "::error::No iOS IPA/app found for legal-bundle inspection"
+            exit 1
+          fi
+
       # ---- Upload the signed IPA to App Store Connect (TestFlight) ----
       # Needs an App Store Connect API key (App Store Connect → Users and Access →
       # Integrations → App Store Connect API). Add these repo secrets:
@@ -219,9 +321,9 @@ jobs:
           IPA=$(find src-tauri/gen/apple/build -name '*.ipa' -print -quit)
           if [ -z "${IPA}" ]; then echo "::error::No .ipa found to upload"; exit 1; fi
           echo "Uploading ${IPA} to App Store Connect…"
-          # altool can print "UPLOAD FAILED" / validation errors but still exit 0,
-          # so the step would falsely pass. Capture output and fail explicitly on
-          # any error marker (and on a non-zero exit).
+          # altool can print validation errors but still exit 0. Fail closed:
+          # require both a zero exit code and its explicit positive acceptance
+          # marker; empty, truncated, negative, or unfamiliar output is failure.
           set +e
           OUT=$(xcrun altool --upload-app -f "${IPA}" -t ios \
             --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}" 2>&1)
@@ -229,11 +331,8 @@ jobs:
           set -e
           echo "$OUT"
           rm -f ~/".appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
-          if [ "$RC" -ne 0 ] || echo "$OUT" | grep -qiE "UPLOAD FAILED|ERROR:"; then
-            echo "::error::App Store Connect upload failed (see altool output above)."
-            exit 1
-          fi
-          echo "Upload accepted by App Store Connect."
+          printf '%s\n' "$OUT" |
+            node scripts/verify-testflight-upload-result.mjs --exit-code "$RC"
 
       - name: Upload artifacts
         # always() so a successfully-built+signed IPA is saved even when the
@@ -247,3 +346,69 @@ jobs:
             src-tauri/gen/apple/build/**/*.ipa
             src-tauri/gen/apple/build/**/*.app
           if-no-files-found: warn
+
+  publish-testflight-attestation:
+    name: Attach TestFlight acceptance attestation
+    needs: ios
+    if: ${{ inputs.signed && inputs.upload && needs.ios.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      ALLOW_EXACT_TAG_BACKFILL: ${{ inputs.exact_tag_backfill }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_SOURCE_COMMIT: ${{ needs.ios.outputs.source_commit }}
+      REPOSITORY: ${{ github.repository }}
+      V146_SOURCE_COMMIT: 06c02979b9e917011a63dcbfb09aaad7cfb9430d
+      V146_TAG: v1.4.6
+    steps:
+      - name: Confirm matching release is a draft
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid CatGo release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if ! [[ "$RELEASE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$RELEASE_SOURCE_COMMIT" != \
+               "$(gh api "repos/$REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')" ]; then
+            echo "::error::TestFlight source is not the exact release tag commit."
+            exit 1
+          fi
+          if [ "$RELEASE_SOURCE_COMMIT" != "$GITHUB_SHA" ] &&
+             { [ "$ALLOW_EXACT_TAG_BACKFILL" != "true" ] ||
+               [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ] ||
+               [ "$RELEASE_TAG" != "$V146_TAG" ] ||
+               [ "$RELEASE_SOURCE_COMMIT" != "$V146_SOURCE_COMMIT" ]; }; then
+            echo "::error::Untrusted TestFlight exact-tag backfill context."
+            exit 1
+          fi
+          draft=$(gh release view "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --json isDraft \
+            --jq '.isDraft')
+          if [ "$draft" != "true" ]; then
+            echo "::error::Release $RELEASE_TAG must still be a draft."
+            exit 1
+          fi
+
+      - name: Upload accepted TestFlight attestation
+        run: |
+          set -euo pipefail
+          attestation="catgo-ios-testflight-${RELEASE_TAG}.json"
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg sourceCommit "$RELEASE_SOURCE_COMMIT" \
+            --arg githubRunId "$GITHUB_RUN_ID" \
+            '{
+              "schemaVersion": 1,
+              "releaseTag": $releaseTag,
+              "sourceCommit": $sourceCommit,
+              "githubRunId": $githubRunId,
+              "status": "accepted"
+            }' > "$attestation"
+          gh release upload "$RELEASE_TAG" "$attestation" \
+            --repo "$REPOSITORY" \
+            --clobber

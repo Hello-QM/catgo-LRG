@@ -6,6 +6,7 @@ rust-version = "1.93"
 authors = ["LRG <gul026@ucsd.edu>"]
 description = "High-performance structure matching for crystallographic data"
 license = "AGPL-3.0-or-later"
+publish = false
 repository = "https://github.com/Hello-QM/catgo-LRG"
 keywords = ["crystallography", "materials-science", "structure-matching"]
 include = [

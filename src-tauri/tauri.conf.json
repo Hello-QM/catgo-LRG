@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CatGo",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "identifier": "com.catgo.app",
   "build": {
     "frontendDist": "../build-desktop",
@@ -89,7 +89,8 @@
       "infoPlist": "Info.ios.plist"
     },
     "resources": {
-      "icons/document.icns": "./"
+      "icons/document.icns": "./",
+      "resources/legal/": "legal/"
     },
     "fileAssociations": [
       {

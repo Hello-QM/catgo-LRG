@@ -10,6 +10,10 @@ on:
         description: 'Package only — do not publish to marketplace'
         type: boolean
         default: false
+      release_tag:
+        description: 'Required for a manual marketplace publish (for example, v1.4.6)'
+        type: string
+        default: ''
 
 env:
   CARGO_NET_RETRY: "10"
@@ -27,7 +31,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}
           fetch-depth: 0
+
+      - name: Verify release rights
+        run: node scripts/verify-release-rights.mjs
+
+      - name: Verify release version
+        env:
+          RELEASE_VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+          RELEASE_VERSION_REQUIRE_TAG: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        run: node scripts/verify-release-version.mjs
+
+      - name: Verify release source
+        env:
+          RELEASE_SOURCE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+          RELEASE_SOURCE_REQUIRE_TAG: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        run: node scripts/verify-release-source.mjs
 
       - uses: pnpm/action-setup@v4
 
@@ -78,15 +98,13 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
-      # Single source of truth for the version: the VS Code extension always
-      # inherits the root package.json version at publish time. Prevents
-      # shipping a stale .vsix when a release bump forgets to update
-      # extensions/vscode/package.json (this happened for v1.1.1).
-      - name: Sync extension version from root package.json
-        run: |
-          root_ver=$(node -p "require('./package.json').version")
-          npm --prefix extensions/vscode pkg set version="$root_ver"
-          echo "Extension version synced to $root_ver"
+      - name: Run extension tests
+        working-directory: extensions/vscode
+        run: pnpm exec vitest run
+
+      - name: Typecheck extension
+        working-directory: extensions/vscode
+        run: pnpm exec tsc --noEmit
 
       - name: Build extension
         working-directory: extensions/vscode
@@ -96,28 +114,14 @@ jobs:
         working-directory: extensions/vscode
         run: pnpm dlx @vscode/vsce package --no-dependencies
 
-      # Real publish failures (bad token, network, packaging) now fail the job
-      # loudly instead of being swallowed by continue-on-error. The ONLY
-      # tolerated error is "already published" — keeps re-tagging the same
-      # version idempotent without masking genuine breakage.
+      # Duplicate versions are release errors: v1.4.6 must produce a new
+      # marketplace version, not pass as an idempotent no-op.
       - name: Publish to VS Code Marketplace
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          set +e
-          out=$(pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix 2>&1)
-          code=$?
-          echo "$out"
-          if [ "$code" -ne 0 ]; then
-            if echo "$out" | grep -qiE "already (exists|published)"; then
-              echo "::warning::Version already on the VS Code Marketplace — treating as a no-op (idempotent re-tag)."
-            else
-              echo "::error::vsce publish failed (exit $code)."
-              exit "$code"
-            fi
-          fi
+        run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
 
       # Claim ownership of the Open VSX namespace so published extensions are not
       # flagged "not a verified publisher of the namespace". The token's account
@@ -147,19 +151,8 @@ jobs:
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          set +e
           vsix=$(ls catgo-*.vsix | head -1)
-          out=$(pnpm dlx ovsx publish "$vsix" --no-dependencies 2>&1)
-          code=$?
-          echo "$out"
-          if [ "$code" -ne 0 ]; then
-            if echo "$out" | grep -qiE "already (exists|published)"; then
-              echo "::warning::Version already on Open VSX — treating as a no-op (idempotent re-tag)."
-            else
-              echo "::error::ovsx publish failed (exit $code)."
-              exit "$code"
-            fi
-          fi
+          pnpm dlx ovsx publish "$vsix" --no-dependencies
 
       - name: Upload VSIX as workflow artifact
         uses: actions/upload-artifact@v4

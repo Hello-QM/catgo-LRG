@@ -14,15 +14,17 @@ const COMMIT = `0b2cdccef7452bf28212e15daf9df2dc7a545bcc`
 
 describe(`OVITO-derived WebGL bond code attribution`, () => {
   test(`retains the MIT notice and pinned provenance`, () => {
-    const notice = read(`THIRD_PARTY_NOTICES.md`)
+    const provenance = read(`THIRD_PARTY_NOTICES.md`)
+    const notice = read(`third_party/licenses/OVITO-MIT.txt`)
     expect(notice).toContain(`Copyright 2026 OVITO GmbH, Germany`)
-    expect(notice).toContain(COMMIT)
     expect(notice).toContain(`Permission is hereby granted, free of charge`)
-    expect(notice).toContain(`OpenGLCylinderPrimitive.cpp`)
-    expect(notice).toContain(`cylinder.frag`)
-    expect(notice).toContain(`WebGL2 GLSL3`)
-    expect(notice).toContain(`half-bond replica decoding`)
-    expect(notice).toContain(`GPU picking`)
+    expect(provenance).toContain(`third_party/licenses/OVITO-MIT.txt`)
+    expect(provenance).toContain(COMMIT)
+    expect(provenance).toContain(`OpenGLCylinderPrimitive.cpp`)
+    expect(provenance).toContain(`cylinder.frag`)
+    expect(provenance).toContain(`WebGL2 GLSL3`)
+    expect(provenance).toContain(`half-bond replica decoding`)
+    expect(provenance).toContain(`GPU picking`)
   })
 
   test.each([

@@ -4,10 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catgo"
-version = "1.4.5.post1"
+version = "1.4.6"
 description = "CatGo — AI-driven workbench for computational materials science (3D viewer + workflow engine + MCP)"
 readme = "README-pypi.md"
 license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "CatGo Team" },
@@ -70,6 +71,11 @@ mofsearch = [
 [project.scripts]
 catgo = "catgo.cli:main"
 
+[tool.hatch.build]
+# PORMAKE creates topology pickles lazily at runtime. They are local caches,
+# not part of the pinned 3,274-file database snapshot or reproducible releases.
+exclude = ["/catgo/vendor/pormake/database/**/*.pickle"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["catgo"]
 # The built SPA (catgo/web/**) is a generated, git-ignored artifact copied in by
@@ -91,3 +97,8 @@ artifacts = [
 "workflow" = "catgo/_bundled/workflow"
 "plugin_loader.py" = "catgo/_bundled/plugin_loader.py"
 "mcp_server.py" = "catgo/_bundled/mcp_server.py"
+"README-pypi.md" = "catgo/README.md"
+"CITATION.cff" = "catgo/CITATION.cff"
+"THIRD_PARTY_NOTICES.md" = "catgo/THIRD_PARTY_NOTICES.md"
+"third_party/licenses" = "catgo/third_party/licenses"
+"third_party/provenance" = "catgo/third_party/provenance"
