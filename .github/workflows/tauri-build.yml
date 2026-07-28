@@ -331,8 +331,8 @@ jobs:
 
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
-            ### License change in 1.4.6
-            CatGo 1.4.6 distributions use **AGPL-3.0-or-later**.
+            ### License and citation
+            CatGo 1.4.7 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
@@ -362,12 +362,10 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.6
-            - **Exact, smooth trajectory playback** — ASE and LAMMPS dump trajectories preserve source coordinates and cells exactly while the prepared-frame GPU path sustains at least 24 unique presented frames per second on the reference trajectory.
-            - **GPU impostor bonds everywhere** — trajectory playback and standalone static structures now share the same seamless GPU bond representation without midpoint boundaries.
-            - **Gaussian frame counting and IRC trajectories** — concatenated jobs no longer over-count frames, and IRC points are reconstructed in the correct order without duplicate transition-state frames.
-            - **China-friendly all-platform download center** — Windows, Apple Silicon macOS, Linux, Android, iOS/TestFlight, HPC, VS Code, and sidecar downloads are available through `dl.catgo-ucsd.org` with resumable transfers.
-            - **Cloudflare-only app acquisition and updates** — normal app downloads, update checks, and signed updater packages no longer depend on GitHub availability.
+            ### New in 1.4.7
+            - **Windows desktop app closes normally again** — guarded shutdown can destroy the Tauri window and clean up bundled backend processes after Exit is confirmed.
+            - **VS Code structure generation consistently loads compatible WASM** — threaded builds that import shared memory are rejected, so the scalar runtime is selected regardless of directory order.
+            - **More reliable multi-platform releases** — draft validation, artifact paths, signatures, provenance, updater metadata, and the Cloudflare R2 mirror are aligned across release jobs.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
@@ -526,6 +524,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-v1.4.6-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Finalize canonical release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.7'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
 
       - name: Upload canonical legal bundle to release
         if: runner.os == 'Linux' && env.CATGO_RELEASE_TAG != ''
