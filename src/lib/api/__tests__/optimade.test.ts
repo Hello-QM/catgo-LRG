@@ -76,6 +76,291 @@ describe(`optimade search static-mode relay substitution`, () => {
   })
 })
 
+describe(`Materials Project primary REST search`, () => {
+  afterEach(async () => {
+    const { set_mp_api_key } = await import(`../materials-project`)
+    set_mp_api_key(``)
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it(`uses the MP summary API instead of OPTIMADE when an API key is configured`, async () => {
+    vi.resetModules()
+    const { set_mp_api_key } = await import(`../materials-project`)
+    set_mp_api_key(`test-key`)
+
+    const fetch_spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes(`/mp/search`)) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                material_id: `mp-2657`,
+                formula_pretty: `TiO2`,
+                nsites: 6,
+                nelements: 2,
+              },
+            ],
+            meta: { total_doc: 1 },
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [], meta: { data_returned: 0, data_available: 0 } }),
+        { status: 200 },
+      )
+    })
+
+    const { search_optimade_structures } = await import(`../optimade`)
+    const result = await search_optimade_structures(
+      `mp`,
+      [{
+        id: `mp`,
+        type: `links`,
+        attributes: {
+          name: `Materials Project`,
+          base_url: `https://optimade.materialsproject.org`,
+        },
+      }],
+      { formula: `TiO2`, limit: 20, offset: 0 },
+    )
+
+    expect(result.structures.map((entry) => entry.id)).toEqual([`mp-2657`])
+    expect(fetch_spy).toHaveBeenCalledTimes(1)
+    expect(String(fetch_spy.mock.calls[0]?.[0] ?? ``)).toContain(`/mp/search`)
+  })
+
+  it(`loads MP geometry from the summary API instead of OPTIMADE`, async () => {
+    vi.resetModules()
+    const { set_mp_api_key } = await import(`../materials-project`)
+    set_mp_api_key(`test-key`)
+
+    const fetch_spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes(`/mp/structure/mp-2657`)) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              material_id: `mp-2657`,
+              formula_pretty: `TiO2`,
+              nsites: 2,
+              nelements: 2,
+              structure: {
+                lattice: {
+                  matrix: [[4.59, 0, 0], [0, 4.59, 0], [0, 0, 2.96]],
+                  pbc: [true, true, true],
+                  a: 4.59,
+                  b: 4.59,
+                  c: 2.96,
+                  alpha: 90,
+                  beta: 90,
+                  gamma: 90,
+                  volume: 62.36,
+                },
+                sites: [
+                  {
+                    species: [{ element: `Ti`, occu: 1 }],
+                    abc: [0, 0, 0],
+                    xyz: [0, 0, 0],
+                    label: `Ti`,
+                    properties: {},
+                  },
+                  {
+                    species: [{ element: `O`, occu: 1 }],
+                    abc: [0.5, 0.5, 0.5],
+                    xyz: [2.295, 2.295, 1.48],
+                    label: `O`,
+                    properties: {},
+                  },
+                ],
+                charge: 0,
+                properties: {},
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(JSON.stringify({ data: null }), { status: 200 })
+    })
+
+    const { fetch_optimade_structure } = await import(`../optimade`)
+    const result = await fetch_optimade_structure(
+      `mp-2657`,
+      `mp`,
+      [{
+        id: `mp`,
+        type: `links`,
+        attributes: {
+          name: `Materials Project`,
+          base_url: `https://optimade.materialsproject.org`,
+        },
+      }],
+    )
+
+    expect(result).toMatchObject({
+      id: `mp-2657`,
+      attributes: {
+        lattice_vectors: [[4.59, 0, 0], [0, 4.59, 0], [0, 0, 2.96]],
+        species_at_sites: [`Ti`, `O`],
+      },
+    })
+    expect(fetch_spy).toHaveBeenCalledTimes(1)
+    expect(String(fetch_spy.mock.calls[0]?.[0] ?? ``)).toContain(`/mp/structure/mp-2657`)
+  })
+})
+
+describe(`OPTIMADE pagination metadata`, () => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__CATGO_STATIC_ONLY__
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it(`uses data_available for the total and offset-aware has_more`, async () => {
+    delete (globalThis as Record<string, unknown>).__CATGO_STATIC_ONLY__
+    vi.resetModules()
+    vi.spyOn(globalThis, `fetch`).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{
+            id: `alex-21`,
+            type: `structures`,
+            attributes: { chemical_formula_reduced: `TiO2` },
+          }],
+          meta: { data_returned: 1, data_available: 57 },
+        }),
+        { status: 200 },
+      ),
+    )
+
+    const { search_optimade_structures } = await import(`../optimade`)
+    const result = await search_optimade_structures(
+      `alexandria`,
+      [{
+        id: `alexandria`,
+        type: `links`,
+        attributes: {
+          name: `Alexandria`,
+          base_url: `https://alexandria.icams.rub.de/pbe`,
+        },
+      }],
+      { limit: 20, offset: 20 },
+    )
+
+    expect(result.total_count).toBe(57)
+    expect(result.has_more).toBe(true)
+  })
+})
+
+describe(`VS Code structure routing`, () => {
+  afterEach(async () => {
+    const { set_mp_api_key } = await import(`../materials-project`)
+    set_mp_api_key(``)
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it(`routes MPDD structure fetches through the backend instead of the MP endpoint`, async () => {
+    vi.resetModules()
+    const { set_mp_api_key } = await import(`../materials-project`)
+    set_mp_api_key(``)
+    const posted: Array<Record<string, unknown>> = []
+
+    const { fetch_optimade_structure, set_vscode_api } = await import(`../optimade`)
+    set_vscode_api({
+      postMessage(message) {
+        const msg = message as Record<string, unknown>
+        posted.push(msg)
+        queueMicrotask(() => {
+          window.dispatchEvent(new MessageEvent(`message`, {
+            data: {
+              command: `optimade_fetch_response`,
+              request_id: msg.request_id,
+              data: {
+                data: {
+                  id: `mpdd-1`,
+                  type: `structures`,
+                  attributes: {},
+                },
+              },
+            },
+          }))
+        })
+      },
+    })
+
+    const result = await fetch_optimade_structure(
+      `mpdd-1`,
+      `mpdd`,
+      [{
+        id: `mpdd`,
+        type: `links`,
+        attributes: {
+          name: `MPDD`,
+          base_url: `https://providers.optimade.org/index-metadbs/mpdd`,
+        },
+      }],
+    )
+
+    expect(result?.id).toBe(`mpdd-1`)
+    const requested_url = String(posted[0]?.url)
+    expect(requested_url).toContain(`/optimade/structure/mpdd/mpdd-1`)
+    expect(requested_url).not.toContain(`optimade.materialsproject.org`)
+  })
+
+  it(`routes MPDD suggestions through the extension search backend`, async () => {
+    vi.resetModules()
+    const posted: Array<Record<string, unknown>> = []
+    const { fetch_suggested_structures, set_vscode_api } = await import(`../optimade`)
+    set_vscode_api({
+      postMessage(message) {
+        const msg = message as Record<string, unknown>
+        posted.push(msg)
+        queueMicrotask(() => {
+          window.dispatchEvent(new MessageEvent(`message`, {
+            data: {
+              command: `optimade_search_response`,
+              request_id: msg.request_id,
+              data: {
+                structures: [{
+                  id: `mpdd-1`,
+                  type: `structures`,
+                  attributes: {},
+                }],
+                total_count: 1,
+                has_more: false,
+              },
+            },
+          }))
+        })
+      },
+    })
+
+    const result = await fetch_suggested_structures(
+      `mpdd`,
+      [{
+        id: `mpdd`,
+        type: `links`,
+        attributes: {
+          name: `MPDD`,
+          base_url: `https://providers.optimade.org/index-metadbs/mpdd`,
+        },
+      }],
+      12,
+    )
+
+    expect(result.map((entry) => entry.id)).toEqual([`mpdd-1`])
+    expect(posted[0]).toMatchObject({
+      command: `optimade_search`,
+      provider: `mpdd`,
+      options: { limit: 12, offset: 0 },
+    })
+  })
+})
+
 // MP moved thermo data into a nested `_mp_stability` dict (keyed by thermo
 // type); the flat `_mp_formation_energy_per_atom` / `_mp_energy_above_hull`
 // fields now return null. Details extraction and stability sorting must read

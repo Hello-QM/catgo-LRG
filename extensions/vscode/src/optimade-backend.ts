@@ -64,6 +64,8 @@ export interface OptimadeSearchOptions {
   nsites_max?: number
   limit?: number
   offset?: number
+  response_fields?: string
+  sort?: string
 }
 
 export interface OptimadeSearchResult {
@@ -76,6 +78,7 @@ export interface OptimadeSearchResult {
 let cached_providers: OptimadeProvider[] | null = null
 let providers_cache_time = 0
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+const resolved_urls_cache = new Map<string, string>()
 
 /**
  * Fetch list of OPTIMADE providers from central registry
@@ -105,6 +108,7 @@ async function fetch_providers(): Promise<OptimadeProvider[]> {
     const BROKEN_PROVIDER_IDS = new Set([
       `aflow`, `cod`, `cmr`, `exmpl`, `matcloud`, `mpds`,
       `mpod`, `nmd`, `odbx`, `oqmd`, `jarvis`, `tcod`,
+      `mcloud`, `omdb`, `twodmatpedia`,
     ])
     providers = providers.filter(p => !BROKEN_PROVIDER_IDS.has(p.id))
 
@@ -115,6 +119,73 @@ async function fetch_providers(): Promise<OptimadeProvider[]> {
     console.warn(`[OPTIMADE] Failed to fetch providers:`, error)
     return cached_providers || []
   }
+}
+
+/**
+ * Registry entries often point at an index meta-database rather than a
+ * structures API. Resolve its child URL, caching successes only so a transient
+ * registry/index failure can recover on the next request.
+ */
+async function resolve_provider_url(base_url: string): Promise<string> {
+  const cached = resolved_urls_cache.get(base_url)
+  if (cached) return cached
+
+  const normalized_base = base_url.replace(/\/$/, ``)
+  for (const endpoint of [`/links`, `/v1/links`]) {
+    try {
+      const response = await fetch(`${normalized_base}${endpoint}`, {
+        headers: {
+          'Accept': `application/vnd.api+json`,
+          'User-Agent': `CatGO/1.0`,
+        },
+      })
+      if (!response.ok) continue
+      const payload = await response.json() as {
+        data?: Array<{
+          type?: string
+          attributes?: { link_type?: string; base_url?: string }
+        }>
+      }
+      const child = payload.data?.find((link) =>
+        link.type === `links`
+        && link.attributes?.link_type === `child`
+        && link.attributes.base_url
+      )?.attributes?.base_url
+      if (child) {
+        resolved_urls_cache.set(base_url, child)
+        return child
+      }
+    } catch {
+      // Try the alternate links endpoint, then fall back without caching.
+    }
+  }
+  return base_url
+}
+
+async function fetch_structures_response(
+  base_url: string,
+  params: URLSearchParams,
+): Promise<{ response: Response; url: string }> {
+  const normalized_base = base_url.replace(/\/$/, ``)
+  let last_response: Response | null = null
+  let last_url = ``
+  for (const endpoint of [
+    `${normalized_base}/v1/structures`,
+    `${normalized_base}/structures`,
+  ]) {
+    const url = `${endpoint}?${params}`
+    const response = await fetch(url, {
+      headers: {
+        'Accept': `application/vnd.api+json`,
+        'User-Agent': `CatGO/1.0`,
+      },
+    })
+    if (response.ok) return { response, url }
+    last_response = response
+    last_url = url
+  }
+  if (!last_response) throw new Error(`No OPTIMADE structures endpoint for ${base_url}`)
+  return { response: last_response, url: last_url }
 }
 
 /**
@@ -223,28 +294,29 @@ export async function search_optimade_structures_backend(
       throw new Error(`Unknown provider: ${provider}`)
     }
 
-    // Special case: Materials Project has a real OPTIMADE API at optimade.materialsproject.org
-    // The providers registry returns a proxy URL that doesn't work for API calls
+    // Materials Project's registry entry is an index meta-database. Its known
+    // direct endpoint is safe to use; all other providers (including MPDD)
+    // must resolve their own child URL instead of being mistaken for MP.
     let base_url = provider_obj.attributes.base_url
-    if (provider === `mp` || provider === `mpdd`) {
+    if (provider === `mp`) {
       base_url = `https://optimade.materialsproject.org`
       console.log(`[OPTIMADE] Using real Materials Project API: ${base_url}`)
+    } else {
+      base_url = await resolve_provider_url(base_url)
     }
 
     // Build query URL
-    const filter_param = filter ? `&filter=${encodeURIComponent(filter)}` : ``
-    const url = `${base_url}/v1/structures?page_limit=${limit}&page_offset=${offset}${filter_param}`
+    const params = new URLSearchParams({
+      page_limit: String(limit),
+      page_offset: String(offset),
+    })
+    if (filter) params.set(`filter`, filter)
+    if (options.response_fields) params.set(`response_fields`, options.response_fields)
+    if (options.sort) params.set(`sort`, options.sort)
 
+    const { response, url } = await fetch_structures_response(base_url, params)
     console.log(`[OPTIMADE] Search URL: ${url}`)
     if (filter) console.log(`[OPTIMADE] Filter: ${filter}`)
-
-    // Fetch from provider
-    const response = await fetch(url, {
-      headers: {
-        'Accept': `application/vnd.api+json`,
-        'User-Agent': `CatGO/1.0`,
-      },
-    })
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -252,16 +324,24 @@ export async function search_optimade_structures_backend(
 
     const data = await response.json() as {
       data?: OptimadeStructure[]
-      meta?: { data_returned?: number; data_available?: number }
+      meta?: {
+        data_returned?: number
+        data_available?: number
+        more_data_available?: boolean
+      }
     }
 
     const structures = data.data || []
-    const total_count = data.meta?.data_returned ?? data.meta?.data_available
+    const total_count = data.meta?.data_available ?? data.meta?.data_returned
+    const has_more = data.meta?.more_data_available
+      ?? (total_count === undefined
+        ? structures.length === limit
+        : offset + structures.length < total_count)
 
     return {
       structures,
       total_count,
-      has_more: structures.length === limit,
+      has_more,
     }
   } catch (error) {
     console.error(`[OPTIMADE] Search failed:`, error)
@@ -282,15 +362,14 @@ export async function fetch_suggested_structures_backend(
 
     if (!provider_obj) return []
 
-    const base_url = provider_obj.attributes.base_url
-    const url = `${base_url}/v1/structures?page_limit=${limit}&page_offset=0`
-
-    const response = await fetch(url, {
-      headers: {
-        'Accept': `application/vnd.api+json`,
-        'User-Agent': `CatGO/1.0`,
-      },
+    const base_url = provider === `mp`
+      ? `https://optimade.materialsproject.org`
+      : await resolve_provider_url(provider_obj.attributes.base_url)
+    const params = new URLSearchParams({
+      page_limit: String(limit),
+      page_offset: `0`,
     })
+    const { response } = await fetch_structures_response(base_url, params)
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)

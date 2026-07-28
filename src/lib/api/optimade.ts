@@ -5,6 +5,12 @@ declare const __CATGO_STATIC_ONLY__: boolean
 import { API_BASE as _DEFAULT_API } from './config'
 import { relay_fetch } from '$lib/chat/provider-routing'
 import { isMobile } from '$lib/api/transport'
+import {
+  get_mp_structure_summary,
+  has_mp_api_key,
+  mp_summary_to_optimade_structure,
+  search_mp_structures_as_optimade,
+} from './materials-project'
 
 // API base URL - same as compute.ts
 let API_BASE = _DEFAULT_API
@@ -288,6 +294,13 @@ export async function fetch_optimade_structure(
   provider: string,
   providers: OptimadeProvider[],
 ): Promise<OptimadeStructure | null> {
+  if (provider === `mp` && has_mp_api_key()) {
+    const summary = await get_mp_structure_summary(structure_id)
+    if (summary?.structure) {
+      return mp_summary_to_optimade_structure(summary)
+    }
+  }
+
   const encoded_id = encode_structure_id(structure_id)
 
   // Request the same provider-specific extras the list-search asks for —
@@ -299,21 +312,24 @@ export async function fetch_optimade_structure(
 
   const is_static = (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) || isMobile()
   let url: string
-  if (vscode_api || is_static) {
-    // Direct API call: need to resolve provider base URL and construct endpoint
+  if (is_static) {
+    // Direct API call: static/mobile builds have no Python OPTIMADE router.
     const provider_obj = providers.find(p => p.id === provider)
     if (!provider_obj) {
       throw new Error(`Unknown provider: ${provider}`)
     }
     let base_url = provider_obj.attributes.base_url
     // Special case: Materials Project has a real OPTIMADE API at optimade.materialsproject.org
-    if (provider === `mp` || provider === `mpdd`) {
+    if (provider === `mp`) {
       base_url = `https://optimade.materialsproject.org`
     }
     url = `${base_url}/v1/structures/${encoded_id}`
     if (response_fields) url += `?response_fields=${encodeURIComponent(response_fields)}`
   } else {
-    // Backend proxy
+    // Desktop and VS Code both have the Python router, which resolves registry
+    // index meta-databases (MPDD, Matterverse, etc.) to their real child API.
+    // In VS Code fetch_json_smart sends this localhost request via the extension
+    // host, avoiding both webview CSP and duplicated provider routing logic.
     url = `${API_BASE}/optimade/structure/${provider}/${encoded_id}`
     if (response_fields) url += `?response_fields=${encodeURIComponent(response_fields)}`
   }
@@ -358,13 +374,19 @@ export async function fetch_suggested_structures(
     let data: { data?: OptimadeStructure[] }
 
     const is_static = (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) || isMobile()
-    if (vscode_api || is_static) {
-      // Direct API call
+    if (vscode_api) {
+      const result = await post_to_extension_optimade_search(provider, {
+        limit,
+        offset: 0,
+      })
+      data = { data: result.structures }
+    } else if (is_static) {
+      // Static/mobile builds have no Python router or extension host.
       const provider_obj = providers.find(p => p.id === provider)
       if (!provider_obj) return []
       let base_url = provider_obj.attributes.base_url
       // Special case: Materials Project has a real OPTIMADE API at optimade.materialsproject.org
-      if (provider === `mp` || provider === `mpdd`) {
+      if (provider === `mp`) {
         base_url = `https://optimade.materialsproject.org`
       }
       url = `${base_url}/v1/structures?page_limit=${limit}&page_offset=0`
@@ -548,6 +570,28 @@ export interface OptimadeSearchResult {
   has_more: boolean
 }
 
+interface OptimadeResponseMeta {
+  data_returned?: number
+  data_available?: number
+  more_data_available?: boolean
+}
+
+function optimade_search_result(
+  data: { data?: OptimadeStructure[]; meta?: OptimadeResponseMeta },
+  limit: number,
+  offset: number,
+): OptimadeSearchResult {
+  const structures = sort_structures_by_stability(data.data || [])
+  // data_returned is only the size of THIS page. data_available is the total
+  // matching the query, and must win whenever the provider supplies it.
+  const total_count = data.meta?.data_available ?? data.meta?.data_returned
+  const has_more = data.meta?.more_data_available
+    ?? (total_count === undefined
+      ? structures.length === limit
+      : offset + structures.length < total_count)
+  return { structures, total_count, has_more }
+}
+
 /**
  * Parse elements from a chemical formula (e.g., "TiO2" -> ["Ti", "O"])
  */
@@ -650,6 +694,19 @@ export async function search_optimade_structures(
   options: OptimadeSearchOptions = {},
 ): Promise<OptimadeSearchResult> {
   try {
+    // MP's OPTIMADE adapter is an optional secondary surface and can be
+    // deployed without its data collections. When the user has configured an
+    // MP key, use the primary summary API for search instead.
+    if (provider === `mp` && has_mp_api_key()) {
+      return await search_mp_structures_as_optimade({
+        formula: options.formula,
+        elements: options.elements_only ?? options.elements,
+        num_elements: options.elements_only?.length ?? options.nelements,
+        limit: options.limit,
+        offset: options.offset,
+      })
+    }
+
     // Default to ascending sort by formation energy when caller doesn't specify.
     const sort = options.sort ?? default_sort_for_provider(provider)
 
@@ -695,13 +752,11 @@ export async function search_optimade_structures(
         })
       }
       if (!response.ok) throw new Error(`OPTIMADE API error (${response.status})`)
-      const data = await response.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
-      const structures = sort_structures_by_stability(data.data || [])
-      return {
-        structures,
-        total_count: data.meta?.data_returned ?? data.meta?.data_available,
-        has_more: structures.length === limit,
+      const data = await response.json() as {
+        data?: OptimadeStructure[]
+        meta?: OptimadeResponseMeta
       }
+      return optimade_search_result(data, limit, offset)
     }
 
     // Web app with backend: use backend proxy
@@ -734,28 +789,21 @@ export async function search_optimade_structures(
           }),
         })
         if (retry.ok) {
-          const retry_data = await retry.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
-          const retry_structs = sort_structures_by_stability(retry_data.data || [])
-          return {
-            structures: retry_structs,
-            total_count: retry_data.meta?.data_returned ?? retry_data.meta?.data_available,
-            has_more: retry_structs.length === limit,
+          const retry_data = await retry.json() as {
+            data?: OptimadeStructure[]
+            meta?: OptimadeResponseMeta
           }
+          return optimade_search_result(retry_data, limit, offset)
         }
       }
       throw new Error(`OPTIMADE API error (${response.status}): ${error_text}`)
     }
 
-    const data = await response.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
-
-    const structures = sort_structures_by_stability(data.data || [])
-    const total_count = data.meta?.data_returned ?? data.meta?.data_available
-
-    return {
-      structures,
-      total_count,
-      has_more: structures.length === limit,
+    const data = await response.json() as {
+      data?: OptimadeStructure[]
+      meta?: OptimadeResponseMeta
     }
+    return optimade_search_result(data, limit, offset)
   } catch (error) {
     console.warn(`Failed to search structures for ${provider}:`, error)
     throw error
