@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
     set_background: vi.fn(),
     set_bond_data: vi.fn(),
     set_bond_rules: vi.fn(),
+    set_bond_style: vi.fn(),
     set_bonds_enabled: vi.fn(),
     set_camera_full: vi.fn(),
     set_cell: vi.fn(),
