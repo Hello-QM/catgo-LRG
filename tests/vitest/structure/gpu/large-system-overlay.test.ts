@@ -64,6 +64,7 @@ function make_state(
 ): ResolvedVisualState {
   const background_linear: [number, number, number] = [0.0123, 0.2345, 0.4567]
   return {
+    render_style_source: render_style === 2 ? `toon` : `glossy`,
     shading: {
       light_dir: [0, 0, 1],
       is_ortho: false,
@@ -300,6 +301,14 @@ describe(`visual source ownership and wiring`, () => {
     )
 
     expect(scene).toContain(`visual_state_source = {`)
+    expect(scene).toContain(
+      `let resolved_visual_state = $state.raw<ResolvedVisualState | null>(null)`,
+    )
+    expect(scene).toContain(`const snapshot = resolve_current_visual_state()`)
+    expect(scene).toContain(`resolved_visual_state = snapshot`)
+    expect(scene).toContain(`resolve: () => snapshot`)
+    expect(scene).toContain(`apply_webgl_background(r, snapshot, __scratch_bg)`)
+    expect(scene).toContain(`visual_state={resolved_visual_state}`)
     expect(scene).toContain(`theme_revision,`)
     const theme_sync = scene.indexOf(
       `sync_clear_color()\n        // Publish only after`,
@@ -317,6 +326,8 @@ describe(`visual source ownership and wiring`, () => {
     expect(overlay).not.toContain(`getComputedStyle`)
     expect(overlay).not.toContain(`background_opacity`)
     expect(overlay).not.toContain(`get_shading`)
+    expect(overlay).toContain(`apply_webgpu_background(renderer, state)`)
+    expect(overlay).toContain(`apply_webgpu_shading(renderer, state)`)
   })
 
   it(`passes one Structure HUD safe-area to both WebGL and WebGPU gizmos`, () => {

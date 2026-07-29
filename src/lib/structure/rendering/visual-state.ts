@@ -34,6 +34,9 @@ export type ResolvedVisualShading = {
 }
 
 export type ResolvedVisualState = {
+  /** Backend-neutral source style. Adapters map this to their supported shader
+   * branch; WebGPU keeps MatCap's explicit glossy fallback in `shading`. */
+  render_style_source: RenderStyle
   shading: ResolvedVisualShading
   background_linear: [number, number, number]
   /** Exact displayed-site colors resolved once by StructureScene. The WebGPU

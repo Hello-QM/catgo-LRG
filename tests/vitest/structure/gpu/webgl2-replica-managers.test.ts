@@ -258,7 +258,7 @@ afterEach(async () => {
 })
 
 async function mount_manager(
-  mode: 'atom' | 'bond',
+  mode: 'atom' | 'bond' | 'combined',
   start_null = false,
   is_webgl2 = true,
   add_periodic_bond = false,
@@ -619,4 +619,28 @@ describe(`packet-path material style (#533)`, () => {
     expect(material.uniforms.uRoughness.value).toBeCloseTo(0.4)
     expect(material.uniforms.uMetalness.value).toBeCloseTo(0.4)
   })
+
+  test.each([`atom`, `combined`] as const)(
+    `%s production component consumes the resolved visual snapshot`,
+    async (mode) => {
+      const { dom, scene } = await mount_manager(mode)
+      const main = meshes(scene).find((mesh) =>
+        (mesh.material as THREE.ShaderMaterial).uniforms?.uRenderStyle
+      )!
+      const material = main.material as THREE.ShaderMaterial
+      expect(material.uniforms.uRenderStyle.value).toBe(0)
+
+      await click(dom, `visual-snapshot`)
+
+      expect(main.material).toBe(material)
+      expect(material.uniforms.uRenderStyle.value).toBe(2)
+      expect(material.uniforms.uLightDir.value.toArray()).toEqual([0.1, 0.2, 0.3])
+      expect(material.uniforms.uAmbientIntensity.value).toBeCloseTo(0.11)
+      expect(material.uniforms.uDirectionalIntensity.value).toBeCloseTo(0.22)
+      expect(material.uniforms.uSpecStrength.value).toBeCloseTo(0.33)
+      expect(material.uniforms.uRoughness.value).toBeCloseTo(0.44)
+      expect(material.uniforms.uMetalness.value).toBeCloseTo(0.55)
+      expect(material.uniforms.uIsOrthographic.value).toBe(true)
+    },
+  )
 })

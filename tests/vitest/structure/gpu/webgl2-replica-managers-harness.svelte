@@ -10,6 +10,8 @@
   import WebGLReplicaLayer from '$lib/structure/gpu/WebGLReplicaLayer.svelte'
   import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
   import type { PacketSyncEvidence } from '$lib/structure/trajectory-presentation-commit'
+  import type { ResolvedVisualState } from '$lib/structure/rendering/visual-state'
+  import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
 
   interface Props {
     mode: 'atom' | 'bond' | 'combined'
@@ -65,6 +67,7 @@
   let layer_show_bonds = $state(untrack(() => initial_show_bonds))
   // #533 — Appearance → Material must reach the packet-path impostor material.
   let render_style = $state<'glossy' | 'toon' | 'metallic'>('glossy')
+  let use_visual_snapshot = $state(false)
 
   // -1 = no packet: AtomManagerInstances falls back to the legacy
   // InstancedMesh path, mirroring a static structure at 1×1×1.
@@ -72,6 +75,35 @@
   const live_ghost_opacity = $derived(appearance_alt ? 0.65 : ghost_opacity)
   const live_stub_scale = $derived(appearance_alt ? 0.75 : stub_scale)
   const live_bond_opacity = $derived(appearance_alt ? 0.4 : bond_opacity)
+  const visual_state = $derived<ResolvedVisualState | null>(
+    use_visual_snapshot
+      ? {
+          render_style_source: `toon`,
+          shading: {
+            light_dir: [0.1, 0.2, 0.3],
+            is_ortho: true,
+            ambient: 0.11,
+            directional: 0.22,
+            spec_strength: 0.33,
+            roughness: 0.44,
+            metalness: 0.55,
+            render_style: 2,
+            outline: 0.66,
+            bond_outline: 0.77,
+            depth_cueing: 0.88,
+            depth_near: 2,
+            depth_far: 9,
+            depth_bg: [0.01, 0.02, 0.03],
+            toon_shadow_threshold: 0.25,
+            toon_highlight_threshold: 0.9,
+            toon_shadow_brightness: 0.4,
+          },
+          background_linear: [0.04, 0.05, 0.06],
+          atom_colors_linear: null,
+          view_transform: resolve_view_transform(null, null),
+        }
+      : null,
+  )
 </script>
 
 <button data-testid="factor-null" onclick={() => packet_idx = -1}>none</button>
@@ -81,6 +113,7 @@
 <button data-testid="appearance" onclick={() => appearance_alt = true}>appearance</button>
 <button data-testid="style-toon" onclick={() => render_style = 'toon'}>toon</button>
 <button data-testid="style-metallic" onclick={() => render_style = 'metallic'}>metallic</button>
+<button data-testid="visual-snapshot" onclick={() => use_visual_snapshot = true}>snapshot</button>
 <button data-testid="atoms-on" onclick={() => layer_show_atoms = true}>atoms on</button>
 <button data-testid="atoms-off" onclick={() => layer_show_atoms = false}>atoms off</button>
 <button data-testid="bonds-on" onclick={() => layer_show_bonds = true}>bonds on</button>
@@ -92,6 +125,7 @@
     render_packet={packet}
     {render_style}
     image_atom_opacity={live_ghost_opacity}
+    {visual_state}
     max_capacity={16}
   />
 {:else if mode === 'bond'}
@@ -116,6 +150,7 @@
       opacity={live_bond_opacity}
       ghost_opacity={live_ghost_opacity}
       {render_style}
+      {visual_state}
       {on_packet_synced}
     />
   {/if}
@@ -124,6 +159,7 @@
     render_packet={packet}
     packet_renderer_owned={packet !== null}
     {render_style}
+    {visual_state}
     image_atom_opacity={live_ghost_opacity}
     max_capacity={16}
   />

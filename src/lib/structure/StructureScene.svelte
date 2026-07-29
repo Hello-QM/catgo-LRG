@@ -17,6 +17,7 @@
     VisualStateSource,
   } from '$lib/structure/rendering/visual-state'
   import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
+  import { apply_webgl_background } from '$lib/structure/rendering/visual-adapters'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -1457,7 +1458,6 @@
     const r = threlte.renderer
     if (!r) return
     compute_canvas_bg(__scratch_bg)
-    r.setClearColor(__scratch_bg, 1)
     // Keep fog target in lockstep — same color object computation, no
     // dependency on effect ordering between sync_clear_color and the fog
     // uniform updater.
@@ -5394,6 +5394,7 @@
     const pbr = style_pbr(render_style)
     const bg = depth_cue_uniforms.uDepthCueBgColor.value
     return {
+      render_style_source: render_style,
       shading: {
         light_dir: [light_dir.x, light_dir.y, light_dir.z],
         is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
@@ -5426,6 +5427,7 @@
   // the view transform. Camera movement stays out of this effect: interaction
   // wakes re-resolve the same source for live camera-dependent depth planes.
   let visual_revision = 0
+  let resolved_visual_state = $state.raw<ResolvedVisualState | null>(null)
   $effect(() => {
     void [
       render_style,
@@ -5452,13 +5454,19 @@
       rotation_target?.[2],
     ]
     visual_revision += 1
+    const snapshot = resolve_current_visual_state()
+    resolved_visual_state = snapshot
+    const r = threlte.renderer
+    if (r) apply_webgl_background(r, snapshot, __scratch_bg)
     visual_state_source = {
       revision: visual_revision,
-      resolve: resolve_current_visual_state,
+      resolve: () => snapshot,
     }
+    mark_dirty()
   })
   onDestroy(() => {
     visual_state_source = null
+    resolved_visual_state = null
   })
 
   // ── Manager-ready trajectory packet ───────────────────────────────────────
@@ -6960,6 +6968,7 @@
               directional_light={active_directional_light}
               {light_dir}
               {render_style}
+              visual_state={resolved_visual_state}
               {matcap_preset}
               highlight_strength={active_highlight_strength}
               opacity={1}
@@ -6985,6 +6994,7 @@
             ambient_light={active_ambient_light}
             directional_light={active_directional_light}
             {render_style}
+            visual_state={resolved_visual_state}
             {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}

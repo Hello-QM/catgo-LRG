@@ -92,6 +92,7 @@ function make_visual_source(
 ) {
   const background_linear: [number, number, number] = [0, 0, 0]
   const resolve = vi.fn(() => ({
+    render_style_source: `glossy` as const,
     shading: {
       light_dir: [0, 0, 1] as [number, number, number],
       is_ortho: false,

@@ -72,10 +72,11 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-describe(`LargeSystemOverlay shared visual snapshot`, () => {
-  it(`reads one queued-frame snapshot and forwards its exact background to both adapters`, async () => {
+describe(`LargeSystemOverlay WebGPU visual adapter`, () => {
+  it(`reads one queued-frame snapshot and forwards its exact resolved background`, async () => {
     const background_linear: [number, number, number] = [0.0123, 0.2345, 0.4567]
     const snapshot = {
+      render_style_source: `glossy` as const,
       shading: {
         light_dir: [0, 0, 1] as [number, number, number],
         is_ortho: false,

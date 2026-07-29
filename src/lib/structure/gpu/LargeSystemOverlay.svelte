@@ -16,7 +16,6 @@
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
-    type LargeSystemShading,
   } from '$lib/structure/gpu/large-system-renderer'
   import {
     same_visual_shading,
@@ -24,6 +23,10 @@
     type ResolvedVisualShading,
     type VisualStateSource,
   } from '$lib/structure/rendering/visual-state'
+  import {
+    apply_webgpu_background,
+    apply_webgpu_shading,
+  } from '$lib/structure/rendering/visual-adapters'
   import { select_packet_atom_colors } from '$lib/structure/rendering/atom-colors'
   import {
     apply_view_transform_to_lattice,
@@ -595,8 +598,9 @@
 
   /** Push StructureScene's resolved background when it changed. set_background
    *  accepts linear RGB and performs the one required clear-value encoding. */
-  function sync_background(rgb: [number, number, number]): boolean {
+  function sync_background(state: ResolvedVisualState): boolean {
     if (!renderer) return false
+    const rgb = state.background_linear
     if (
       last_bg &&
       Math.abs(last_bg[0] - rgb[0]) < 1e-6 &&
@@ -606,7 +610,7 @@
       return false
     }
     last_bg = rgb
-    renderer.set_background(rgb)
+    apply_webgpu_background(renderer, state)
     return true
   }
 
@@ -614,7 +618,7 @@
    *  backend adapters. The overlay never inspects DOM or re-resolves CSS. */
   function sync_visual_state(state: ResolvedVisualState | null): boolean {
     if (!renderer || !state) return false
-    const background_changed = sync_background(state.background_linear)
+    const background_changed = sync_background(state)
     let shading_changed = false
     if (
       !last_visual_shading ||
@@ -625,9 +629,7 @@
         light_dir: [...state.shading.light_dir],
         depth_bg: [...state.shading.depth_bg],
       }
-      shading_changed = renderer.set_shading(
-        state.shading as LargeSystemShading,
-      )
+      shading_changed = apply_webgpu_shading(renderer, state)
     }
     return shading_changed || background_changed
   }
