@@ -2,6 +2,7 @@ import type { AnyStructure } from '$lib'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
+import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
 import type { RenderPacket } from '$lib/structure/scene/render-packet'
 
 const mocks = vi.hoisted(() => {
@@ -81,6 +82,45 @@ function make_structure(): AnyStructure {
   } as unknown as AnyStructure
 }
 
+function make_visual_source(
+  revision: number,
+  atom_colors_linear: Float32Array | null,
+  rotation: [number, number, number] = [0, 0, 0],
+  target: [number, number, number] = [0, 0, 0],
+) {
+  const background_linear: [number, number, number] = [0, 0, 0]
+  const resolve = vi.fn(() => ({
+    shading: {
+      light_dir: [0, 0, 1] as [number, number, number],
+      is_ortho: false,
+      ambient: 0.4,
+      directional: 0.6,
+      spec_strength: 0.5,
+      roughness: 0.2,
+      metalness: 0,
+      render_style: 0 as const,
+      outline: 0,
+      depth_cueing: 0,
+      depth_near: 0,
+      depth_far: 1,
+      depth_bg: background_linear,
+      toon_shadow_threshold: 0.3,
+      toon_highlight_threshold: 0.97,
+      toon_shadow_brightness: 0.5,
+    },
+    background_linear,
+    atom_colors_linear,
+    view_transform: resolve_view_transform(rotation, target),
+  }))
+  return {
+    source: {
+      revision,
+      resolve,
+    },
+    resolve,
+  }
+}
+
 async function settle(): Promise<void> {
   flushSync()
   await tick()
@@ -148,12 +188,63 @@ afterEach(async () => {
 })
 
 describe(`LargeSystemOverlay authoritative packet bridge`, () => {
-  it(`defers set_packet until an exact authoritative base color buffer is ready`, async () => {
+  it(`consumes authoritative colors and view transform from one visual snapshot`, async () => {
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0])
+    const initial = make_visual_source(1, colors)
     const props = $state({
       enabled: true,
       structure: make_structure(),
-      resolved_atom_colors: null as Float32Array | null,
-      rotation: [0, 0, 0] as [number, number, number],
+      visual_state_source: initial.source,
+      show_bonds: `never` as const,
+      show_cell: true,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+
+    run_overlay_frame()
+    expect(initial.resolve).toHaveBeenCalledTimes(1)
+    expect(last_packet().topology.colors).toBe(colors)
+    const first_revision = last_packet().frame.positions_version
+    run_until_sleep()
+
+    const rotated = make_visual_source(
+      2,
+      colors,
+      [0, 0, Math.PI / 2],
+      [1, 0, 0],
+    )
+    props.visual_state_source = rotated.source
+    await settle()
+    run_overlay_frame()
+
+    expect(rotated.resolve).toHaveBeenCalledTimes(1)
+    expect(last_packet().frame.positions_version).toBeGreaterThan(first_revision)
+    expect(last_packet().frame.positions[0]).toBeCloseTo(1, 5)
+    expect(last_packet().frame.positions[1]).toBeCloseTo(0, 5)
+    expect(last_packet().frame.positions[3]).toBeCloseTo(0, 5)
+    expect(last_packet().frame.positions[4]).toBeCloseTo(-1, 5)
+    expect(last_packet().frame.lattice[0]).toBeCloseTo(0, 5)
+    expect(last_packet().frame.lattice[1]).toBeCloseTo(10, 5)
+    expect(last_packet().frame.lattice[3]).toBeCloseTo(-10, 5)
+    expect(mocks.renderer.set_cell.mock.calls.at(-1)?.[3]).toEqual(
+      expect.arrayContaining([
+        expect.closeTo(1, 5),
+        expect.closeTo(-1, 5),
+        expect.closeTo(0, 5),
+      ]),
+    )
+  })
+
+  it(`defers set_packet until an exact authoritative base color buffer is ready`, async () => {
+    let revision = 1
+    const props = $state({
+      enabled: true,
+      structure: make_structure(),
+      visual_state_source: make_visual_source(revision, null).source,
       show_bonds: `never` as const,
     })
     const component = mount(LargeSystemOverlay, {
@@ -166,12 +257,18 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     run_overlay_frame()
     expect(mocks.renderer.set_packet).not.toHaveBeenCalled()
 
-    props.resolved_atom_colors = new Float32Array(7)
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      new Float32Array(7),
+    ).source
     await settle()
     run_overlay_frame()
     expect(mocks.renderer.set_packet).not.toHaveBeenCalled()
 
-    props.resolved_atom_colors = new Float32Array([1, 0, 0])
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      new Float32Array([1, 0, 0]),
+    ).source
     await settle()
     run_overlay_frame()
     expect(mocks.renderer.set_packet).not.toHaveBeenCalled()
@@ -180,7 +277,10 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       0.1, 0.2, 0.3,
       0.4, 0.5, 0.6,
     ])
-    props.resolved_atom_colors = authoritative
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      authoritative,
+    ).source
     await settle()
     run_overlay_frame()
 
@@ -188,22 +288,31 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(last_packet().topology.colors).toBe(authoritative)
 
     const confirmed = last_packet()
-    props.resolved_atom_colors = null
-    props.rotation = [0, 0, Math.PI / 4]
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      null,
+      [0, 0, Math.PI / 4],
+    ).source
     await settle()
     run_overlay_frame()
     expect(mocks.renderer.set_packet).toHaveBeenCalledTimes(1)
     expect(last_packet()).toBe(confirmed)
 
-    props.resolved_atom_colors = new Float32Array([0.9, 0.8, 0.7])
-    props.rotation = [0, 0, Math.PI / 2]
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      new Float32Array([0.9, 0.8, 0.7]),
+      [0, 0, Math.PI / 2],
+    ).source
     await settle()
     run_overlay_frame()
     expect(mocks.renderer.set_packet).toHaveBeenCalledTimes(1)
     expect(last_packet()).toBe(confirmed)
 
-    props.resolved_atom_colors = new Float32Array(7)
-    props.rotation = [0, 0, Math.PI]
+    props.visual_state_source = make_visual_source(
+      ++revision,
+      new Float32Array(7),
+      [0, 0, Math.PI],
+    ).source
     await settle()
     run_overlay_frame()
     expect(mocks.renderer.set_packet).toHaveBeenCalledTimes(1)
@@ -215,9 +324,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     const props = $state({
       enabled: true,
       structure: make_structure(),
-      resolved_atom_colors: colors,
-      rotation: [0, 0, 0] as [number, number, number],
-      rotation_target: [0, 0, 0] as [number, number, number],
+      visual_state_source: make_visual_source(1, colors).source,
       show_bonds: `never` as const,
     })
     const component = mount(LargeSystemOverlay, {
@@ -234,7 +341,11 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       [...raf_callbacks.values()].some((callback) => callback.name === `frame`),
     ).toBe(false)
 
-    props.rotation = [0, 0, Math.PI / 2]
+    props.visual_state_source = make_visual_source(
+      2,
+      colors,
+      [0, 0, Math.PI / 2],
+    ).source
     await settle()
     expect(
       [...raf_callbacks.values()].some((callback) => callback.name === `frame`),
@@ -252,15 +363,14 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
   })
 
   it(`keeps trajectory and rotation packet revisions strictly monotonic`, async () => {
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0])
     const props = $state({
       enabled: true,
       structure: make_structure(),
-      resolved_atom_colors: new Float32Array([1, 0, 0, 0, 1, 0]),
+      visual_state_source: make_visual_source(1, colors).source,
       frame_positions: new Float32Array([1, 0, 0, 0, 1, 0]),
       trajectory_positions_version: { v: 1, all: true },
       trajectory_step_idx: 0,
-      rotation: [0, 0, 0] as [number, number, number],
-      rotation_target: [0, 0, 0] as [number, number, number],
       show_bonds: `never` as const,
     })
     const component = mount(LargeSystemOverlay, {
@@ -275,6 +385,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     props.frame_positions = new Float32Array([2, 0, 0, 0, 2, 0])
     props.trajectory_positions_version = { v: 2, all: true }
     props.trajectory_step_idx = 1
+    props.visual_state_source = make_visual_source(2, colors).source
     await settle()
     run_overlay_frame()
     revisions.push(last_packet().frame.positions_version)
@@ -282,12 +393,20 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     props.frame_positions = new Float32Array([3, 0, 0, 0, 3, 0])
     props.trajectory_positions_version = { v: 3, all: true }
     props.trajectory_step_idx = 2
-    props.rotation = [0, Math.PI / 4, 0]
+    props.visual_state_source = make_visual_source(
+      3,
+      colors,
+      [0, Math.PI / 4, 0],
+    ).source
     await settle()
     run_overlay_frame()
     revisions.push(last_packet().frame.positions_version)
 
-    props.rotation = [0, Math.PI / 2, 0]
+    props.visual_state_source = make_visual_source(
+      4,
+      colors,
+      [0, Math.PI / 2, 0],
+    ).source
     await settle()
     run_overlay_frame()
     revisions.push(last_packet().frame.positions_version)
@@ -306,7 +425,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     const props = $state({
       enabled: true,
       structure,
-      resolved_atom_colors: element,
+      visual_state_source: make_visual_source(1, element).source,
       supercell: [2, 1, 1] as [number, number, number],
       show_image_atoms: true,
       show_bonds: `never` as const,
@@ -325,7 +444,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       element_colors: { C: `#ff0000`, O: `#00ff00` },
       property_colors: { colors: [`#0000ff`, `#00ffff`] },
     })
-    props.resolved_atom_colors = property
+    props.visual_state_source = make_visual_source(2, property).source
     await settle()
     run_overlay_frame()
     expect(last_packet().topology.colors).toBe(property)
@@ -336,7 +455,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       property_colors: { colors: [`#0000ff`, `#00ffff`] },
       plugin_colors: [`#ffff00`, `#ff00ff`],
     })
-    props.resolved_atom_colors = plugin
+    props.visual_state_source = make_visual_source(3, plugin).source
     await settle()
     run_overlay_frame()
     expect(last_packet().topology.colors).toBe(plugin)
@@ -352,7 +471,10 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       ...site,
       0.25, 0.5, 0.75,
     ])
-    props.resolved_atom_colors = displayed_with_ghost
+    props.visual_state_source = make_visual_source(
+      4,
+      displayed_with_ghost,
+    ).source
     await settle()
     run_overlay_frame()
 

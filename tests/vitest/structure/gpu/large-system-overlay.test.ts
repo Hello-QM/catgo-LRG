@@ -2,6 +2,7 @@ import type {
   ResolvedVisualState,
   VisualStateSource,
 } from '$lib/structure/rendering/visual-state'
+import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
 import { readFileSync } from 'node:fs'
 import { resolve as resolve_path } from 'node:path'
 import { createSubscriber } from 'svelte/reactivity'
@@ -82,10 +83,12 @@ function make_state(
       ...overrides,
     },
     background_linear,
+    atom_colors_linear: null,
+    view_transform: resolve_view_transform(null, null),
   }
 }
 
-function make_source(initial_revision: string, initial_state: ResolvedVisualState) {
+function make_source(initial_revision: number, initial_state: ResolvedVisualState) {
   let revision = initial_revision
   let state = initial_state
   let notify = () => {}
@@ -106,7 +109,7 @@ function make_source(initial_revision: string, initial_state: ResolvedVisualStat
   return {
     source,
     resolve,
-    publish(next_revision: string, next_state: ResolvedVisualState): void {
+    publish(next_revision: number, next_state: ResolvedVisualState): void {
       revision = next_revision
       state = next_state
       notify()
@@ -178,7 +181,7 @@ afterEach(async () => {
 
 describe(`LargeSystemOverlay revision-bearing visual source`, () => {
   it(`wakes a sleeping loop once, resolves once, and uploads the next snapshot`, async () => {
-    const visual = make_source(`toon:0`, make_state(0))
+    const visual = make_source(1, make_state(0))
     const component = mount(LargeSystemOverlay, {
       target: document.body,
       props: {
@@ -197,7 +200,7 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
     mocks.renderer.render.mockClear()
 
     const toon = make_state(2)
-    visual.publish(`toon:1`, toon)
+    visual.publish(2, toon)
     flushSync()
 
     expect(pending_overlay_frames()).toHaveLength(1)
@@ -210,7 +213,7 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
     expect(mocks.renderer.render).toHaveBeenCalledTimes(1)
 
     expect(drain_overlay_to_sleep()).toBe(24)
-    visual.publish(`toon:1`, toon)
+    visual.publish(2, toon)
     flushSync()
     expect(pending_overlay_frames()).toHaveLength(0)
 
@@ -219,7 +222,7 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
     // 24-stable-frame tail still reaches a fully empty RAF queue.
     mocks.renderer.set_background.mockClear()
     mocks.renderer.set_shading.mockClear()
-    visual.publish(`toon:2`, toon)
+    visual.publish(3, toon)
     flushSync()
     expect(pending_overlay_frames()).toHaveLength(1)
     run_overlay_frame()
@@ -235,7 +238,7 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
     await settle_mount()
     drain_overlay_to_sleep()
 
-    const visual = make_source(`late:1`, make_state(1))
+    const visual = make_source(1, make_state(1))
     visual.resolve.mockClear()
     mocks.renderer.set_background.mockClear()
     mocks.renderer.set_shading.mockClear()
@@ -254,7 +257,7 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
   })
 
   it(`re-resolves camera-dependent fields on an existing interaction wake`, async () => {
-    const visual = make_source(`camera:1`, make_state(0))
+    const visual = make_source(1, make_state(0))
     const component = mount(LargeSystemOverlay, {
       target: document.body,
       props: {

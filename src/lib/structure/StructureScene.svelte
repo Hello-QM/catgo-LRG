@@ -11,6 +11,7 @@
     find_theme_background,
     resolve_background_linear,
   } from '$lib/structure/rendering/background'
+  import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
   import type {
     ResolvedVisualState,
     VisualStateSource,
@@ -596,7 +597,6 @@
     element_radius_overrides = {} as Partial<Record<ElementSymbol, number>>,
     site_radius_overrides = new SvelteMap<number, number>(),
     site_color_overrides = new SvelteMap<number, string>(),
-    resolved_atom_colors = $bindable<Float32Array | null>(null),
     camera_position = DEFAULTS.structure.camera_position,
     camera_projection = DEFAULTS.structure.camera_projection,
     rotation_damping = DEFAULTS.structure.rotation_damping,
@@ -888,7 +888,6 @@
     site_color_overrides?: Map<number, string> | SvelteMap<number, string> // per-site color overrides (takes precedence over element/property colors)
     /** Authoritative displayed-site linear RGB buffer. The WebGPU adapter takes
      *  only the base prefix matching its packet topology. */
-    resolved_atom_colors?: Float32Array | null
     camera_position?: [x: number, y: number, z: number] // initial camera position from which to render the scene
     camera_projection?: CameraProjection // camera projection type
     rotation_damping?: number // rotation damping factor (how quickly the rotation comes to rest after mouse release)
@@ -5304,74 +5303,6 @@
     return buf
   })
 
-  /** Build the one shared visual snapshot consumed by both backend adapters.
-   *  Background resolution itself is owned by sync_clear_color; this function
-   *  republishes that exact linear triple and only refreshes camera-dependent
-   *  depth planes. */
-  function resolve_current_visual_state(): ResolvedVisualState {
-    // The useTask that normally keeps the depth-cue planes tracking the camera
-    // is part of the WebGL render loop — suspended while the overlay is up. So
-    // recompute here, against the current camera, rather than reading a value
-    // that stopped updating the moment performance mode was switched on.
-    update_depth_cue_uniforms()
-    const cam = threlte.camera.current
-    const pbr = style_pbr(render_style)
-    const bg = depth_cue_uniforms.uDepthCueBgColor.value
-    return {
-      shading: {
-        light_dir: [light_dir.x, light_dir.y, light_dir.z],
-        is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
-        ambient: active_ambient_light,
-        directional: active_directional_light,
-        spec_strength: active_highlight_strength,
-        roughness: pbr.roughness,
-        metalness: pbr.metalness,
-        render_style: render_style_to_backend(render_style, `webgpu`),
-        outline: depth_cue_uniforms.uOutlineStrength.value,
-        depth_cueing: depth_cue_uniforms.uDepthCueing.value,
-        depth_near: depth_cue_uniforms.uDepthNear.value,
-        depth_far: depth_cue_uniforms.uDepthFar.value,
-        // LINEAR rgb — the overlay's shaders sRGB-encode it themselves, exactly
-        // as the WebGL atom shader does with uDepthCueBgColor.
-        depth_bg: [bg.r, bg.g, bg.b],
-        // Toon thresholds: the same constants the WebGL material is built with.
-        toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
-        toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
-        toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
-      },
-      background_linear: [...resolved_background_linear],
-    }
-  }
-
-  // Publish a new source whenever a semantic visual input changes. Camera
-  // movement stays out of this key: the existing interaction wake calls the
-  // same resolver, which refreshes camera-dependent fields for that frame.
-  $effect(() => {
-    const revision = [
-      render_style,
-      active_light_azimuth,
-      active_light_elevation,
-      active_ambient_light,
-      active_directional_light,
-      active_highlight_strength,
-      depth_cueing,
-      depth_cue_start,
-      depth_cue_end,
-      atom_outline_strength,
-      background_color ?? `#000000`,
-      background_opacity,
-      camera_projection,
-      theme_revision,
-    ].join(`|`)
-    visual_state_source = {
-      revision,
-      resolve: resolve_current_visual_state,
-    }
-  })
-  onDestroy(() => {
-    visual_state_source = null
-  })
-
   // Flat row-major Float64Array(9) for BondManagerInstances. Rows are the
   // lattice vectors a, b, c (pymatgen convention) — used to compute
   // `b_eff = pos_b + lattice·jimage` per bond when rendering cross-cell
@@ -5439,15 +5370,83 @@
     })
   })
 
-  // Publish the same resolved buffer consumed by the WebGL atom/bond packet
-  // path. This is a value bridge (identity changes on semantic recolors), not a
-  // displayed-position getter or a second color resolver.
-  $effect(() => {
-    const published = atom_colors_buffer
-    resolved_atom_colors = published
-    return () => {
-      if (resolved_atom_colors === published) resolved_atom_colors = null
+  /** Build the one shared visual snapshot consumed by both backend adapters.
+   *  Background and atom colors are resolved once by StructureScene. The exact
+   *  WebGL group transform is carried alongside them so WebGPU positions,
+   *  lattice directions, and cell origin cannot drift independently. */
+  function resolve_current_visual_state(): ResolvedVisualState {
+    // The useTask that normally keeps the depth-cue planes tracking the camera
+    // is part of the WebGL render loop — suspended while the overlay is up. So
+    // recompute here, against the current camera, rather than reading a value
+    // that stopped updating the moment performance mode was switched on.
+    update_depth_cue_uniforms()
+    const cam = threlte.camera.current
+    const pbr = style_pbr(render_style)
+    const bg = depth_cue_uniforms.uDepthCueBgColor.value
+    return {
+      shading: {
+        light_dir: [light_dir.x, light_dir.y, light_dir.z],
+        is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
+        ambient: active_ambient_light,
+        directional: active_directional_light,
+        spec_strength: active_highlight_strength,
+        roughness: pbr.roughness,
+        metalness: pbr.metalness,
+        render_style: render_style_to_backend(render_style, `webgpu`),
+        outline: depth_cue_uniforms.uOutlineStrength.value,
+        depth_cueing: depth_cue_uniforms.uDepthCueing.value,
+        depth_near: depth_cue_uniforms.uDepthNear.value,
+        depth_far: depth_cue_uniforms.uDepthFar.value,
+        // LINEAR rgb — the overlay's shaders sRGB-encode it themselves, exactly
+        // as the WebGL atom shader does with uDepthCueBgColor.
+        depth_bg: [bg.r, bg.g, bg.b],
+        // Toon thresholds: the same constants the WebGL material is built with.
+        toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
+        toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
+        toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
+      },
+      background_linear: [...resolved_background_linear],
+      atom_colors_linear: atom_colors_buffer,
+      view_transform: resolve_view_transform(rotation, rotation_target),
     }
+  }
+
+  // One monotonic semantic revision owns shading, background, atom colors, and
+  // the view transform. Camera movement stays out of this effect: interaction
+  // wakes re-resolve the same source for live camera-dependent depth planes.
+  let visual_revision = 0
+  $effect(() => {
+    void [
+      render_style,
+      active_light_azimuth,
+      active_light_elevation,
+      active_ambient_light,
+      active_directional_light,
+      active_highlight_strength,
+      depth_cueing,
+      depth_cue_start,
+      depth_cue_end,
+      atom_outline_strength,
+      background_color ?? `#000000`,
+      background_opacity,
+      camera_projection,
+      theme_revision,
+      atom_colors_buffer,
+      rotation[0],
+      rotation[1],
+      rotation[2],
+      rotation_target?.[0],
+      rotation_target?.[1],
+      rotation_target?.[2],
+    ]
+    visual_revision += 1
+    visual_state_source = {
+      revision: visual_revision,
+      resolve: resolve_current_visual_state,
+    }
+  })
+  onDestroy(() => {
+    visual_state_source = null
   })
 
   // ── Manager-ready trajectory packet ───────────────────────────────────────

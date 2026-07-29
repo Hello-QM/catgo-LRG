@@ -1,5 +1,6 @@
 import { flushSync, mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
 
 const mocks = vi.hoisted(() => {
   const renderer = {
@@ -93,6 +94,8 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
         toon_shadow_brightness: 0.5,
       },
       background_linear,
+      atom_colors_linear: null,
+      view_transform: resolve_view_transform(null, null),
     }
     const resolve = vi.fn(() => snapshot)
 
@@ -101,7 +104,7 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
       props: {
         enabled: true,
         visual_state_source: {
-          revision: `background:1`,
+          revision: 1,
           resolve,
         },
       },

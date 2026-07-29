@@ -1,4 +1,5 @@
 import type { RenderStyle } from '$lib/settings'
+import type { ResolvedViewTransform } from './view-transform'
 
 export const VISUAL_RADIUS_SCALE = 0.5
 export const TOON_SHADOW_THRESHOLD = 0.3
@@ -32,10 +33,19 @@ export type ResolvedVisualShading = {
 export type ResolvedVisualState = {
   shading: ResolvedVisualShading
   background_linear: [number, number, number]
+  /** Exact displayed-site colors resolved once by StructureScene. The WebGPU
+   *  adapter selects only the base-topology prefix; it never reconstructs an
+   *  element-palette fallback. */
+  atom_colors_linear: Float32Array | null
+  /** Exact T(target) · Rxyz · T(-target) transform used by the WebGL group.
+   *  Positions, lattice directions, and the cell origin all consume this one
+   *  resolved transform in the WebGPU adapter. */
+  view_transform: ResolvedViewTransform
 }
 
 export type VisualStateSource = {
-  revision: string
+  /** Strictly increasing for each published semantic visual snapshot. */
+  revision: number
   resolve: () => ResolvedVisualState
 }
 

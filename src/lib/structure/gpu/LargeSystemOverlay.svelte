@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Color, type Camera } from 'three'
-  import type { AnyStructure, ElementSymbol, Vec3 } from '$lib/structure'
+  import type { AnyStructure, ElementSymbol } from '$lib/structure'
   import {
     get_webgpu_lease,
     invalidate_webgpu_lease,
@@ -20,6 +20,7 @@
   } from '$lib/structure/gpu/large-system-renderer'
   import {
     same_visual_shading,
+    type ResolvedVisualState,
     type ResolvedVisualShading,
     type VisualStateSource,
   } from '$lib/structure/rendering/visual-state'
@@ -40,9 +41,6 @@
     enabled = false,
     camera = undefined,
     structure = undefined,
-    rotation = [0, 0, 0],
-    rotation_target = undefined,
-    resolved_atom_colors = undefined,
     atom_radius = 1.5,
     same_size_atoms = false,
     element_radius_overrides = undefined,
@@ -75,13 +73,6 @@
      *  image sites). Exactly N sites define packet topology; visual replicas
      *  and sparse ghosts are independent GPU instance channels. */
     structure?: AnyStructure | undefined
-    /** Same manual/lattice-alignment rotation as StructureScene's WebGL group. */
-    rotation?: Vec3
-    /** Pivot for the WebGL group transform T(target) · R · T(-target). */
-    rotation_target?: Vec3 | undefined
-    /** Authoritative displayed-site linear RGB values from StructureScene.
-     *  Only the base prefix matching packet topology is consumed. */
-    resolved_atom_colors?: Float32Array | null | undefined
     /** Global display-radius scale, mirrors the WebGL atom_radius prop. */
     atom_radius?: number
     /** Render all atoms at the same size (WebGL same_size_atoms). */
@@ -164,9 +155,10 @@
      *  `stub` (the existing incomplete edge). */
     show_image_atoms?: boolean
     /** Revision-bearing visual snapshot source published by StructureScene.
-     *  The revision is a visible Svelte dependency that wakes a sleeping loop;
-     *  resolve() is called exactly once by each active frame so camera-dependent
-     *  depth planes remain current without duplicating theme/style resolution. */
+     *  It is the sole authority for shading, background, resolved atom colors,
+     *  and the view transform. The revision wakes a sleeping loop; resolve() is
+     *  called exactly once by each active frame and that one snapshot drives
+     *  every visual adapter for the frame. */
     visual_state_source?: VisualStateSource | null
     /** Pane HUD safe-area insets (CSS px) — the SAME hud_safe StructureScene
      *  hands its WebGL gizmo (`offset: {left: 5+l, bottom: 5+b}`), so the
@@ -209,8 +201,8 @@
   let atom_source: AnyStructure | undefined = undefined
   let atom_radii: Float32Array = new Float32Array(0)
   let atom_colors: Float32Array = new Float32Array(0)
-  let resolved_atom_colors_source: Float32Array | null | undefined = undefined
-  let resolved_atom_colors_count = -1
+  let atom_colors_snapshot_source: Float32Array | null | undefined = undefined
+  let atom_colors_snapshot_count = -1
   // A missing/short publication is a transient bridge state. Preserve the last
   // confirmed GPU packet and defer all new packet pushes until an authoritative
   // base-sized color prefix is available.
@@ -352,8 +344,11 @@
   let selection_sig = ``
   let bond_style_sig = ``
 
+  const IDENTITY_VIEW_TRANSFORM = resolve_view_transform(null, null)
+  let current_visual_snapshot: ResolvedVisualState | null = null
+
   function current_view_transform() {
-    return resolve_view_transform(rotation, rotation_target)
+    return current_visual_snapshot?.view_transform ?? IDENTITY_VIEW_TRANSFORM
   }
 
   /** Push visual-only bond controls without touching packet ownership/compute. */
@@ -596,9 +591,8 @@
 
   /** Resolve one viewer-owned snapshot for this frame, then feed its two thin
    *  backend adapters. The overlay never inspects DOM or re-resolves CSS. */
-  function sync_visual_state(): boolean {
-    if (!renderer || !visual_state_source) return false
-    const state = visual_state_source.resolve()
+  function sync_visual_state(state: ResolvedVisualState | null): boolean {
+    if (!renderer || !state) return false
     const background_changed = sync_background(state.background_linear)
     let shading_changed = false
     if (
@@ -638,7 +632,9 @@
    *  Missing/short colors deliberately leave the last confirmed packet live:
    *  no local palette fallback is constructed and no partially-colored packet
    *  is uploaded. */
-  function rebuild_atoms_if_needed(): void {
+  function rebuild_atoms_if_needed(
+    resolved_atom_colors: Float32Array | null,
+  ): void {
     const sig = radius_signature()
     // Detect a structure-IDENTITY or atom-COUNT change (supercell repeats,
     // structure swap) BEFORE we overwrite atom_source — independent of the
@@ -667,13 +663,13 @@
     }
 
     if (
-      resolved_atom_colors === resolved_atom_colors_source &&
-      next_count === resolved_atom_colors_count
+      resolved_atom_colors === atom_colors_snapshot_source &&
+      next_count === atom_colors_snapshot_count
     ) {
       return
     }
-    resolved_atom_colors_source = resolved_atom_colors
-    resolved_atom_colors_count = next_count
+    atom_colors_snapshot_source = resolved_atom_colors
+    atom_colors_snapshot_count = next_count
     const selected = select_packet_atom_colors(
       resolved_atom_colors,
       next_count,
@@ -723,7 +719,7 @@
   // lets control inertia/momentum settle before we stop scheduling.
   let stable_frames = 0
   const STABLE_FRAMES_TO_SLEEP = 24
-  let observed_visual_revision: string | null = null
+  let observed_visual_revision: number | null = null
   let has_observed_visual_source = false
 
   // Bound listener handles, kept so teardown can remove exactly what it added.
@@ -830,12 +826,15 @@
     // Only issue a GPU draw when something changed since the last drawn frame.
     let dirty = needs_render
     needs_render = false
+    // Resolve the publisher exactly once. This snapshot supplies background,
+    // shading, colors, and the view transform to every adapter below.
+    current_visual_snapshot = visual_state_source?.resolve() ?? null
 
     // Rebuild the adapter packet inputs (display radii + authoritative colors)
     // only when the structure / colors / radius inputs changed. The
     // rebuilt arrays get new identities, so the packet builder below bumps the
     // topology version and the renderer re-uploads exactly those buffers.
-    rebuild_atoms_if_needed()
+    rebuild_atoms_if_needed(current_visual_snapshot?.atom_colors_linear ?? null)
     if (atoms_dirty) {
       atoms_dirty = false
       dirty = true
@@ -964,7 +963,7 @@
     // Visual state: one callback read supplies both the already-resolved linear
     // background and the shading snapshot. Depth-cue near/far still refresh on
     // every frame while the camera moves.
-    if (sync_visual_state()) dirty = true
+    if (sync_visual_state(current_visual_snapshot)) dirty = true
 
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
@@ -997,9 +996,10 @@
     // Fresh renderer => fresh GPU buffers. Force a rebuild + re-upload on the
     // first frame even if the structure identity hasn't changed since last time.
     atom_source = undefined
-    resolved_atom_colors_source = undefined
-    resolved_atom_colors_count = -1
+    atom_colors_snapshot_source = undefined
+    atom_colors_snapshot_count = -1
     atom_colors_ready = false
+    current_visual_snapshot = null
     atom_radius_sig = ``
     atoms_dirty = true
     // Fresh renderer ⇒ treat the topology as new so the first frame forces a
@@ -1163,15 +1163,13 @@
   })
 
   $effect(() => {
-    // Atom-data wake trigger. Track the structure / authoritative color /
-    // radius inputs so a
+    // Atom-data wake trigger. Track the structure / radius inputs so a
     // rebuild revives a suspended loop and the new atoms repaint once. Reading
     // these here (not in the session effect) wakes without restarting the GPU
     // session. The `frame` does the actual rebuild + upload via
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
     void [
       structure,
-      resolved_atom_colors,
       atom_radius,
       same_size_atoms,
       element_radius_overrides,
@@ -1208,12 +1206,6 @@
       frame_lattice,
       trajectory_positions_version?.v,
       trajectory_step_idx,
-      rotation[0],
-      rotation[1],
-      rotation[2],
-      rotation_target?.[0],
-      rotation_target?.[1],
-      rotation_target?.[2],
     ]
     if (renderer) {
       needs_render = true
