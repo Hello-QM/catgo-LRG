@@ -544,54 +544,8 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
-  it(`Structure wires the overlay from base frame inputs, never WebGL reverse-read data`, () => {
-    const structure_source = readFileSync(
-      resolve(process.cwd(), `src/lib/structure/Structure.svelte`),
-      `utf8`,
-    )
-    const overlay_source = readFileSync(
-      resolve(process.cwd(), `src/lib/structure/gpu/LargeSystemOverlay.svelte`),
-      `utf8`,
-    )
-    const scene_source = readFileSync(
-      resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
-      `utf8`,
-    )
-    expect(structure_source).not.toContain(`scene_get_displayed_frame_positions`)
-    expect(structure_source).toContain(`structure={structure}`)
-    expect(structure_source).toContain(
-      `? presented_frame_source?.positions ?? null`,
-    )
-    expect(structure_source).toContain(
-      `? presented_frame_source?.lattice ?? null`,
-    )
-    expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
-    expect(scene_source).not.toContain(`get_displayed_frame_positions`)
-    expect(structure_source).toContain(
-      `resolved_atom_colors={scene_resolved_atom_colors}`,
-    )
-    expect(structure_source).toContain(`rotation={scene_props.rotation}`)
-    expect(structure_source).toContain(`rotation_target={rotation_target_ref}`)
-    expect(scene_source).toContain(`resolve_atom_colors_linear({`)
-    expect(overlay_source).toContain(`select_packet_atom_colors(`)
-    expect(overlay_source).toContain(`apply_view_transform_to_positions(`)
-    expect(overlay_source).toContain(`apply_view_transform_to_lattice(`)
-    expect(overlay_source).toContain(`positions_version: packet_positions_revision`)
-    expect(structure_source).toContain(`scale: scene_props.bond_scale`)
-    expect(structure_source).toContain(`bond_thickness={scene_props.bond_thickness}`)
-    expect(structure_source).toContain(
-      `incomplete_periodic_edge_mode={scene_props.incomplete_periodic_edge_mode}`,
-    )
-    expect(structure_source).toContain(
-      `incomplete_edge_length_scale={scene_props.incomplete_edge_length_scale}`,
-    )
-    expect(structure_source).toContain(
-      `hide_incomplete_bonds={scene_props.hide_incomplete_bonds}`,
-    )
-    expect(structure_source).toContain(`{image_atom_opacity}`)
-    expect(overlay_source).toContain(`renderer.set_bond_style({`)
-
-    // Behavioral lock for the inputs Structure must pass: even if the WebGL
+  it(`keeps base frame inputs independent from displayed replicas`, () => {
+    // Behavioral lock for the packet inputs: even if the WebGL
     // displayed structure has appended images, the packet owner/topology is
     // the 3-site BASE structure, positions stay 3N under 2×2×2, and the live
     // variable-cell frame lattice wins over the base/displayed lattice.

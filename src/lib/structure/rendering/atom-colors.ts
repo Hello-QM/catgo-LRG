@@ -47,14 +47,19 @@ export function resolve_atom_colors_linear(
 
 /** Select the authoritative resolved prefix for a base-cell render packet.
  *  StructureScene may resolve extra displayed image sites after the base sites;
- *  those decorative entries must never enlarge packet topology. */
+ *  those decorative entries must never enlarge packet topology. Missing,
+ *  short, or malformed publications return null so adapters can defer instead
+ *  of inventing a second color source. */
 export function select_packet_atom_colors(
   resolved: Float32Array | null | undefined,
   atom_count: number,
-  fallback: Float32Array,
-): Float32Array {
+): Float32Array | null {
   const required = Math.max(0, atom_count) * 3
-  if (!resolved || resolved.length < required) return fallback
+  if (
+    !resolved ||
+    resolved.length < required ||
+    resolved.length % 3 !== 0
+  ) return null
   if (resolved.length === required) return resolved
   return resolved.slice(0, required)
 }

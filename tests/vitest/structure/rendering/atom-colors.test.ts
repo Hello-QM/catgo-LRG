@@ -65,13 +65,10 @@ describe(`resolved atom colors`, () => {
       0, 1, 0,
       0, 0, 1, // displayed-only image site, excluded from the base packet
     ])
-    const fallback = new Float32Array([
-      0.5, 0.5, 0.5,
-      0.25, 0.25, 0.25,
-    ])
-
-    const selected = select_packet_atom_colors(resolved, 2, fallback)
-    expect(Array.from(selected)).toEqual([1, 0, 0, 0, 1, 0])
-    expect(select_packet_atom_colors(new Float32Array(3), 2, fallback)).toBe(fallback)
+    const selected = select_packet_atom_colors(resolved, 2)
+    expect(Array.from(selected!)).toEqual([1, 0, 0, 0, 1, 0])
+    expect(select_packet_atom_colors(new Float32Array(3), 2)).toBeNull()
+    expect(select_packet_atom_colors(new Float32Array(7), 2)).toBeNull()
+    expect(select_packet_atom_colors(null, 2)).toBeNull()
   })
 })

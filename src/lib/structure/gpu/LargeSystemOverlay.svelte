@@ -42,7 +42,6 @@
     structure = undefined,
     rotation = [0, 0, 0],
     rotation_target = undefined,
-    element_colors = undefined,
     resolved_atom_colors = undefined,
     atom_radius = 1.5,
     same_size_atoms = false,
@@ -80,8 +79,6 @@
     rotation?: Vec3
     /** Pivot for the WebGL group transform T(target) · R · T(-target). */
     rotation_target?: Vec3 | undefined
-    /** Per-element hex colors (e.g. state colors.element). */
-    element_colors?: Partial<Record<ElementSymbol, string>> | undefined
     /** Authoritative displayed-site linear RGB values from StructureScene.
      *  Only the base prefix matching packet topology is consumed. */
     resolved_atom_colors?: Float32Array | null | undefined
@@ -205,15 +202,19 @@
     jimages: new Int8Array(0),
   }
 
-  // Cached atom buffers, rebuilt only when the structure identity changes (not
-  // every frame). `atom_source` is the identity sentinel we last built from.
-  // radii/colors are the ADAPTER-resolved packet inputs (palette + overrides).
+  // Cached atom buffers, rebuilt only when their authoritative inputs change
+  // (not every frame). `atom_source` is the radius identity sentinel. Colors
+  // come ONLY from StructureScene's resolved buffer; this adapter has no
+  // element-palette fallback or second color-resolution path.
   let atom_source: AnyStructure | undefined = undefined
   let atom_radii: Float32Array = new Float32Array(0)
   let atom_colors: Float32Array = new Float32Array(0)
-  // Track the colors-object identity too, so a color-scheme swap rebuilds.
-  let atom_colors_source: Partial<Record<ElementSymbol, string>> | undefined = undefined
   let resolved_atom_colors_source: Float32Array | null | undefined = undefined
+  let resolved_atom_colors_count = -1
+  // A missing/short publication is a transient bridge state. Preserve the last
+  // confirmed GPU packet and defer all new packet pushes until an authoritative
+  // base-sized color prefix is available.
+  let atom_colors_ready = false
   // Signature of the radius-affecting inputs we last built from; when it
   // changes the display radii must be recomputed.
   let atom_radius_sig = ``
@@ -633,9 +634,10 @@
     return `${atom_radius}|${same_size_atoms}|${ero}|${sro}`
   }
 
-  /** Rebuild the flat atom buffers from the current structure + element colors
-   *  + display-radius inputs. No-op (reuses cached arrays) when nothing that
-   *  affects them has changed. */
+  /** Rebuild display radii and adopt StructureScene's authoritative colors.
+   *  Missing/short colors deliberately leave the last confirmed packet live:
+   *  no local palette fallback is constructed and no partially-colored packet
+   *  is uploaded. */
   function rebuild_atoms_if_needed(): void {
     const sig = radius_signature()
     // Detect a structure-IDENTITY or atom-COUNT change (supercell repeats,
@@ -649,48 +651,38 @@
       topology_dirty = true
       topology_count = next_count
     }
+    const sites = structure?.sites
+    if (structure !== atom_source || sig !== atom_radius_sig) {
+      atom_source = structure
+      atom_radius_sig = sig
+      atoms_dirty = true
+      atom_radii = sites && sites.length > 0
+        ? build_display_radii(sites, {
+            atom_radius,
+            same_size_atoms,
+            element_radius_overrides,
+            site_radius_overrides,
+          })
+        : new Float32Array(0)
+    }
+
     if (
-      structure === atom_source &&
-      element_colors === atom_colors_source &&
       resolved_atom_colors === resolved_atom_colors_source &&
-      sig === atom_radius_sig
+      next_count === resolved_atom_colors_count
     ) {
       return
     }
-    atom_source = structure
-    atom_colors_source = element_colors
     resolved_atom_colors_source = resolved_atom_colors
-    atom_radius_sig = sig
-    atoms_dirty = true
-    const sites = structure?.sites
-    if (!sites || sites.length === 0) {
-      atom_radii = new Float32Array(0)
-      atom_colors = new Float32Array(0)
-      return
-    }
-    // VISUAL sphere radius — matches the WebGL ball-and-stick display sizing
-    // (atomic_radii[element] * atom_radius, with same_size / overrides). NOT
-    // the covalent bond-cutoff radius (build_atom_radii) used by 9.3.
-    atom_radii = build_display_radii(sites, {
-      atom_radius,
-      same_size_atoms,
-      element_radius_overrides,
-      site_radius_overrides,
-    })
-    const cols = new Float32Array(sites.length * 3)
-    for (let i = 0; i < sites.length; i++) {
-      const elem = sites[i].species[0]?.element
-      const hex = (elem != null ? element_colors?.[elem] : undefined) ?? `#ffffff`
-      const [r, g, b] = hex_to_linear_rgb(hex)
-      cols[i * 3] = r
-      cols[i * 3 + 1] = g
-      cols[i * 3 + 2] = b
-    }
-    atom_colors = select_packet_atom_colors(
+    resolved_atom_colors_count = next_count
+    const selected = select_packet_atom_colors(
       resolved_atom_colors,
-      sites.length,
-      cols,
+      next_count,
     )
+    atom_colors_ready = selected !== null
+    if (selected) {
+      atom_colors = selected
+      atoms_dirty = true
+    }
   }
 
   function stop_session(): void {
@@ -839,8 +831,8 @@
     let dirty = needs_render
     needs_render = false
 
-    // Rebuild the ADAPTER-resolved packet inputs (display radii + palette
-    // colors) only when the structure / colors / radius inputs changed. The
+    // Rebuild the adapter packet inputs (display radii + authoritative colors)
+    // only when the structure / colors / radius inputs changed. The
     // rebuilt arrays get new identities, so the packet builder below bumps the
     // topology version and the renderer re-uploads exactly those buffers.
     rebuild_atoms_if_needed()
@@ -888,7 +880,7 @@
     // moved); a supercell/policy change touches only replica state (never the
     // bond graph). Bond detection stays on the renderer's GPU path — the packet
     // carries no bond_graph here (set_bond_data below provides the inputs).
-    if (structure) {
+    if (structure && atom_colors_ready) {
       const dims: [number, number, number] = [
         Math.max(1, Math.floor(supercell?.[0] ?? 1)),
         Math.max(1, Math.floor(supercell?.[1] ?? 1)),
@@ -904,7 +896,7 @@
         positions_version: packet_positions_revision,
         dims,
         boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
-        colors: atom_colors.length > 0 ? atom_colors : null,
+        colors: atom_colors,
         radii: atom_radii.length > 0 ? atom_radii : null,
       })
       if (packet !== last_pushed_packet) {
@@ -1005,8 +997,9 @@
     // Fresh renderer => fresh GPU buffers. Force a rebuild + re-upload on the
     // first frame even if the structure identity hasn't changed since last time.
     atom_source = undefined
-    atom_colors_source = undefined
     resolved_atom_colors_source = undefined
+    resolved_atom_colors_count = -1
+    atom_colors_ready = false
     atom_radius_sig = ``
     atoms_dirty = true
     // Fresh renderer ⇒ treat the topology as new so the first frame forces a
@@ -1170,14 +1163,14 @@
   })
 
   $effect(() => {
-    // Atom-data wake trigger. Track the structure / color / radius inputs so a
+    // Atom-data wake trigger. Track the structure / authoritative color /
+    // radius inputs so a
     // rebuild revives a suspended loop and the new atoms repaint once. Reading
     // these here (not in the session effect) wakes without restarting the GPU
     // session. The `frame` does the actual rebuild + upload via
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
     void [
       structure,
-      element_colors,
       resolved_atom_colors,
       atom_radius,
       same_size_atoms,
