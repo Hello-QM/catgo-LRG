@@ -567,6 +567,16 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
     expect(scene_source).not.toContain(`get_displayed_frame_positions`)
+    expect(structure_source).toContain(
+      `resolved_atom_colors={scene_resolved_atom_colors}`,
+    )
+    expect(structure_source).toContain(`rotation={scene_props.rotation}`)
+    expect(structure_source).toContain(`rotation_target={rotation_target_ref}`)
+    expect(scene_source).toContain(`resolve_atom_colors_linear({`)
+    expect(overlay_source).toContain(`select_packet_atom_colors(`)
+    expect(overlay_source).toContain(`apply_view_transform_to_positions(`)
+    expect(overlay_source).toContain(`apply_view_transform_to_lattice(`)
+    expect(overlay_source).toContain(`positions_version: packet_positions_revision`)
     expect(structure_source).toContain(`scale: scene_props.bond_scale`)
     expect(structure_source).toContain(`bond_thickness={scene_props.bond_thickness}`)
     expect(structure_source).toContain(

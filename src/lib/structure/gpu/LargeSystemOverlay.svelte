@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Color, type Camera } from 'three'
-  import type { AnyStructure, ElementSymbol } from '$lib/structure'
+  import type { AnyStructure, ElementSymbol, Vec3 } from '$lib/structure'
   import {
     get_webgpu_lease,
     invalidate_webgpu_lease,
@@ -23,6 +23,13 @@
     type ResolvedVisualShading,
     type VisualStateSource,
   } from '$lib/structure/rendering/visual-state'
+  import { select_packet_atom_colors } from '$lib/structure/rendering/atom-colors'
+  import {
+    apply_view_transform_to_lattice,
+    apply_view_transform_to_origin,
+    apply_view_transform_to_positions,
+    resolve_view_transform,
+  } from '$lib/structure/rendering/view-transform'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type {
     ImageInstanceTable,
@@ -33,7 +40,10 @@
     enabled = false,
     camera = undefined,
     structure = undefined,
+    rotation = [0, 0, 0],
+    rotation_target = undefined,
     element_colors = undefined,
+    resolved_atom_colors = undefined,
     atom_radius = 1.5,
     same_size_atoms = false,
     element_radius_overrides = undefined,
@@ -66,8 +76,15 @@
      *  image sites). Exactly N sites define packet topology; visual replicas
      *  and sparse ghosts are independent GPU instance channels. */
     structure?: AnyStructure | undefined
+    /** Same manual/lattice-alignment rotation as StructureScene's WebGL group. */
+    rotation?: Vec3
+    /** Pivot for the WebGL group transform T(target) · R · T(-target). */
+    rotation_target?: Vec3 | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
+    /** Authoritative displayed-site linear RGB values from StructureScene.
+     *  Only the base prefix matching packet topology is consumed. */
+    resolved_atom_colors?: Float32Array | null | undefined
     /** Global display-radius scale, mirrors the WebGL atom_radius prop. */
     atom_radius?: number
     /** Render all atoms at the same size (WebGL same_size_atoms). */
@@ -196,6 +213,7 @@
   let atom_colors: Float32Array = new Float32Array(0)
   // Track the colors-object identity too, so a color-scheme swap rebuilds.
   let atom_colors_source: Partial<Record<ElementSymbol, string>> | undefined = undefined
+  let resolved_atom_colors_source: Float32Array | null | undefined = undefined
   // Signature of the radius-affecting inputs we last built from; when it
   // changes the display radii must be recomputed.
   let atom_radius_sig = ``
@@ -333,6 +351,10 @@
   let selection_sig = ``
   let bond_style_sig = ``
 
+  function current_view_transform() {
+    return resolve_view_transform(rotation, rotation_target)
+  }
+
   /** Push visual-only bond controls without touching packet ownership/compute. */
   function sync_bond_style(): boolean {
     if (!renderer) return false
@@ -372,14 +394,22 @@
   function sync_cell(): boolean {
     if (!renderer) return false
     const [cr, cg, cb] = hex_to_linear_rgb(cell_edge_color)
+    const origin = apply_view_transform_to_origin(current_view_transform())
     let lat_sig = ``
     for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
-    const sig = `${show_cell}|${cr},${cg},${cb}|${lat_sig}`
+    const sig =
+      `${show_cell}|${cr},${cg},${cb}|` +
+      `${origin[0]},${origin[1]},${origin[2]}|${lat_sig}`
     if (sig === cell_sig) return false
     cell_sig = sig
-    // bond_periodic is true exactly when the structure carries a lattice; pass
+    // bond_periodic means the structure/current frame carries a lattice; pass
     // null otherwise so molecules never draw a (degenerate) box.
-    renderer.set_cell(bond_periodic ? bond_lattice : null, show_cell, [cr, cg, cb])
+    renderer.set_cell(
+      bond_periodic ? bond_lattice : null,
+      show_cell,
+      [cr, cg, cb],
+      origin,
+    )
     return true
   }
 
@@ -399,49 +429,73 @@
   let last_step_idx = -1
   let last_frame_positions_source: Float32Array | null | undefined = undefined
   let last_frame_lattice_source: number[][] | null | undefined = undefined
-  // Current BASE-frame xyz (exactly 3N). Direct trajectory arrays are consumed
-  // zero-copy; a static fallback is packed only when the direct input is absent.
-  // In-place edits are keyed by positions_version; identity swaps are visible
-  // directly to the packet builder.
+  // Current BASE-frame xyz (exactly 3N). Identity view transforms consume direct
+  // trajectory arrays zero-copy; non-identity transforms allocate one rotated
+  // frame buffer. A static fallback is packed only when direct input is absent.
   let packet_frame_positions: Float32Array = new Float32Array(0)
+  let packet_frame_lattice: number[][] | null = null
+  // Local packet frame revision. A view-transform change is a geometry change
+  // even when the trajectory's own position version stays equal.
+  let packet_positions_revision = 0
+  let last_view_transform_sig = ``
   // Lattice signature last pushed for bonds; for variable-cell trajectories the
   // lattice changes per frame and the bond compute + bond render need the new
   // one. Compared per frame so a static cell never re-uploads.
   let frame_lattice_sig = ``
 
-  /** Adopt the directly-owned BASE frame as the packet buffer (zero-copy). The
-   *  input is exactly 3N floats from Structure; no displayed/WebGL reverse
-   *  read exists. A missing or length-mismatched trajectory frame falls back
-   *  to the base structure's static site xyz. For variable-cell trajectories,
-   *  the direct CURRENT frame lattice also updates the bond compute/render
-   *  inputs (the packet builder consumes the same lattice below). */
+  /** Adopt the directly-owned BASE frame and apply the WebGL group's view
+   *  transform. The input is exactly 3N floats from Structure; no displayed/
+   *  WebGL reverse read exists. A missing or length-mismatched trajectory frame
+   *  falls back to static site xyz. The direct CURRENT frame lattice is rotated
+   *  into the same packet/bond coordinate space. */
   function refresh_frame_positions(): void {
     last_pos_version = trajectory_positions_version?.v ?? -1
     last_step_idx = trajectory_step_idx
     last_frame_positions_source = frame_positions
     last_frame_lattice_source = frame_lattice
+    const view_transform = current_view_transform()
+    last_view_transform_sig = view_transform.signature
     const sites = structure?.sites
-    if (!sites || sites.length === 0) return
+    if (!sites || sites.length === 0) {
+      packet_frame_positions = new Float32Array(0)
+      packet_frame_lattice = null
+      packet_positions_revision++
+      return
+    }
     const expected = sites.length * 3
-    packet_frame_positions = frame_positions?.length === expected
+    const source_positions = frame_positions?.length === expected
       ? frame_positions
       : pack_positions(sites)
+    packet_frame_positions = apply_view_transform_to_positions(
+      source_positions,
+      view_transform,
+    )
 
     const structure_lattice =
       (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    const packed = frame_lattice && frame_lattice.length === 3
+    const packed_source = frame_lattice && frame_lattice.length === 3
       ? new Float32Array([
         frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
         frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
         frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
       ])
       : pack_lattice(structure_lattice)
+    const packed = apply_view_transform_to_lattice(packed_source, view_transform)
+    const has_lattice = !!structure_lattice || frame_lattice?.length === 3
+    packet_frame_lattice = has_lattice
+      ? [
+          [packed[0], packed[1], packed[2]],
+          [packed[3], packed[4], packed[5]],
+          [packed[6], packed[7], packed[8]],
+        ]
+      : null
+    packet_positions_revision++
     let sig = ``
     for (let i = 0; i < 9; i++) sig += `${packed[i]};`
     if (sig !== frame_lattice_sig) {
       frame_lattice_sig = sig
       bond_lattice = packed
-      bond_periodic = !!structure_lattice
+      bond_periodic = has_lattice
       bonds_dirty = true
     }
   }
@@ -482,14 +536,18 @@
     // A variable-cell trajectory's DIRECT current-frame lattice overrides the
     // base structure lattice here too, including the first rendered frame.
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    bond_lattice = frame_lattice && frame_lattice.length === 3
+    const raw_lattice = frame_lattice && frame_lattice.length === 3
       ? new Float32Array([
         frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
         frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
         frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
       ])
       : pack_lattice(lat)
-    bond_periodic = !!lat
+    bond_lattice = apply_view_transform_to_lattice(
+      raw_lattice,
+      current_view_transform(),
+    )
+    bond_periodic = !!lat || frame_lattice?.length === 3
     bond_compute_opts = to_compute_options(bonding_options ?? {})
     // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
     // doesn't redundantly re-push the lattice it just packed here.
@@ -594,12 +652,14 @@
     if (
       structure === atom_source &&
       element_colors === atom_colors_source &&
+      resolved_atom_colors === resolved_atom_colors_source &&
       sig === atom_radius_sig
     ) {
       return
     }
     atom_source = structure
     atom_colors_source = element_colors
+    resolved_atom_colors_source = resolved_atom_colors
     atom_radius_sig = sig
     atoms_dirty = true
     const sites = structure?.sites
@@ -626,7 +686,11 @@
       cols[i * 3 + 1] = g
       cols[i * 3 + 2] = b
     }
-    atom_colors = cols
+    atom_colors = select_packet_atom_colors(
+      resolved_atom_colors,
+      sites.length,
+      cols,
+    )
   }
 
   function stop_session(): void {
@@ -810,7 +874,8 @@
       trajectory_step_idx !== last_step_idx ||
       (trajectory_positions_version?.v ?? -1) !== last_pos_version ||
       frame_positions !== last_frame_positions_source ||
-      frame_lattice !== last_frame_lattice_source
+      frame_lattice !== last_frame_lattice_source ||
+      current_view_transform().signature !== last_view_transform_sig
     ) {
       refresh_frame_positions()
     }
@@ -834,9 +899,9 @@
         frame_positions: packet_frame_positions.length > 0
           ? packet_frame_positions
           : null,
-        frame_lattice,
+        frame_lattice: packet_frame_lattice,
         frame_idx: trajectory_step_idx,
-        positions_version: trajectory_positions_version?.v ?? 0,
+        positions_version: packet_positions_revision,
         dims,
         boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
         colors: atom_colors.length > 0 ? atom_colors : null,
@@ -941,6 +1006,7 @@
     // first frame even if the structure identity hasn't changed since last time.
     atom_source = undefined
     atom_colors_source = undefined
+    resolved_atom_colors_source = undefined
     atom_radius_sig = ``
     atoms_dirty = true
     // Fresh renderer ⇒ treat the topology as new so the first frame forces a
@@ -965,6 +1031,8 @@
     last_step_idx = -1
     last_frame_positions_source = undefined
     last_frame_lattice_source = undefined
+    last_view_transform_sig = ``
+    packet_positions_revision = 0
     frame_lattice_sig = ``
     // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
     // the (possibly memoized-identical) packet is re-pushed and fully uploads.
@@ -1107,7 +1175,17 @@
     // these here (not in the session effect) wakes without restarting the GPU
     // session. The `frame` does the actual rebuild + upload via
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
-    void [structure, element_colors, atom_radius, same_size_atoms, element_radius_overrides, site_radius_overrides, bonding_options, bond_distance_rules]
+    void [
+      structure,
+      element_colors,
+      resolved_atom_colors,
+      atom_radius,
+      same_size_atoms,
+      element_radius_overrides,
+      site_radius_overrides,
+      bonding_options,
+      bond_distance_rules,
+    ]
     if (renderer) {
       needs_render = true
       wake()
@@ -1137,6 +1215,12 @@
       frame_lattice,
       trajectory_positions_version?.v,
       trajectory_step_idx,
+      rotation[0],
+      rotation[1],
+      rotation[2],
+      rotation_target?.[0],
+      rotation_target?.[1],
+      rotation_target?.[2],
     ]
     if (renderer) {
       needs_render = true

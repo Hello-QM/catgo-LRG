@@ -261,6 +261,9 @@
   // StructureScene is the single visual-state publisher. Its visible revision
   // wakes the WebGPU overlay even after the overlay frame loop has suspended.
   let scene_visual_state_source = $state<VisualStateSource | null>(null)
+  // Exact displayed-site linear RGB values resolved by StructureScene. The
+  // overlay consumes the base prefix matching its packet topology.
+  let scene_resolved_atom_colors = $state<Float32Array | null>(null)
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -4730,6 +4733,7 @@
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
             bind:visual_state_source={scene_visual_state_source}
+            bind:resolved_atom_colors={scene_resolved_atom_colors}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4805,9 +4809,12 @@
             frame_lattice={get_trajectory_frame_source
               ? presented_frame_source?.lattice ?? null
               : trajectory_frame_lattice}
+            rotation={scene_props.rotation}
+            rotation_target={rotation_target_ref}
             supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}
+            resolved_atom_colors={scene_resolved_atom_colors}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}
             {element_radius_overrides}

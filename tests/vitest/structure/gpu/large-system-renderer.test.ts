@@ -2,12 +2,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
 import {
   BOND_RENDER_BYTES,
+  CELL_BYTES,
   create_large_system_renderer,
   GIZMO_AXIS_HEX,
   GIZMO_NEG_AXIS_HEX,
   GIZMO_WGSL,
   normalize_bond_style,
   pack_bond_render_uniform,
+  pack_cell_uniform,
 } from '$lib/structure/gpu/large-system-renderer'
 import { srgb_channel_to_linear } from '$lib/structure/rendering/background'
 import type { ResolvedVisualShading } from '$lib/structure/rendering/visual-state'
@@ -62,6 +64,25 @@ describe(`large-system bond visual-style helpers`, () => {
       7, 8, 9, 0,
       0.09, 1, 0.15, 1,
       0.35, 0.7, 0.6, 0.5,
+    ]
+    expected.forEach((value, idx) => expect(packed[idx]).toBeCloseTo(value))
+  })
+})
+
+describe(`large-system cell transform packing`, () => {
+  it(`packs rotated lattice, transformed origin, then color`, () => {
+    const packed = pack_cell_uniform(
+      new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+      [10, 11, 12],
+      [0.2, 0.3, 0.4],
+    )
+    expect(packed.byteLength).toBe(CELL_BYTES)
+    const expected = [
+      1, 2, 3, 0,
+      4, 5, 6, 0,
+      7, 8, 9, 0,
+      10, 11, 12, 0,
+      0.2, 0.3, 0.4, 1,
     ]
     expected.forEach((value, idx) => expect(packed[idx]).toBeCloseTo(value))
   })

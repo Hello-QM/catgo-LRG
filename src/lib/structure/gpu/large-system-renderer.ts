@@ -71,6 +71,35 @@ const CAMERA_FULL_BYTES = 144
  *  lattice rows a,b,c as 3×vec4<f32> = 4 vec4 = 64 bytes. */
 const SUPERCELL_BYTES = 64
 
+/** Cell uniform: lattice rows + transformed origin + color, all vec4-aligned. */
+export const CELL_BYTES = 80
+
+/** Pure packing seam for the WebGL-equivalent transformed cell box. */
+export function pack_cell_uniform(
+  lattice: ArrayLike<number>,
+  origin: readonly [number, number, number],
+  color: readonly [number, number, number],
+): Float32Array {
+  const data = new Float32Array(CELL_BYTES / Float32Array.BYTES_PER_ELEMENT)
+  data[0] = lattice[0] ?? 0
+  data[1] = lattice[1] ?? 0
+  data[2] = lattice[2] ?? 0
+  data[4] = lattice[3] ?? 0
+  data[5] = lattice[4] ?? 0
+  data[6] = lattice[5] ?? 0
+  data[8] = lattice[6] ?? 0
+  data[9] = lattice[7] ?? 0
+  data[10] = lattice[8] ?? 0
+  data[12] = origin[0]
+  data[13] = origin[1]
+  data[14] = origin[2]
+  data[16] = color[0]
+  data[17] = color[1]
+  data[18] = color[2]
+  data[19] = 1
+  return data
+}
+
 
 /** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
  *  billboard whose fragment shader ray-traces a mathematically smooth, capped
@@ -282,12 +311,9 @@ const SAMPLE_COUNT = 4
 
 /** WGSL cell-box line shader. Draws the 12 edges of the parallelepiped spanned
  *  by lattice vectors a,b,c as a `line-list` (24 vertices = 12 edges × 2 ends).
- *  Corners are generated in the vertex shader from a lattice uniform: the cell
- *  spans from origin 0 to a+b+c, in the SAME coordinate space as the atom
- *  positions (atoms render at raw site.xyz; the WebGL Lattice box likewise spans
- *  origin→a+b+c within the shared scene group — see Lattice.svelte's
- *  lattice_center = 0.5·(a+b+c) applied to an origin-centered box), so no extra
- *  centering offset is needed.
+ *  Corners are generated in the vertex shader from transformed lattice vectors
+ *  and the transformed cell origin. This matches the WebGL scene group's
+ *  T(target)·R·T(-target) transform for both atoms and the lattice box.
  *  Lattice convention: lat0/lat1/lat2 are rows a/b/c of the row-major 9-float
  *  matrix (same as the bond render uniform), so corner(i) = bit0·a + bit1·b +
  *  bit2·c. Depth uses the SAME GL→WebGPU clip-z remap as the atom impostor so the
@@ -298,11 +324,12 @@ struct Camera {
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Cell uniform: lattice rows a,b,c (vec3+pad each) + color (rgb + pad).
+// Cell uniform: lattice rows a,b,c + transformed origin + color.
 struct CellU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
+  origin : vec4<f32>,
   color : vec4<f32>,
 };
 
@@ -326,7 +353,8 @@ fn corner(i : u32) -> vec3<f32> {
   let fa = f32(i & 1u);
   let fb = f32((i >> 1u) & 1u);
   let fc = f32((i >> 2u) & 1u);
-  return fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
+  return cell.origin.xyz
+    + fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
 }
 
 @vertex
@@ -1749,14 +1777,15 @@ export type LargeSystemRenderer = {
   /** Provide the unit-cell box. `lattice` is the 9-float row-major matrix (rows
    *  a,b,c — same convention as set_bond_data / pack_lattice); pass null (or an
    *  all-zero lattice) for non-periodic structures. `show` gates drawing; `color`
-   *  is the linear-RGB cell edge color (alpha is forced to 1). When `show` is true
-   *  AND the lattice is non-zero, render() draws the 12 cell edges as thin lines
-   *  (WebGPU core line width is 1px) sharing the atom depth buffer (occluded by
-   *  atoms in front). */
+   *  is the linear-RGB cell edge color (alpha is forced to 1). `origin` is the
+   *  transformed position of the cell's zero corner. When `show` is true AND the
+   *  lattice is non-zero, render() draws the 12 cell edges as thin lines (WebGPU
+   *  core line width is 1px) sharing the atom depth buffer. */
   set_cell(
     lattice: Float32Array | null,
     show: boolean,
     color: [number, number, number],
+    origin?: readonly [number, number, number],
   ): void
   /** Set which atoms are highlighted as "selected". `indices` is the list of atom
    *  indices (same indexing as the uploaded positions / structure.sites order) to
@@ -2059,10 +2088,10 @@ export function create_large_system_renderer(
     size: BOND_RENDER_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // Cell-box render uniform: lattice rows a,b,c (3×vec4) + color (vec4).
+  // Cell-box render uniform: lattice rows a,b,c + origin + color (5×vec4).
   const cell_uniform = device.createBuffer({
     label: `large-system-cell-uniform`,
-    size: 64, // 4 × vec4
+    size: CELL_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Gizmo placement uniform: center_ndc (vec4) + scale_ndc (vec4). Filled from
@@ -2076,6 +2105,7 @@ export function create_large_system_renderer(
   let cell_lattice = new Float32Array(9)
   let cell_show = false
   let cell_color: [number, number, number] = [0.5, 0.5, 0.5]
+  let cell_origin: [number, number, number] = [0, 0, 0]
   // True once the lattice is non-zero (a periodic structure has been provided).
   let cell_has_lattice = false
 
@@ -2603,16 +2633,10 @@ export function create_large_system_renderer(
     device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
   }
 
-  /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad)
-   *  then color (rgb + pad). Same row convention as the bond render uniform. */
+  /** Pack + upload lattice rows, transformed origin, then linear-RGB color. */
   function upload_cell_uniform(): void {
-    const u = new Float32Array(16)
-    const L = cell_lattice
-    u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
-    u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
-    u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = cell_color[0]; u[13] = cell_color[1]; u[14] = cell_color[2]; u[15] = 1
-    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, 64)
+    const u = pack_cell_uniform(cell_lattice, cell_origin, cell_color)
+    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, CELL_BYTES)
   }
 
   // Indirect-args cfg: (verts_per_cylinder, capacity, ncells). capacity is the
@@ -3558,10 +3582,12 @@ export function create_large_system_renderer(
       lattice: Float32Array | null,
       show: boolean,
       color: [number, number, number],
+      origin: readonly [number, number, number] = [0, 0, 0],
     ): void {
       if (destroyed || device_lost) return
       cell_show = show
       cell_color = [color[0], color[1], color[2]]
+      cell_origin = [origin[0], origin[1], origin[2]]
       // A null lattice (non-periodic structure) ⇒ no box. Otherwise detect a
       // degenerate all-zero lattice (also no box) so molecules never draw one.
       let nonzero = false

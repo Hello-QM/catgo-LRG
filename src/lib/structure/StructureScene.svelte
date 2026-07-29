@@ -15,6 +15,7 @@
     ResolvedVisualState,
     VisualStateSource,
   } from '$lib/structure/rendering/visual-state'
+  import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -595,6 +596,7 @@
     element_radius_overrides = {} as Partial<Record<ElementSymbol, number>>,
     site_radius_overrides = new SvelteMap<number, number>(),
     site_color_overrides = new SvelteMap<number, string>(),
+    resolved_atom_colors = $bindable<Float32Array | null>(null),
     camera_position = DEFAULTS.structure.camera_position,
     camera_projection = DEFAULTS.structure.camera_projection,
     rotation_damping = DEFAULTS.structure.rotation_damping,
@@ -884,6 +886,9 @@
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> // per-element radius overrides
     site_radius_overrides?: Map<number, number> | SvelteMap<number, number> // per-site radius overrides (takes precedence over element overrides)
     site_color_overrides?: Map<number, string> | SvelteMap<number, string> // per-site color overrides (takes precedence over element/property colors)
+    /** Authoritative displayed-site linear RGB buffer. The WebGPU adapter takes
+     *  only the base prefix matching its packet topology. */
+    resolved_atom_colors?: Float32Array | null
     camera_position?: [x: number, y: number, z: number] // initial camera position from which to render the scene
     camera_projection?: CameraProjection // camera projection type
     rotation_damping?: number // rotation damping factor (how quickly the rotation comes to rest after mouse release)
@@ -5413,16 +5418,36 @@
     // key also triggers per-key .get() subscribers below.
     const _sco_size = site_color_overrides?.size ?? 0
     void _sco_size
-    const out = new Float32Array(sites.length * 3)
-    for (let i = 0; i < sites.length; i++) {
-      const override_hex = site_color_overrides?.get(i)
-      const hex = override_hex ?? get_majority_color(sites[i], colors.element, bond_color)
-      const [r, g, b] = __hex_to_linear_rgb(hex)
-      out[i * 3]     = r
-      out[i * 3 + 1] = g
-      out[i * 3 + 2] = b
+    // Mirror atom_data/manager invalidation: enabling, disabling, adding, or
+    // removing an atom-color hook must publish a new authoritative buffer.
+    const _hook_count = pluginManager.structureHooks.get(`atomColors`)?.length ?? 0
+    const _enabled_plugin_count = pluginManager.enabledPlugins.length
+    void [_hook_count, _enabled_plugin_count]
+    const initial_colors: (string | null)[] = sites.map((site, site_idx) => {
+      const orig_idx = get_orig_site_idx(site, site_idx)
+      const element = site.species[0]?.element
+      return property_colors?.colors[orig_idx] ?? colors.element?.[element] ?? null
+    })
+    const plugin_colors = pluginManager.applyAtomColorsHooks(sites, initial_colors)
+    return resolve_atom_colors_linear({
+      sites,
+      element_colors: colors.element,
+      site_color_overrides,
+      property_colors,
+      plugin_colors,
+      fallback: bond_color,
+    })
+  })
+
+  // Publish the same resolved buffer consumed by the WebGL atom/bond packet
+  // path. This is a value bridge (identity changes on semantic recolors), not a
+  // displayed-position getter or a second color resolver.
+  $effect(() => {
+    const published = atom_colors_buffer
+    resolved_atom_colors = published
+    return () => {
+      if (resolved_atom_colors === published) resolved_atom_colors = null
     }
-    return out
   })
 
   // ── Manager-ready trajectory packet ───────────────────────────────────────
