@@ -1,16 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { build_atom_radii, build_display_radii } from '$lib/structure/gpu/radius-lut'
+import {
+  build_atom_radii,
+  build_display_radii,
+  build_logical_radii,
+} from '$lib/structure/gpu/radius-lut'
 import { atomic_radii, type Site } from '$lib/structure'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 
 function site(element: string, xyz: [number, number, number]): Site {
   return { species: [{ element, occu: 1, oxidation_state: 0 } as never], abc: [0, 0, 0], xyz } as Site
 }
-
-// The scale the WebGL instance writer applies on top of the resolved radius —
-// VISUAL_RADIUS_SCALE in src/lib/structure/atoms/atom-instanced-renderer.ts.
-// build_display_radii MUST fold in the same factor or the overlay draws every
-// sphere at 2× the WebGL size (the original large-system-mode bug).
-const VISUAL_RADIUS_SCALE = 0.5
 
 describe(`build_atom_radii`, () => {
   it(`returns one finite radius per site, using the primary species`, () => {
@@ -75,4 +74,53 @@ describe(`build_display_radii`, () => {
     })
     expect(radii[0]).toBeCloseTo(1.2 * VISUAL_RADIUS_SCALE, 5)
   })
+
+  it(`weights mixed-species radii by occupancy before applying the display scale`, () => {
+    const mixed = {
+      ...site(`O`, [0, 0, 0]),
+      species: [
+        { element: `O`, occu: 0.25, oxidation_state: 0 },
+        { element: `Ca`, occu: 0.75, oxidation_state: 0 },
+      ],
+    } as Site
+    const element_radius_overrides = { Ca: 1.8 }
+    const logical = build_logical_radii([mixed], {
+      atom_radius: 1.5,
+      element_radius_overrides,
+    })
+    const display = build_display_radii([mixed], {
+      atom_radius: 1.5,
+      element_radius_overrides,
+    })
+    const expected_logical = (
+      0.25 * (atomic_radii.O ?? 1) +
+      0.75 * element_radius_overrides.Ca
+    ) * 1.5
+    expect(logical[0]).toBeCloseTo(expected_logical, 5)
+    expect(display[0]).toBeCloseTo(expected_logical * VISUAL_RADIUS_SCALE, 5)
+  })
+
+  it.each([
+    [`element`, {}, undefined],
+    [`same-size`, { same_size_atoms: true }, undefined],
+    [`element override`, { element_radius_overrides: { O: 1.2 } }, undefined],
+    [`site override`, {}, new Map([[0, 0.8]])],
+  ] as const)(
+    `keeps the %s display result at logical radius × VISUAL_RADIUS_SCALE`,
+    (_label, opts, site_radius_overrides) => {
+      const resolved = {
+        atom_radius: 1.5,
+        ...opts,
+        site_radius_overrides,
+      }
+      const logical = build_logical_radii(sites, resolved)
+      const display = build_display_radii(sites, resolved)
+      for (let idx = 0; idx < sites.length; idx++) {
+        expect(display[idx]).toBeCloseTo(
+          logical[idx] * VISUAL_RADIUS_SCALE,
+          5,
+        )
+      }
+    },
+  )
 })

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
   VISUAL_RADIUS_SCALE,
   render_style_to_backend,
   same_visual_shading,
@@ -44,9 +47,25 @@ describe(`shared visual state`, () => {
     expect(render_style_to_backend(style, `webgpu`)).toBe(webgpu)
   })
 
-  it(`resolves one PBR table for both adapters`, () => {
-    expect(style_pbr(`metallic`)).toEqual({ roughness: 0.4, metalness: 0.4 })
-    expect(style_pbr(`glossy`)).toEqual({ roughness: 0.2, metalness: 0 })
+  it.each([
+    [`glossy`, 0.2, 0],
+    [`metallic`, 0.4, 0.4],
+    [`matcap`, 0.2, 0],
+    [`matte`, 0.2, 0],
+    [`soft`, 0.2, 0],
+    [`flat`, 0.2, 0],
+    [`toon`, 0.2, 0],
+  ] as const)(
+    `resolves the %s PBR values from one table`,
+    (style, roughness, metalness) => {
+      expect(style_pbr(style)).toEqual({ roughness, metalness })
+    },
+  )
+
+  it(`owns the shared toon thresholds`, () => {
+    expect(TOON_SHADOW_THRESHOLD).toBe(0.3)
+    expect(TOON_HIGHLIGHT_THRESHOLD).toBe(0.97)
+    expect(TOON_SHADOW_BRIGHTNESS).toBe(0.5)
   })
 
   it(`detects nested-vector changes without reference equality`, () => {

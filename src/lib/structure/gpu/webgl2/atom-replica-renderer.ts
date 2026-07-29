@@ -33,7 +33,13 @@
  */
 
 import * as THREE from 'three'
-import { VISUAL_RADIUS_SCALE } from '../../atoms/atom-instanced-renderer'
+import {
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
+  VISUAL_RADIUS_SCALE,
+  style_pbr,
+} from '../../rendering/visual-state'
 import type {
   ImageInstanceTable,
   RenderPacket,
@@ -466,6 +472,7 @@ export class AtomReplicaRenderer {
       geometry.instanceCount = 0
     }
 
+    const default_pbr = style_pbr(`glossy`)
     const shared_uniforms = {
       uPosTex: { value: this.#positions.texture },
       uPosTexWidth: { value: this.#positions.texture.image.width },
@@ -479,12 +486,12 @@ export class AtomReplicaRenderer {
       // (glossy GGX at roughness 0.2 / metalness 0, toon thresholds from
       // AtomCanvas ToonHighlightMaterial).
       uRenderStyle: { value: 0 },
-      uShadowThreshold: { value: 0.3 },
-      uHighlightThreshold: { value: 0.97 },
-      uShadowBrightness: { value: 0.5 },
+      uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+      uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+      uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
       uSpecStrength: { value: 1 },
-      uRoughness: { value: 0.2 },
-      uMetalness: { value: 0 },
+      uRoughness: { value: default_pbr.roughness },
+      uMetalness: { value: default_pbr.metalness },
       uMatcap: { value: null as THREE.Texture | null },
     }
 

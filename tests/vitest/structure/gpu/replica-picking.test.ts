@@ -30,6 +30,10 @@ import type {
 import type { AnyStructure, Site } from '$lib'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 import { decode_compact_bond_instance } from '$lib/structure/gpu/webgl2/compact-bond-instance-layout'
+import {
+  build_display_radii,
+  build_logical_radii,
+} from '$lib/structure/gpu/radius-lut'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -549,6 +553,25 @@ function make_pick_scene(packet?: RenderPacket): ReplicaPickScene {
 
 describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
   const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
+
+  test('uses the same final display radii as the visual replica draw', () => {
+    const structure = make_structure(3)
+    const logical = build_logical_radii(structure.sites, { atom_radius: 1.5 })
+    const expected = build_display_radii(structure.sites, { atom_radius: 1.5 })
+    const packet = create_render_packet_builder().build({
+      structure,
+      radii: logical,
+      dims: [1, 1, 1],
+    })
+    const scene = make_pick_scene(packet)
+    scene.sync(packet)
+    const geometry = scene.atom_mesh.geometry as THREE.InstancedBufferGeometry
+    const radii = geometry.getAttribute(
+      'instanceRadius',
+    ) as THREE.InstancedBufferAttribute
+    expect(Array.from(radii.array as Float32Array)).toEqual(Array.from(expected))
+    scene.dispose()
+  })
 
   test('same base atom picked in two replica cells folds to one base site', () => {
     const packet = make_packet({ n: 2, dims: [2, 1, 1] })

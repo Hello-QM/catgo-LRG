@@ -31,7 +31,7 @@ import {
   render_pick_pixel,
   type PickPixelRenderer,
 } from '$lib/structure/gpu-picker'
-import { VISUAL_RADIUS_SCALE } from '$lib/structure/atoms/atom-instanced-renderer'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import {
   ensure_instanced_attr,
   rebind_instance_divisors_if_needed,

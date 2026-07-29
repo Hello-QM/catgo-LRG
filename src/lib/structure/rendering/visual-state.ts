@@ -6,6 +6,7 @@ export const TOON_HIGHLIGHT_THRESHOLD = 0.97
 export const TOON_SHADOW_BRIGHTNESS = 0.5
 
 export type BackendRenderStyle = 0 | 1 | 2 | 3
+export type WebgpuRenderStyle = Exclude<BackendRenderStyle, 3>
 export type VisualBackend = `webgl2` | `webgpu`
 
 export type ResolvedVisualShading = {
@@ -37,6 +38,14 @@ export type VisualStateSource = {
   resolve: () => ResolvedVisualState
 }
 
+export function render_style_to_backend(
+  style: RenderStyle,
+  backend: `webgpu`,
+): WebgpuRenderStyle
+export function render_style_to_backend(
+  style: RenderStyle,
+  backend: `webgl2`,
+): BackendRenderStyle
 export function render_style_to_backend(
   style: RenderStyle,
   backend: VisualBackend,

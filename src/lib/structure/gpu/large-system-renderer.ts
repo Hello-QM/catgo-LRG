@@ -52,6 +52,13 @@ import type {
   TypedBondInput,
   TypedBondTable,
 } from '$lib/structure/workers/bond-worker-runtime'
+import {
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
+  style_pbr,
+  type WebgpuRenderStyle,
+} from '$lib/structure/rendering/visual-state'
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -208,17 +215,16 @@ const DEFAULT_SHADING: LargeSystemShading = {
   ambient: 0.6,
   directional: 2.2,
   spec_strength: 1,
-  roughness: 0.2,
-  metalness: 0,
+  ...style_pbr(`glossy`),
   render_style: 0,
   outline: 0,
   depth_cueing: 0,
   depth_near: 0,
   depth_far: 10,
   depth_bg: [0, 0, 0],
-  toon_shadow_threshold: 0.3,
-  toon_highlight_threshold: 0.97,
-  toon_shadow_brightness: 0.5,
+  toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
+  toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
+  toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
 }
 
 /** The atom-shading state the overlay mirrors from the WebGL viewer. Every field
@@ -236,7 +242,7 @@ export type LargeSystemShading = {
   metalness: number
   /** Shader branch: 0 glossy/metallic (GGX), 1 matte/soft/flat, 2 toon.
    *  `matcap` has no WebGPU branch and resolves to 0 — see the overlay. */
-  render_style: 0 | 1 | 2
+  render_style: WebgpuRenderStyle
   outline: number
   depth_cueing: number
   depth_near: number

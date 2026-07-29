@@ -13,13 +13,13 @@
    */
   import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
+  import type { RenderStyle } from '$lib/settings'
   import { Vector2, Vector3 } from 'three'
   import { get_atom_matcap, type MatcapPreset } from '../atoms/matcap-texture'
   import {
-    type AtomRenderStyle,
-    render_style_to_int,
+    render_style_to_backend,
     style_pbr,
-  } from '../atoms/render-style'
+  } from '../rendering/visual-state'
   import type { RenderPacket } from '../scene/render-packet'
   import { AtomReplicaRenderer } from './webgl2/atom-replica-renderer'
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
@@ -43,7 +43,7 @@
     /** View-space headlamp direction (kept live in both materials). */
     light_dir?: Vector3
     /** Appearance → Material style for the atom impostors (#533). */
-    render_style?: AtomRenderStyle
+    render_style?: RenderStyle
     matcap_preset?: string
     highlight_strength?: number
     /** Main bond-draw opacity (ignored by atom-only layers). */
@@ -228,7 +228,7 @@
       ? get_atom_matcap(matcap_preset as MatcapPreset, mark_dirty)
       : null
     atoms.set_render_style(
-      render_style_to_int(render_style),
+      render_style_to_backend(render_style, `webgl2`),
       style_pbr(render_style),
       matcap,
     )

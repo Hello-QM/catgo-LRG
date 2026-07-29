@@ -28,6 +28,10 @@ import {
 } from '$lib/structure/scene/render-packet-builder'
 import { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
 import { AtomInstancedRenderer } from '$lib/structure/atoms/atom-instanced-renderer'
+import {
+  build_display_radii,
+  build_logical_radii,
+} from '$lib/structure/gpu/radius-lut'
 import type { AnyStructure, Site } from '$lib'
 
 function carbon_site(xyz: [number, number, number]): Site {
@@ -97,6 +101,23 @@ function ghost_pages(root: THREE.Mesh): THREE.Mesh[] {
 }
 
 describe(`AtomReplicaRenderer — mesh shape`, () => {
+  test(`converts logical packet radii to the shared final display radii once`, () => {
+    const structure = make_structure(3)
+    const logical = build_logical_radii(structure.sites, { atom_radius: 1.5 })
+    const expected = build_display_radii(structure.sites, { atom_radius: 1.5 })
+    const packet = create_render_packet_builder().build({
+      structure,
+      radii: logical,
+      dims: [1, 1, 1],
+    })
+    const renderer = new AtomReplicaRenderer()
+    renderer.update(packet)
+    expect(
+      Array.from(attr(renderer.mesh, `instanceRadius`).array as Float32Array),
+    ).toEqual(Array.from(expected))
+    renderer.dispose()
+  })
+
   test(`plain Mesh over InstancedBufferGeometry — no instanceMatrix anywhere`, () => {
     const renderer = new AtomReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))

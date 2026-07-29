@@ -33,7 +33,15 @@
   import PencilModeOverlay from './PencilModeOverlay.svelte'
   import AtomImpostors from './AtomImpostors.svelte'
   import SlabPreview from './SlabPreview.svelte'
-  import { build_display_radii } from './gpu/radius-lut'
+  import { build_logical_radii } from './gpu/radius-lut'
+  import {
+    TOON_HIGHLIGHT_THRESHOLD,
+    TOON_SHADOW_BRIGHTNESS,
+    TOON_SHADOW_THRESHOLD,
+    VISUAL_RADIUS_SCALE,
+    render_style_to_backend,
+    style_pbr,
+  } from './rendering/visual-state'
   import WebGLReplicaLayer from './gpu/WebGLReplicaLayer.svelte'
   import {
     combined_packet_render_eligible,
@@ -362,7 +370,11 @@
   // extras.Instance approach. The mesh geometry is never rendered (visible=false)
   // but provides analytic ray-sphere intersection via a custom raycast method.
   let atom_interaction_mesh: ThreeInstancedMesh | undefined = $state()
-  const atom_interaction_geometry = new SphereGeometry(0.5, 8, 6) // Low-poly but enough for click detection
+  const atom_interaction_geometry = new SphereGeometry(
+    VISUAL_RADIUS_SCALE,
+    8,
+    6,
+  ) // Low-poly but enough for click detection
   // MeshBasicMaterial({ visible: false }) doesn't reliably prevent rendering
   // in Three.js r181.  Use fully transparent + no depth writes instead.
   const atom_interaction_material = new MeshBasicMaterial({
@@ -2463,9 +2475,9 @@
         // sliders (default reproduces the legacy top-front headlamp). Each
         // cached material's uLightDir is kept live by the $effect below.
         uLightDir: { value: light_dir.clone() },
-        uShadowThreshold: { value: 0.3 },
-        uHighlightThreshold: { value: 0.97 },
-        uShadowBrightness: { value: 0.5 },
+        uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+        uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+        uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
         uOpacity: { value: opacity },
         // Share the same uniform objects the depth-cue/outline effect writes to.
         uDepthCueing: depth_cue_uniforms.uDepthCueing,
@@ -5293,18 +5305,6 @@
     return buf
   })
 
-  // Map the app's render_style onto the overlay's shader branches (0 = glossy /
-  // metallic GGX, 1 = matte / 2.5D / 2D-flat, 2 = toon). Mirrors
-  // render_style_to_int in atoms/AtomManagerInstances.svelte with ONE deliberate
-  // difference: `matcap` has no WebGPU branch — it needs the baked studio-sphere
-  // texture uploaded as a GPU texture — so it resolves to glossy in the overlay.
-  // A known, bounded gap; matcap is not the default style.
-  function overlay_shading_branch(style: RenderStyle): 0 | 1 | 2 {
-    if (style === `toon`) return 2
-    if (style === `matte` || style === `soft` || style === `flat`) return 1
-    return 0 // glossy, metallic, and matcap's fallback
-  }
-
   type PublishedLargeSystemVisualState =
     & LargeSystemShading
     & Pick<ResolvedVisualState, `background_linear`>
@@ -5320,8 +5320,7 @@
     // that stopped updating the moment performance mode was switched on.
     update_depth_cue_uniforms()
     const cam = threlte.camera.current
-    // Per-render-style PBR, mirroring style_pbr in AtomManagerInstances.
-    const metallic = render_style === `metallic`
+    const pbr = style_pbr(render_style)
     const bg = depth_cue_uniforms.uDepthCueBgColor.value
     return {
       shading: {
@@ -5330,9 +5329,9 @@
         ambient: active_ambient_light,
         directional: active_directional_light,
         spec_strength: active_highlight_strength,
-        roughness: metallic ? 0.4 : 0.2,
-        metalness: metallic ? 0.4 : 0,
-        render_style: overlay_shading_branch(render_style),
+        roughness: pbr.roughness,
+        metalness: pbr.metalness,
+        render_style: render_style_to_backend(render_style, `webgpu`),
         outline: depth_cue_uniforms.uOutlineStrength.value,
         depth_cueing: depth_cue_uniforms.uDepthCueing.value,
         depth_near: depth_cue_uniforms.uDepthNear.value,
@@ -5341,9 +5340,9 @@
         // as the WebGL atom shader does with uDepthCueBgColor.
         depth_bg: [bg.r, bg.g, bg.b],
         // Toon thresholds: the same constants the WebGL material is built with.
-        toon_shadow_threshold: 0.3,
-        toon_highlight_threshold: 0.97,
-        toon_shadow_brightness: 0.5,
+        toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
+        toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
+        toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
       },
       background_linear: [...resolved_background_linear],
     }
@@ -5427,7 +5426,10 @@
   // scene resolves the exact display attributes and the FINAL live bond graph
   // after typed/object/filter/manual synchronization, then shares one packet
   // object with both render managers.
-  let manager_display_radii = $derived.by(() => {
+  // RenderPacket keeps logical radii. WebGL replica drawing and its ID picker
+  // each apply VISUAL_RADIUS_SCALE at their GPU-attribute boundary; the
+  // WebGPU overlay builds final display radii separately.
+  let manager_logical_radii = $derived.by(() => {
     const sites = structure?.sites
     if (!sites || sites.length === 0) return EMPTY_RADII
     // Track both object and SvelteMap-style override mutations.
@@ -5435,7 +5437,7 @@
     const _site_override_size = site_radius_overrides?.size ?? 0
     void _element_override_keys
     void _site_override_size
-    return build_display_radii(sites, {
+    return build_logical_radii(sites, {
       atom_radius,
       same_size_atoms,
       element_radius_overrides,
@@ -5486,7 +5488,7 @@
     )?.topology ?? null
     if (upstream === null) return null
     const colors = atom_colors_buffer
-    const radii = manager_display_radii
+    const radii = manager_logical_radii
     const packet_owned_graph = trajectory_frame_positions != null &&
         prepared_render_packet?.topology === upstream &&
         packet_render_features_eligible()
@@ -5507,7 +5509,7 @@
         ...upstream,
         version: manager_topology_version,
         colors: atom_colors_buffer,
-        radii: manager_display_radii,
+        radii: manager_logical_radii,
         bond_graph,
       }
       manager_topology_attribute_key_cache = next_attribute_key
@@ -7075,7 +7077,7 @@
             <T.Mesh>
               <T.SphereGeometry
                 args={[
-                  0.5,
+                  VISUAL_RADIUS_SCALE,
                   sphere_segments,
                   sphere_segments,
                   atom.start_phi,
@@ -7087,11 +7089,11 @@
 
             {#if atom.has_partial_occupancy}
               <T.Mesh rotation={[0, atom.start_phi, 0]}>
-                <T.CircleGeometry args={[0.5, sphere_segments]} />
+                <T.CircleGeometry args={[VISUAL_RADIUS_SCALE, sphere_segments]} />
                 {@render atom_material(display_color, true, is_outside && cut_opacity < 1, cut_opacity)}
               </T.Mesh>
               <T.Mesh rotation={[0, atom.end_phi, 0]}>
-                <T.CircleGeometry args={[0.5, sphere_segments]} />
+                <T.CircleGeometry args={[VISUAL_RADIUS_SCALE, sphere_segments]} />
                 {@render atom_material(display_color, true, is_outside && cut_opacity < 1, cut_opacity)}
               </T.Mesh>
             {/if}
