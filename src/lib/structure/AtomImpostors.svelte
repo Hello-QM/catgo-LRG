@@ -16,7 +16,7 @@
     TOON_SHADOW_BRIGHTNESS,
     TOON_SHADOW_THRESHOLD,
     VISUAL_RADIUS_SCALE,
-    render_style_to_backend,
+    render_style_to_legacy_impostor,
   } from '$lib/structure/rendering/visual-state'
 
   // Types matching StructureScene's atom_data items
@@ -342,7 +342,7 @@
         uDepthCueBgColor: depth_cue_uniforms.uDepthCueBgColor,
         uOutlineStrength: depth_cue_uniforms.uOutlineStrength,
         uRenderStyle: {
-          value: render_style_to_backend(render_style, `webgl2`),
+          value: render_style_to_legacy_impostor(render_style),
         },
         // Glossy specular highlight multiplier (slider-driven); kept live by $effect below.
         uSpecStrength: { value: highlight_strength },
@@ -405,7 +405,7 @@
   // Render-style is a uniform int branch in the fragment shader — no recompile,
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
-    const v = render_style_to_backend(render_style, `webgl2`)
+    const v = render_style_to_legacy_impostor(render_style)
     opaque_material.uniforms.uRenderStyle.value = v
     transparent_material.uniforms.uRenderStyle.value = v
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain

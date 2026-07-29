@@ -34,6 +34,7 @@ import {
   build_display_radii,
   build_logical_radii,
 } from '$lib/structure/gpu/radius-lut'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -497,6 +498,7 @@ function make_packet(input: {
   dims: readonly [number, number, number]
   boundary_policy?: 'stub' | 'hide' | 'ghost-images'
   bonds?: PacketBondConnectivity[]
+  radii?: Float32Array
 }): RenderPacket {
   const builder = create_render_packet_builder()
   return builder.build({
@@ -504,6 +506,7 @@ function make_packet(input: {
     bond_connectivity: input.bonds ?? null,
     dims: input.dims,
     boundary_policy: input.boundary_policy ?? 'stub',
+    radii: input.radii,
   })
 }
 
@@ -565,11 +568,17 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
     })
     const scene = make_pick_scene(packet)
     scene.sync(packet)
+    expect(packet.topology.radii).toBe(logical)
     const geometry = scene.atom_mesh.geometry as THREE.InstancedBufferGeometry
     const radii = geometry.getAttribute(
       'instanceRadius',
     ) as THREE.InstancedBufferAttribute
     expect(Array.from(radii.array as Float32Array)).toEqual(Array.from(expected))
+    for (let idx = 0; idx < logical.length; idx++) {
+      expect((radii.array as Float32Array)[idx]).toBeCloseTo(
+        logical[idx] * VISUAL_RADIUS_SCALE,
+      )
+    }
     scene.dispose()
   })
 
@@ -610,12 +619,20 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
       dims: [1, 1, 1],
       boundary_policy: 'ghost-images',
       bonds: [{ site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] }],
+      radii: Float32Array.from([2, 4, 6]),
     })
     const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
     expect(codec.ghost_count).toBe(1)
+    const ghost_geometry = scene.ghost_mesh.geometry as THREE.InstancedBufferGeometry
+    const ghost_radii = ghost_geometry.getAttribute(
+      'ghostRadius',
+    ) as THREE.InstancedBufferAttribute
+    expect((ghost_radii.array as Float32Array)[0]).toBeCloseTo(
+      packet.topology.radii[2] * VISUAL_RADIUS_SCALE,
+    )
 
     const fake = make_fake_pick_renderer([encode_replica_ghost_id(codec, 0)])
     const picked = scene.pick(fake, camera, 0, 0)

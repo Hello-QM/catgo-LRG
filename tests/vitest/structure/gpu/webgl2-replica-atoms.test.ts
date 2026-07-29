@@ -32,6 +32,7 @@ import {
   build_display_radii,
   build_logical_radii,
 } from '$lib/structure/gpu/radius-lut'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import type { AnyStructure, Site } from '$lib'
 
 function carbon_site(xyz: [number, number, number]): Site {
@@ -112,6 +113,10 @@ describe(`AtomReplicaRenderer — mesh shape`, () => {
     })
     const renderer = new AtomReplicaRenderer()
     renderer.update(packet)
+    expect(packet.topology.radii).toBe(logical)
+    for (let idx = 0; idx < logical.length; idx++) {
+      expect(expected[idx]).toBeCloseTo(logical[idx] * VISUAL_RADIUS_SCALE)
+    }
     expect(
       Array.from(attr(renderer.mesh, `instanceRadius`).array as Float32Array),
     ).toEqual(Array.from(expected))
@@ -349,6 +354,7 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
 
     const image = attr(renderer.ghost_mesh, `ghostImage`)
     const base_site = attr(renderer.ghost_mesh, `ghostBaseSite`)
+    const ghost_radius = attr(renderer.ghost_mesh, `ghostRadius`)
     expect(image.meshPerAttribute).toBe(1)
     expect(image.count).toBe(table.count)
     for (let idx = 0; idx < table.count; idx++) {
@@ -359,6 +365,10 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
       expect((image.array as Float32Array)[idx * 3 + 2]).toBe(table.jimages[idx * 3 + 2])
       expect((base_site.array as Float32Array)[idx])
         .toBe(table.base_sites[idx])
+      const site = table.base_sites[idx]
+      expect((ghost_radius.array as Float32Array)[idx]).toBeCloseTo(
+        packet.topology.radii[site] * VISUAL_RADIUS_SCALE,
+      )
     }
     renderer.dispose()
   })

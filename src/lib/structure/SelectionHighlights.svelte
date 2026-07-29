@@ -40,6 +40,7 @@
   import type { Camera, InstancedMesh } from 'three'
   import { Color, InstancedBufferAttribute, Matrix4, NormalBlending, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
   import { compute_depth_range, get_depth_color } from './depth-cue-helpers'
+  import { VISUAL_RADIUS_SCALE } from './rendering/visual-state'
 
   interface Props {
     structure: AnyStructure | undefined
@@ -224,10 +225,12 @@
 
       // Halo radius: ≈1.7× the visually-rendered atom radius. radius_map
       // stores `atom.radius` which AtomInstancedRenderer renders at HALF
-      // (VISUAL_RADIUS_SCALE = 0.5). So multiply by 0.5 * 1.7 = 0.85.
+      // (VISUAL_RADIUS_SCALE). Apply that shared adapter scale exactly once,
+      // then widen the visible halo by 1.7.
       // Earlier 1.25× felt subpixel-thin in light theme; widening the
       // ring gives the fresnel band space to read against any backdrop.
-      const halo_radius = (radius_by_site_idx.get(idx) ?? atom_radius) * 0.85
+      const halo_radius = (radius_by_site_idx.get(idx) ?? atom_radius) *
+        VISUAL_RADIUS_SCALE * 1.7
 
       // instanceMatrix carries translation only; scale lives in haloScale.
       __scratch_xyz.set(xyz[0], xyz[1], xyz[2])

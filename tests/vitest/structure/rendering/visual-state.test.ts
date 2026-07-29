@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   TOON_HIGHLIGHT_THRESHOLD,
   TOON_SHADOW_BRIGHTNESS,
   TOON_SHADOW_THRESHOLD,
   VISUAL_RADIUS_SCALE,
+  render_style_to_legacy_impostor,
   render_style_to_backend,
   same_visual_shading,
   style_pbr,
@@ -48,6 +51,21 @@ describe(`shared visual state`, () => {
   })
 
   it.each([
+    [`glossy`, 0],
+    [`metallic`, 0],
+    [`matte`, 1],
+    [`soft`, 1],
+    [`flat`, 1],
+    [`toon`, 2],
+    [`matcap`, 0],
+  ] as const)(
+    `maps %s explicitly for the legacy non-MatCap impostor`,
+    (style, legacy) => {
+      expect(render_style_to_legacy_impostor(style)).toBe(legacy)
+    },
+  )
+
+  it.each([
     [`glossy`, 0.2, 0],
     [`metallic`, 0.4, 0.4],
     [`matcap`, 0.2, 0],
@@ -72,5 +90,23 @@ describe(`shared visual state`, () => {
     const a = shading()
     expect(same_visual_shading(a, { ...a, light_dir: [...a.light_dir] })).toBe(true)
     expect(same_visual_shading(a, { ...a, depth_bg: [0.02, 0.01, 0.01] })).toBe(false)
+  })
+
+  it(`keeps legacy MatCap fallback and halo radius on explicit shared adapters`, () => {
+    const atom_impostors = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/AtomImpostors.svelte`),
+      `utf8`,
+    )
+    const selection_highlights = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/SelectionHighlights.svelte`),
+      `utf8`,
+    )
+
+    expect(atom_impostors).toContain(`render_style_to_legacy_impostor(render_style)`)
+    expect(atom_impostors).not.toContain(
+      'render_style_to_backend(render_style, `webgl2`)',
+    )
+    expect(selection_highlights).toContain(`VISUAL_RADIUS_SCALE * 1.7`)
+    expect(selection_highlights).not.toMatch(/\*\s*0\.85\b/)
   })
 })

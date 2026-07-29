@@ -6,6 +6,8 @@ import {
   BOND_RENDER_BYTES,
   create_large_system_renderer,
 } from '$lib/structure/gpu/large-system-renderer'
+import { build_logical_radii } from '$lib/structure/gpu/radius-lut'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
 import type {
   BaseBondGraph,
@@ -317,6 +319,21 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
+  it(`keeps logical radii in RenderPacket until a renderer adapter boundary`, () => {
+    const structure = make_base_structure(3, 10) as unknown as AnyStructure
+    const logical = build_logical_radii(structure.sites, { atom_radius: 1.5 })
+    const packet = create_render_packet_builder().build({
+      structure,
+      radii: logical,
+    })
+
+    expect(packet.topology.radii).toBe(logical)
+    expect(Array.from(packet.topology.radii)).toEqual(Array.from(logical))
+    for (let idx = 0; idx < logical.length; idx++) {
+      expect(logical[idx] * VISUAL_RADIUS_SCALE).toBeLessThan(logical[idx])
+    }
+  })
+
   it(`replica-only packet change updates indirect counts without a bond dispatch`, () => {
     const bond_graph: BaseBondGraph = {
       version: 1,
@@ -623,7 +640,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
 
     expect(scene_source).toContain(`colors: atom_colors_buffer`)
-    expect(scene_source).toContain(`radii: manager_display_radii`)
+    expect(scene_source).toContain(`radii: manager_logical_radii`)
     expect(scene_source).toContain(
       `const bond_graph = packet_owned_graph ?? manager_bond_graph`,
     )

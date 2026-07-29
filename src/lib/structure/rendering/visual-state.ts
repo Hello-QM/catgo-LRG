@@ -7,6 +7,7 @@ export const TOON_SHADOW_BRIGHTNESS = 0.5
 
 export type BackendRenderStyle = 0 | 1 | 2 | 3
 export type WebgpuRenderStyle = Exclude<BackendRenderStyle, 3>
+export type LegacyImpostorRenderStyle = WebgpuRenderStyle
 export type VisualBackend = `webgl2` | `webgpu`
 
 export type ResolvedVisualShading = {
@@ -54,6 +55,28 @@ export function render_style_to_backend(
   if (style === `matte` || style === `soft` || style === `flat`) return 1
   if (style === `matcap`) return backend === `webgl2` ? 3 : 0
   return 0
+}
+
+/**
+ * The legacy AtomImpostors shader has only glossy, matte, and toon branches.
+ * Keep its unsupported MatCap behavior explicit instead of relying on shader
+ * branch 3 falling through the final `else` by accident.
+ */
+export function render_style_to_legacy_impostor(
+  style: RenderStyle,
+): LegacyImpostorRenderStyle {
+  switch (style) {
+    case `toon`:
+      return 2
+    case `matte`:
+    case `soft`:
+    case `flat`:
+      return 1
+    case `glossy`:
+    case `metallic`:
+    case `matcap`:
+      return 0
+  }
 }
 
 export function style_pbr(style: RenderStyle): { roughness: number; metalness: number } {
