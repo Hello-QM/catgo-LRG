@@ -1,7 +1,7 @@
 # Shared WebGL2/WebGPU Visual Pipeline Design
 
-**Date:** 2026-07-24  
-**Target:** PR #540 (`feat/large-system-shading-parity`)  
+**Date:** 2026-07-24
+**Target:** PR #540 (`feat/large-system-shading-parity`)
 **Status:** proposed
 
 ## Problem
