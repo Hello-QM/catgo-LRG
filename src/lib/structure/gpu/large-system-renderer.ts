@@ -63,6 +63,7 @@ import type {
 import {
   GIZMO_AXIS_HEX,
   GIZMO_NEG_AXIS_HEX,
+  GIZMO_ORIENTATION_WGSL,
   gizmo_wgsl_color_vectors,
   resolve_gizmo_layout,
 } from '$lib/structure/rendering/gizmo'
@@ -442,11 +443,8 @@ struct VsOut {
   @location(0) p : vec2<f32>, // local coords in device px, y-up, origin at center
 };
 
-const AXES = array<vec3<f32>, 3>(
-  vec3<f32>(1.0, 0.0, 0.0),
-  vec3<f32>(0.0, 1.0, 0.0),
-  vec3<f32>(0.0, 0.0, 1.0),
-);
+// Shared axis basis + column-major view projection from rendering/gizmo.ts.
+${GIZMO_ORIENTATION_WGSL}
 // Shared positive-axis palette, generated from rendering/gizmo.ts.
 const AXIS_COLORS = array<vec3<f32>, 3>(
 ${gizmo_wgsl_color_vectors(GIZMO_AXIS_HEX)}
@@ -515,18 +513,13 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // Camera view ROTATION only — the triad orients with the camera.
-  let rot = mat3x3<f32>(
-    camera.view[0].xyz,
-    camera.view[1].xyz,
-    camera.view[2].xyz,
-  );
   let unit = giz.place.w;
 
   // Rotated axes: screen offset (view-space xy, y-up — matches in.p) + depth.
   var head : array<vec2<f32>, 3>;
   var depth : array<f32, 3>;
   for (var i = 0u; i < 3u; i++) {
-    let d = rot * AXES[i];
+    let d = project_gizmo_axis(camera.view, i);
     head[i] = d.xy * (HEAD_DIST * unit);
     depth[i] = d.z;
   }

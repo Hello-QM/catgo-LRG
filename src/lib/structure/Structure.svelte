@@ -4623,9 +4623,12 @@
             scene_props spread so the user's toggle actually reaches sites_to_draw
             in the bond renderer; otherwise scene_props' default true overrides it
             and orphan cross-cell bond stubs render with image atoms off.
+
+            The host-normalized safe area is likewise authoritative. Its prop
+            stays AFTER scene_props so a stale/ad-hoc scene prop cannot move the
+            WebGL gizmo away from the HUD inset the WebGPU overlay receives.
           -->
           <StructureScene
-            {hud_safe}
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
             {webgl_suspended}
@@ -4640,6 +4643,7 @@
             {on_trajectory_buffer_state}
             {render_packet}
             {...scene_props}
+            {hud_safe}
             initial_view={persist_settings ? saved_default_view : null}
             {show_image_atoms}
             {clip_center}

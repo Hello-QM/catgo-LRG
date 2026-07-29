@@ -7,12 +7,14 @@ import {
   GIZMO_LAYOUT,
   GIZMO_NEG_AXIS_COLORS,
   GIZMO_NEG_AXIS_HEX,
+  GIZMO_ORIENTATION_WGSL,
   GIZMO_SIZE_CSS,
   GIZMO_WORLD_AXES,
   gizmo_dom_offset,
   project_gizmo_axes,
   resolve_gizmo_layout,
 } from '$lib/structure/rendering/gizmo'
+import { GIZMO_WGSL } from '$lib/structure/gpu/large-system-renderer'
 import { axis_colors, neg_axis_colors } from '$lib/colors'
 
 describe(`shared gizmo palette`, () => {
@@ -111,5 +113,28 @@ describe(`shared gizmo camera orientation`, () => {
         expect(value).toBeCloseTo(webgl[idx][channel], 6)
       })
     })
+  })
+
+  it(`is the production WebGPU shader's axis and column-major matrix contract`, () => {
+    expect(GIZMO_WGSL).toContain(GIZMO_ORIENTATION_WGSL)
+
+    const axis_table = GIZMO_WGSL.match(
+      /const GIZMO_AXES = array<vec3<f32>, 3>\(([\s\S]*?)\);/,
+    )?.[1]
+    expect(axis_table).toBeTruthy()
+    const axes = [...(axis_table as string).matchAll(
+      /vec3<f32>\(([-\d.]+), ([-\d.]+), ([-\d.]+)\)/g,
+    )].map((match) => match.slice(1).map(Number))
+    expect(axes).toEqual(GIZMO_WORLD_AXES.map((axis) => [...axis]))
+
+    expect(GIZMO_ORIENTATION_WGSL).toMatch(
+      /mat3x3<f32>\(\s*view\[0\]\.xyz,\s*view\[1\]\.xyz,\s*view\[2\]\.xyz,\s*\)/,
+    )
+    expect(GIZMO_ORIENTATION_WGSL).toContain(
+      `return rot * GIZMO_AXES[axis];`,
+    )
+    expect(GIZMO_WGSL).toContain(
+      `let d = project_gizmo_axis(camera.view, i);`,
+    )
   })
 })

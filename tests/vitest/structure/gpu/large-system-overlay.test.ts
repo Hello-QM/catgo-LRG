@@ -332,7 +332,6 @@ describe(`visual source ownership and wiring`, () => {
     expect(scene).toContain(`var(--structure-gizmo-size)`)
     expect(structure).toContain(`const hud_safe = $derived(`)
     expect(structure).toContain(`style:--structure-gizmo-size={GIZMO_SIZE_CSS}`)
-    expect(structure).toContain(`<StructureScene\n            {hud_safe}`)
     expect(structure).toContain(`visual_state_source={scene_visual_state_source}\n            {hud_safe}`)
   })
 })

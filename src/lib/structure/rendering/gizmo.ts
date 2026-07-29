@@ -163,6 +163,26 @@ export function project_gizmo_axes(
   })
 }
 
+const wgsl_axis_vector = (axis: readonly [number, number, number]): string =>
+  `  vec3<f32>(${axis.map((value) => value.toFixed(1)).join(`, `)})`
+
+/** WGSL orientation contract generated from the same world-axis basis used by
+ * the CPU parity helper. The view matrix is column-major, matching the camera
+ * uniform packer and Three.js Matrix4 storage. */
+export const GIZMO_ORIENTATION_WGSL = `
+const GIZMO_AXES = array<vec3<f32>, 3>(
+${GIZMO_WORLD_AXES.map(wgsl_axis_vector).join(`,\n`)}
+);
+
+fn project_gizmo_axis(view : mat4x4<f32>, axis : u32) -> vec3<f32> {
+  let rot = mat3x3<f32>(
+    view[0].xyz,
+    view[1].xyz,
+    view[2].xyz,
+  );
+  return rot * GIZMO_AXES[axis];
+}`.trim()
+
 const hex_channel = (hex: string, offset: number): number =>
   Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
 
