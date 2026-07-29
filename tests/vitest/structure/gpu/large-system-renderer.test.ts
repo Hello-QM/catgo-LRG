@@ -10,6 +10,7 @@ import {
   pack_bond_render_uniform,
 } from '$lib/structure/gpu/large-system-renderer'
 import { srgb_channel_to_linear } from '$lib/structure/rendering/background'
+import type { ResolvedVisualShading } from '$lib/structure/rendering/visual-state'
 import { axis_colors, neg_axis_colors } from '$lib/colors'
 import type { TypedBondInput } from '$lib/structure/workers/bond-worker-runtime'
 
@@ -142,6 +143,20 @@ const make_mock_device = (
   // submits/writes count EVERY queue command so the device-loss tests can
   // assert the renderer submits NOTHING after `lost` resolves.
   const counters = { bind_group: 0, submits: 0, writes: 0 }
+  const buffers = new Map<string, {
+    label?: string
+    size: number
+    destroy_calls: number
+    destroy: () => void
+    mapAsync: () => Promise<void>
+    getMappedRange: () => ArrayBuffer
+    unmap: () => void
+  }>()
+  const write_records: {
+    label?: string
+    buffer_offset: number
+    bytes: Uint8Array
+  }[] = []
   const clear_values: { r: number; g: number; b: number; a: number }[] = []
   // Controllable device-loss promise, mirroring GPUDevice.lost. Resolving it
   // drives the renderer's one-per-lease loss subscription.
@@ -151,25 +166,34 @@ const make_mock_device = (
   })
   return {
     counters,
+    buffers,
+    write_records,
     clear_values,
     lost,
     resolve_lost,
     limits: { maxStorageBufferBindingSize: 1 << 27 },
-  createBuffer: (desc: { size: number; label?: string }) => ({
-    label: desc.label,
-    size: desc.size,
-    destroy: () => {},
-    mapAsync: () => Promise.resolve(),
-    getMappedRange: () => {
-      const buf = new ArrayBuffer(Math.max(desc.size, 8))
-      if (desc.label === `large-system-bond-validation`) {
-        const next = opts?.validation_reads?.shift()
-        if (next) new Uint32Array(buf).set(next)
-      }
-      return buf
-    },
-    unmap: () => {},
-  }),
+  createBuffer: (desc: { size: number; label?: string }) => {
+    const buffer = {
+      label: desc.label,
+      size: desc.size,
+      destroy_calls: 0,
+      destroy: () => {
+        buffer.destroy_calls += 1
+      },
+      mapAsync: () => Promise.resolve(),
+      getMappedRange: () => {
+        const buf = new ArrayBuffer(Math.max(desc.size, 8))
+        if (desc.label === `large-system-bond-validation`) {
+          const next = opts?.validation_reads?.shift()
+          if (next) new Uint32Array(buf).set(next)
+        }
+        return buf
+      },
+      unmap: () => {},
+    }
+    if (desc.label) buffers.set(desc.label, buffer)
+    return buffer
+  },
   createTexture: (desc: { size: { width: number; height: number } }) => ({
     width: desc.size.width,
     height: desc.size.height,
@@ -212,8 +236,25 @@ const make_mock_device = (
     finish: () => ({}),
   }),
   queue: {
-    writeBuffer: () => {
+    writeBuffer: (
+      buffer: { label?: string },
+      buffer_offset: number,
+      data: ArrayBuffer | ArrayBufferView,
+      data_offset = 0,
+      size?: number,
+    ) => {
       counters.writes += 1
+      const data_buffer = ArrayBuffer.isView(data) ? data.buffer : data
+      const view_offset = ArrayBuffer.isView(data) ? data.byteOffset : 0
+      const available = ArrayBuffer.isView(data) ? data.byteLength : data.byteLength
+      const byte_length = size ?? (available - data_offset)
+      write_records.push({
+        label: buffer.label,
+        buffer_offset,
+        bytes: Uint8Array.from(
+          new Uint8Array(data_buffer, view_offset + data_offset, byte_length),
+        ),
+      })
     },
     submit: () => {
       counters.submits += 1
@@ -322,6 +363,97 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     expect(clear.r).not.toBeCloseTo(linear_mid, 3)
 
     renderer.destroy()
+  })
+
+  it(`packs all 24 shared shading floats and skips structurally equal uploads`, () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const shading: ResolvedVisualShading = {
+      light_dir: [0.11, -0.22, 0.33],
+      is_ortho: true,
+      ambient: 0.44,
+      directional: 1.55,
+      spec_strength: 0.66,
+      roughness: 0.77,
+      metalness: 0.88,
+      render_style: 2,
+      outline: 0.99,
+      depth_cueing: 0.12,
+      depth_near: 3.25,
+      depth_far: 47.5,
+      depth_bg: [0.14, 0.25, 0.36],
+      toon_shadow_threshold: 0.31,
+      toon_highlight_threshold: 0.82,
+      toon_shadow_brightness: 0.43,
+    }
+
+    // Ignore constructor seeding and observe only the explicit shared-state upload.
+    device.write_records.length = 0
+    expect(renderer.set_shading(shading)).toBe(true)
+    const shading_writes = device.write_records.filter(
+      ({ label }) => label === `large-system-shading`,
+    )
+    expect(shading_writes).toHaveLength(1)
+    expect(shading_writes[0].buffer_offset).toBe(0)
+    const payload = new Float32Array(
+      shading_writes[0].bytes.buffer,
+      shading_writes[0].bytes.byteOffset,
+      shading_writes[0].bytes.byteLength / 4,
+    )
+    const expected = [
+      0.11, -0.22, 0.33, 1,
+      0.44, 1.55, 0.66, 0.77,
+      0.88, 2, 0.99, 0.12,
+      3.25, 47.5, 0, 0,
+      0.14, 0.25, 0.36, 0,
+      0.31, 0.82, 0.43, 0,
+    ]
+    expect(payload).toHaveLength(24)
+    expected.forEach((value, index) => expect(payload[index]).toBeCloseTo(value))
+
+    const equal_copy: ResolvedVisualShading = {
+      ...shading,
+      light_dir: [...shading.light_dir],
+      depth_bg: [...shading.depth_bg],
+    }
+    expect(renderer.set_shading(equal_copy)).toBe(false)
+    expect(device.write_records.filter(
+      ({ label }) => label === `large-system-shading`,
+    )).toHaveLength(1)
+
+    const changed_background: ResolvedVisualShading = {
+      ...equal_copy,
+      depth_bg: [equal_copy.depth_bg[0], equal_copy.depth_bg[1], 0.37],
+    }
+    expect(renderer.set_shading(changed_background)).toBe(true)
+    expect(device.write_records.filter(
+      ({ label }) => label === `large-system-shading`,
+    )).toHaveLength(2)
+
+    renderer.destroy()
+    renderer.destroy()
+    expect(device.buffers.get(`large-system-shading`)?.destroy_calls).toBe(1)
+    expect(device.buffers.get(`large-system-supercell`)?.destroy_calls).toBe(1)
+  })
+
+  it(`destroys renderer-owned uniforms exactly once after device loss`, async () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+
+    device.resolve_lost({ reason: `destroyed` })
+    await flush()
+    expect(renderer.get_diagnostics().device_lost).toBe(true)
+
+    renderer.destroy()
+    renderer.destroy()
+    expect(device.buffers.get(`large-system-shading`)?.destroy_calls).toBe(1)
+    expect(device.buffers.get(`large-system-supercell`)?.destroy_calls).toBe(1)
   })
 
   it(`supercell changes only replica state`, async () => {

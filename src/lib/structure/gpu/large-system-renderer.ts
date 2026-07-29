@@ -47,19 +47,19 @@ import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
+import {
+  same_visual_shading,
+  style_pbr,
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
+  type ResolvedVisualShading,
+} from '$lib/structure/rendering/visual-state'
 import type {
   ComputeBondsTypedResult,
   TypedBondInput,
   TypedBondTable,
 } from '$lib/structure/workers/bond-worker-runtime'
-import {
-  TOON_HIGHLIGHT_THRESHOLD,
-  TOON_SHADOW_BRIGHTNESS,
-  TOON_SHADOW_THRESHOLD,
-  style_pbr,
-  type WebgpuRenderStyle,
-} from '$lib/structure/rendering/visual-state'
-
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
 
@@ -205,11 +205,12 @@ function linear_to_srgb(c: number): number {
  *    3: depth_near | depth_far | pad | pad
  *    4: depth_cue_bg.rgb (LINEAR — the shader encodes it) | pad
  *    5: toon shadow_threshold | highlight_threshold | shadow_brightness | pad */
-const SHADING_BYTES = 96
+const SHADING_FLOATS = 24
+const SHADING_BYTES = SHADING_FLOATS * Float32Array.BYTES_PER_ELEMENT
 
 /** Neutral defaults, used until the overlay pushes the viewer's real settings.
  *  Mirrors the `glossy` lighting profile + depth cueing off. */
-const DEFAULT_SHADING: LargeSystemShading = {
+const DEFAULT_SHADING: ResolvedVisualShading = {
   light_dir: [0, 0, 1],
   is_ortho: false,
   ambient: 0.6,
@@ -227,31 +228,49 @@ const DEFAULT_SHADING: LargeSystemShading = {
   toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
 }
 
-/** The atom-shading state the overlay mirrors from the WebGL viewer. Every field
- *  is the resolved value the WebGL atom shader's matching uniform receives (see
- *  StructureScene's `get_shading_state` bridge) — NOT a raw setting — so the two
- *  renderers cannot drift. Colours are LINEAR RGB. */
-export type LargeSystemShading = {
-  /** View-space headlamp direction (x=right, y=up, z=toward camera). */
-  light_dir: [number, number, number]
-  is_ortho: boolean
-  ambient: number
-  directional: number
-  spec_strength: number
-  roughness: number
-  metalness: number
-  /** Shader branch: 0 glossy/metallic (GGX), 1 matte/soft/flat, 2 toon.
-   *  `matcap` has no WebGPU branch and resolves to 0 — see the overlay. */
-  render_style: WebgpuRenderStyle
-  outline: number
-  depth_cueing: number
-  depth_near: number
-  depth_far: number
-  /** Depth-cue fade target, LINEAR RGB (the shader sRGB-encodes it). */
-  depth_bg: [number, number, number]
-  toon_shadow_threshold: number
-  toon_highlight_threshold: number
-  toon_shadow_brightness: number
+/** Compatibility name for callers migrating to the shared visual-state core.
+ *  The renderer itself consumes ResolvedVisualShading directly. */
+export type LargeSystemShading = ResolvedVisualShading
+
+/** Pack the shared shading snapshot into the six-vec4 WGSL uniform layout. */
+function pack_shading_uniform(state: ResolvedVisualShading): Float32Array {
+  const f = new Float32Array(SHADING_FLOATS)
+  // vec4 0: headlamp xyz + is_ortho flag
+  f[0] = state.light_dir[0]
+  f[1] = state.light_dir[1]
+  f[2] = state.light_dir[2]
+  f[3] = state.is_ortho ? 1 : 0
+  // vec4 1: ambient, directional, spec_strength, roughness
+  f[4] = state.ambient
+  f[5] = state.directional
+  f[6] = state.spec_strength
+  f[7] = state.roughness
+  // vec4 2: metalness, render_style, outline, depth_cueing
+  f[8] = state.metalness
+  f[9] = state.render_style
+  f[10] = state.outline
+  f[11] = state.depth_cueing
+  // vec4 3: depth near/far (+ 2 zero-initialized padding floats)
+  f[12] = state.depth_near
+  f[13] = state.depth_far
+  // vec4 4: depth-cue background, LINEAR rgb (+ zero padding)
+  f[16] = state.depth_bg[0]
+  f[17] = state.depth_bg[1]
+  f[18] = state.depth_bg[2]
+  // vec4 5: toon thresholds (+ zero padding)
+  f[20] = state.toon_shadow_threshold
+  f[21] = state.toon_highlight_threshold
+  f[22] = state.toon_shadow_brightness
+  return f
+}
+
+/** Keep the cached comparison snapshot independent of caller-owned tuples. */
+function snapshot_shading(state: ResolvedVisualShading): ResolvedVisualShading {
+  return {
+    ...state,
+    light_dir: [...state.light_dir],
+    depth_bg: [...state.depth_bg],
+  }
 }
 
 /** MSAA sample count for the overlay. 4× MSAA + alpha-to-coverage gives the
@@ -593,7 +612,7 @@ struct Supercell {
 @group(0) @binding(7) var<storage, read> ghost_images : array<u32>;
 
 // Atom shading uniform — the WebGL atom shader's uniform set, mirrored 1:1 so
-// both renderers produce the same pixels. See LargeSystemShading (TS side).
+// both renderers produce the same pixels. See ResolvedVisualShading (TS side).
 struct Shading {
   light_dir : vec4<f32>,  // xyz = view-space headlamp, w = 1 when orthographic
   params0   : vec4<f32>,  // ambient, directional, spec_strength, roughness
@@ -1712,7 +1731,7 @@ export type LargeSystemRenderer = {
    *  uploads when a field actually changed. Returns true when it DID change, so
    *  the caller can mark the frame dirty (depth-cue near/far track the camera,
    *  so this fires on every camera move). */
-  set_shading(state: LargeSystemShading): boolean
+  set_shading(state: ResolvedVisualShading): boolean
   /** Mirror the DOM-side inputs the corner gizmo's placement needs: the device
    *  pixel ratio (the widget spec — size clamp, offsets, line width — is in CSS
    *  px) and the pane's HUD safe-area insets (the docked-toolbar avoidance the
@@ -1838,46 +1857,18 @@ export function create_large_system_renderer(
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
-  // Atom/bond shading uniform. Bound by BOTH render pipelines (impostor binding
-  // 6, bond binding 6) so the two shade from one source of truth. Seeded with
-  // DEFAULT_SHADING so the very first frame is sane even if the overlay hasn't
-  // pushed the viewer's settings yet.
+  // Shared atom/bond shading uniform. The atom impostor binds it at 8; the bond
+  // renderer binds the same buffer at 6. Seeded with DEFAULT_SHADING so the
+  // first frame is sane before the overlay publishes the viewer's settings.
   const shading_buffer = device.createBuffer({
     label: `large-system-shading`,
     size: SHADING_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  let shading_state: LargeSystemShading = { ...DEFAULT_SHADING }
+  let shading_state = snapshot_shading(DEFAULT_SHADING)
 
   function upload_shading_uniform(): void {
-    const f = new Float32Array(SHADING_BYTES / 4)
-    const s = shading_state
-    // vec4 0: headlamp xyz + is_ortho flag
-    f[0] = s.light_dir[0]
-    f[1] = s.light_dir[1]
-    f[2] = s.light_dir[2]
-    f[3] = s.is_ortho ? 1 : 0
-    // vec4 1: ambient, directional, spec_strength, roughness
-    f[4] = s.ambient
-    f[5] = s.directional
-    f[6] = s.spec_strength
-    f[7] = s.roughness
-    // vec4 2: metalness, render_style, outline, depth_cueing
-    f[8] = s.metalness
-    f[9] = s.render_style
-    f[10] = s.outline
-    f[11] = s.depth_cueing
-    // vec4 3: depth near/far (+ 2 pad)
-    f[12] = s.depth_near
-    f[13] = s.depth_far
-    // vec4 4: depth-cue background, LINEAR rgb (+ pad)
-    f[16] = s.depth_bg[0]
-    f[17] = s.depth_bg[1]
-    f[18] = s.depth_bg[2]
-    // vec4 5: toon thresholds (+ pad)
-    f[20] = s.toon_shadow_threshold
-    f[21] = s.toon_highlight_threshold
-    f[22] = s.toon_shadow_brightness
+    const f = pack_shading_uniform(shading_state)
     device.queue.writeBuffer(shading_buffer, 0, f.buffer, f.byteOffset, SHADING_BYTES)
   }
   upload_shading_uniform()
@@ -3549,31 +3540,10 @@ export function create_large_system_renderer(
       clear_color.b = linear_to_srgb(rgb[2])
       clear_color.a = 1
     },
-    set_shading(state: LargeSystemShading): boolean {
+    set_shading(state: ResolvedVisualShading): boolean {
       if (destroyed || device_lost) return false
-      const prev = shading_state
-      const same = prev.light_dir[0] === state.light_dir[0] &&
-        prev.light_dir[1] === state.light_dir[1] &&
-        prev.light_dir[2] === state.light_dir[2] &&
-        prev.is_ortho === state.is_ortho &&
-        prev.ambient === state.ambient &&
-        prev.directional === state.directional &&
-        prev.spec_strength === state.spec_strength &&
-        prev.roughness === state.roughness &&
-        prev.metalness === state.metalness &&
-        prev.render_style === state.render_style &&
-        prev.outline === state.outline &&
-        prev.depth_cueing === state.depth_cueing &&
-        prev.depth_near === state.depth_near &&
-        prev.depth_far === state.depth_far &&
-        prev.depth_bg[0] === state.depth_bg[0] &&
-        prev.depth_bg[1] === state.depth_bg[1] &&
-        prev.depth_bg[2] === state.depth_bg[2] &&
-        prev.toon_shadow_threshold === state.toon_shadow_threshold &&
-        prev.toon_highlight_threshold === state.toon_highlight_threshold &&
-        prev.toon_shadow_brightness === state.toon_shadow_brightness
-      if (same) return false
-      shading_state = { ...state }
+      if (same_visual_shading(shading_state, state)) return false
+      shading_state = snapshot_shading(state)
       upload_shading_uniform()
       return true
     },
@@ -4369,6 +4339,8 @@ export function create_large_system_renderer(
         // some implementations / already-lost contexts may throw — ignore
       }
       camera_buffer.destroy()
+      supercell_buffer.destroy()
+      shading_buffer.destroy()
       positions_buffer?.destroy()
       radii_buffer?.destroy()
       colors_buffer?.destroy()
