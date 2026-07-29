@@ -101,6 +101,10 @@ describe(`shared visual state`, () => {
       resolve(process.cwd(), `src/lib/structure/SelectionHighlights.svelte`),
       `utf8`,
     )
+    const frozen_atom_indicators = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/FrozenAtomIndicators.svelte`),
+      `utf8`,
+    )
 
     expect(atom_impostors).toContain(`render_style_to_legacy_impostor(render_style)`)
     expect(atom_impostors).not.toContain(
@@ -108,5 +112,7 @@ describe(`shared visual state`, () => {
     )
     expect(selection_highlights).toContain(`VISUAL_RADIUS_SCALE * 1.7`)
     expect(selection_highlights).not.toMatch(/\*\s*0\.85\b/)
+    expect(frozen_atom_indicators).toContain(`VISUAL_RADIUS_SCALE * 1.7`)
+    expect(frozen_atom_indicators).not.toMatch(/0?\.85\b/)
   })
 })
