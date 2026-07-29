@@ -18,6 +18,7 @@
   } from '$lib/structure/rendering/visual-state'
   import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
   import { apply_webgl_background } from '$lib/structure/rendering/visual-adapters'
+  import { mutate_camera_pose } from '$lib/structure/rendering/camera-revision'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -1545,13 +1546,18 @@
     camera_revision += 1
   }
 
-  function finish_camera_change(next_target?: Vec3 | null) {
+  function finish_camera_change(
+    next_target?: Vec3 | null,
+    revision_before = camera_revision,
+  ) {
     if (next_target) current_camera_target = copy_vec3(next_target)
     else sync_current_camera_target_from_controls()
     snapshot_view()
     clear_trackball_rotation_inertia()
     sync_trackball_reset_refs()
-    note_camera_change()
+    // Some imperative paths call orbit_controls.update(), which may emit an
+    // onchange synchronously. Publish the final pose exactly once either way.
+    if (camera_revision === revision_before) note_camera_change()
     mark_dirty()
   }
 
@@ -1698,13 +1704,19 @@
   function apply_orbit_target(target: Vec3) {
     untrack(() => {
       if (!orbit_controls?.target) return
-      orbit_controls.target.set(...target)
-      current_camera_target = copy_vec3(target)
-      clear_trackball_rotation_inertia()
-      sync_trackball_reset_refs()
-      orbit_controls.update?.()
-      // mark_dirty: imperative orbit_controls.target.set + .update() bypasses <T.> prop chain
-      mark_dirty()
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        orbit_controls!.target.set(...target)
+        // Preserve the non-pose bookkeeping even when the target was already
+        // equal. These refs are TrackballControls reset/inertia state, not a
+        // reason to publish another visual revision.
+        current_camera_target = copy_vec3(target)
+        clear_trackball_rotation_inertia()
+        sync_trackball_reset_refs()
+        orbit_controls!.update?.()
+      }, () => {
+        finish_camera_change(target, revision_before)
+      })
     })
   }
 
@@ -1717,10 +1729,15 @@
     if (_initial_up_set || !camera || !orbit_controls) return
     _initial_up_set = true
     const [ux, uy, uz] = initial_view?.up ?? [0, 0, 1]
-    camera.up.set(ux, uy, uz).normalize()
-    const ctrl = orbit_controls as any
-    if (ctrl._up0) ctrl._up0.copy(camera.up)
-    orbit_controls.update?.()
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      camera!.up.set(ux, uy, uz).normalize()
+      const ctrl = orbit_controls as any
+      if (ctrl._up0) ctrl._up0.copy(camera!.up)
+      orbit_controls!.update?.()
+    }, () => {
+      finish_camera_change(undefined, revision_before)
+    })
   })
 
   // Lock the rotation pivot on initial structure load or explicit recenter.
@@ -1771,31 +1788,33 @@
       const dist = camera.position.distanceTo(orbit_controls.target || new Vector3())
       const cam_distance = Math.max(dist, 1)
       const cam_pos = center.clone().add(new Vector3(0, 0, cam_distance))
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        camera!.position.copy(cam_pos)
+        camera!.up.set(0, 1, 0)
+        camera!.lookAt(center)
 
-      camera.position.copy(cam_pos)
-      camera.up.set(0, 1, 0)
-      camera.lookAt(center)
+        orbit_controls!.target.copy(center)
+        if ((orbit_controls as any)._target0) {
+          ;(orbit_controls as any)._target0.copy(center)
+        }
+        if ((orbit_controls as any)._eye0) {
+          ;(orbit_controls as any)._eye0.copy(new Vector3(0, 0, cam_distance))
+        }
+        if ((orbit_controls as any)._up0) {
+          ;(orbit_controls as any)._up0.set(0, 1, 0)
+        }
+        const ctrl = orbit_controls as any
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        ctrl._lastAngle = 0
+        orbit_controls!.update()
 
-      orbit_controls.target.copy(center)
-      if ((orbit_controls as any)._target0) {
-        ;(orbit_controls as any)._target0.copy(center)
-      }
-      if ((orbit_controls as any)._eye0) {
-        ;(orbit_controls as any)._eye0.copy(new Vector3(0, 0, cam_distance))
-      }
-      if ((orbit_controls as any)._up0) {
-        ;(orbit_controls as any)._up0.set(0, 1, 0)
-      }
-      const ctrl = orbit_controls as any
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      ctrl._lastAngle = 0
-      orbit_controls.update()
-
-      locked_rotation_pivot = vector_to_vec3(center)
-      current_camera_target = vector_to_vec3(center)
-      last_center_trigger = center_camera_trigger
-      // mark_dirty: imperative camera.position/up/lookAt + orbit_controls.update() bypass <T.> prop chain
-      mark_dirty()
+        locked_rotation_pivot = vector_to_vec3(center)
+        current_camera_target = vector_to_vec3(center)
+        last_center_trigger = center_camera_trigger
+      }, () => {
+        finish_camera_change(vector_to_vec3(center), revision_before)
+      })
     })
   })
 
@@ -1841,39 +1860,41 @@
       // Preserve the user's pan (look-at point) if they moved; else re-centre on the structure.
       const center = _view_target ? _view_target.clone() : new Vector3(...(current_camera_target || rotation_target || [0, 0, 0]))
       const dir = (_view_dir.lengthSq() > 1e-6 ? _view_dir.clone() : new Vector3(0, -1, 0)).normalize()
-
-      if (cam.isPerspectiveCamera) {
-        // Match the previous apparent size: distance = vheight / (2·tan(fov/2)).
-        const fov_rad = (cam.fov || fov) * Math.PI / 180
-        const dist = _view_vheight > 0
-          ? _view_vheight / (2 * Math.tan(fov_rad / 2))
-          : Math.max(1, structure_size) * (60 / fov)
-        camera.position.copy(center).addScaledVector(dir, dist)
-      } else if (cam.isOrthographicCamera) {
-        // Distance is irrelevant to ortho scale; keep a stable viewpoint and set
-        // zoom to reproduce the previous apparent size.
-        camera.position.copy(center).addScaledVector(dir, Math.max(1, structure_size) * 2)
-        if (_view_vheight > 0 && (cam.top - cam.bottom) !== 0) {
-          cam.zoom = (cam.top - cam.bottom) / _view_vheight
-          cam.updateProjectionMatrix()
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        if (cam.isPerspectiveCamera) {
+          // Match the previous apparent size: distance = vheight / (2·tan(fov/2)).
+          const fov_rad = (cam.fov || fov) * Math.PI / 180
+          const dist = _view_vheight > 0
+            ? _view_vheight / (2 * Math.tan(fov_rad / 2))
+            : Math.max(1, structure_size) * (60 / fov)
+          camera!.position.copy(center).addScaledVector(dir, dist)
+        } else if (cam.isOrthographicCamera) {
+          // Distance is irrelevant to ortho scale; keep a stable viewpoint and set
+          // zoom to reproduce the previous apparent size.
+          camera!.position.copy(center).addScaledVector(dir, Math.max(1, structure_size) * 2)
+          if (_view_vheight > 0 && (cam.top - cam.bottom) !== 0) {
+            cam.zoom = (cam.top - cam.bottom) / _view_vheight
+            cam.updateProjectionMatrix()
+          }
         }
-      }
-      camera.up.copy(_view_up).normalize()
-      camera.lookAt(center)
-      orbit_controls.target.copy(center)
-      current_camera_target = vector_to_vec3(center)
-      const ctrl = orbit_controls as any
-      ctrl._target0?.copy(center)
-      ctrl._eye0?.copy(new Vector3().subVectors(camera.position, center))
-      ctrl._up0?.copy(camera.up)
-      // Clear any pending TrackballControls rotation so update() doesn't re-apply
-      // a leftover delta and nudge the camera off the exact axis (the "not true y"
-      // gap on round-trip).
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      ctrl._lastAngle = 0
-      orbit_controls.update?.()
-      // mark_dirty: imperative camera + orbit_controls writes bypass the <T.> prop chain
-      mark_dirty()
+        camera!.up.copy(_view_up).normalize()
+        camera!.lookAt(center)
+        orbit_controls!.target.copy(center)
+        current_camera_target = vector_to_vec3(center)
+        const ctrl = orbit_controls as any
+        ctrl._target0?.copy(center)
+        ctrl._eye0?.copy(new Vector3().subVectors(camera!.position, center))
+        ctrl._up0?.copy(camera!.up)
+        // Clear any pending TrackballControls rotation so update() doesn't re-apply
+        // a leftover delta and nudge the camera off the exact axis (the "not true y"
+        // gap on round-trip).
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        ctrl._lastAngle = 0
+        orbit_controls!.update?.()
+      }, () => {
+        finish_camera_change(vector_to_vec3(center), revision_before)
+      })
     }))
   })
 
@@ -1910,15 +1931,18 @@
     if (reset_camera_up_trigger === _last_up_trigger) return
     _last_up_trigger = reset_camera_up_trigger
     if (!camera || !orbit_controls) return
-    camera.up.set(0, 0, 1)
-    const ctrl = orbit_controls as any
-    if (ctrl._up0) ctrl._up0.set(0, 0, 1)
-    if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-    ctrl._lastAngle = 0
-    if (ctrl.target) camera.lookAt(ctrl.target)
-    if (typeof ctrl.update === `function`) ctrl.update()
-    // mark_dirty: imperative camera.up + camera.lookAt + orbit_controls.update() bypass <T.> prop chain
-    mark_dirty()
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      camera!.up.set(0, 0, 1)
+      const ctrl = orbit_controls as any
+      if (ctrl._up0) ctrl._up0.set(0, 0, 1)
+      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+      ctrl._lastAngle = 0
+      if (ctrl.target) camera!.lookAt(ctrl.target)
+      if (typeof ctrl.update === `function`) ctrl.update()
+    }, () => {
+      finish_camera_change(undefined, revision_before)
+    })
   })
 
   // Track initial computed zoom for reset
@@ -2102,18 +2126,23 @@
     const distance = camera.position.distanceTo(target_pos)
     const new_camera_pos = aligned_direction.multiplyScalar(distance).add(target_pos)
 
-    // Update camera
-    camera.position.copy(new_camera_pos)
-    camera.up.copy(aligned_up).normalize()
-    camera.lookAt(target_pos)
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      // Update camera
+      camera!.position.copy(new_camera_pos)
+      camera!.up.copy(aligned_up).normalize()
+      camera!.lookAt(target_pos)
 
-    // Update controls - use stored target, not reactive rotation_target
-    if (orbit_controls.target) {
-      orbit_controls.target.set(...current_camera_target)
-    }
-    if (orbit_controls.update) {
-      orbit_controls.update()
-    }
+      // Update controls - use stored target, not reactive rotation_target
+      if (orbit_controls!.target) {
+        orbit_controls!.target.set(...current_camera_target)
+      }
+      if (orbit_controls!.update) {
+        orbit_controls!.update()
+      }
+    }, () => {
+      finish_camera_change(vector_to_vec3(target_pos), revision_before)
+    })
     // R3.4: ring rotation now updates per-frame in pencil mode via useTask;
     // no explicit kick needed here.
   }
@@ -5464,6 +5493,13 @@
       rotation_target?.[0],
       rotation_target?.[1],
       rotation_target?.[2],
+      camera_position[0],
+      camera_position[1],
+      camera_position[2],
+      computed_zoom,
+      fov,
+      camera_near,
+      camera_far,
       camera_revision,
     ]
     visual_revision += 1

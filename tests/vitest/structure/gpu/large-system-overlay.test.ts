@@ -382,7 +382,8 @@ describe(`visual source ownership and wiring`, () => {
     expect(structure).toContain(
       `bind:camera_revision={scene_camera_revision}`,
     )
-    expect(structure.match(/scene_camera_revision \+= 1/g)).toHaveLength(3)
+    expect(structure).toContain(`function note_scene_camera_change(`)
+    expect(structure).toContain(`mutate_camera_pose(`)
     expect(overlay).not.toContain(`getComputedStyle`)
     expect(overlay).not.toContain(`background_opacity`)
     expect(overlay).not.toContain(`get_shading`)

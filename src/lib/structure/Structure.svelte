@@ -78,6 +78,7 @@
   import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import type { VisualStateSource } from './rendering/visual-state'
+  import { mutate_camera_pose } from './rendering/camera-revision'
   import {
     EMPTY_HUD_SAFE_AREA,
     GIZMO_SIZE_CSS,
@@ -269,6 +270,13 @@
   let scene_visual_state_source = $state<VisualStateSource | null>(null)
   let scene_camera_revision = $state(0)
 
+  function note_scene_camera_change(revision_before: number) {
+    // orbit_controls.update() may synchronously emit its own change event through
+    // StructureScene. In that case the bound revision already advanced and this
+    // parent-side bridge must not publish the same final pose twice.
+    if (scene_camera_revision === revision_before) scene_camera_revision += 1
+  }
+
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
   const charge_state = create_charge_labels_state()
@@ -303,51 +311,54 @@
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
         const ctrl = orbit_controls as any
+        const revision_before = scene_camera_revision
 
-        // Always orbit around the SCENE CENTER (structure's center of mass).
-        // Rotate BOTH camera and target around it, preserving their relative
-        // offset (the pan displacement). This guarantees the structure always
-        // rotates around its own center, regardless of panning.
-        const pivot = rotation_target_ref
-          ? new Vector3(...rotation_target_ref)
-          : new Vector3(0, 0, 0)
+        mutate_camera_pose(cam, target, () => {
+          // Always orbit around the SCENE CENTER (structure's center of mass).
+          // Rotate BOTH camera and target around it, preserving their relative
+          // offset (the pan displacement). This guarantees the structure always
+          // rotates around its own center, regardless of panning.
+          const pivot = rotation_target_ref
+            ? new Vector3(...rotation_target_ref)
+            : new Vector3(0, 0, 0)
 
-        cam.updateMatrixWorld(true)
+          cam.updateMatrixWorld(true)
 
-        // Build rotation quaternion
-        const q = new Quaternion()
-        if (axis === `y`) {
-          // Yaw: rotate around world Y (turntable)
-          q.setFromAxisAngle(new Vector3(0, 1, 0), angle)
-        } else if (axis === `x`) {
-          // Pitch: rotate around camera's local right axis
-          const right = new Vector3()
-          cam.matrixWorld.extractBasis(right, new Vector3(), new Vector3())
-          right.normalize()
-          q.setFromAxisAngle(right, angle)
-        }
+          // Build rotation quaternion
+          const q = new Quaternion()
+          if (axis === `y`) {
+            // Yaw: rotate around world Y (turntable)
+            q.setFromAxisAngle(new Vector3(0, 1, 0), angle)
+          } else if (axis === `x`) {
+            // Pitch: rotate around camera's local right axis
+            const right = new Vector3()
+            cam.matrixWorld.extractBasis(right, new Vector3(), new Vector3())
+            right.normalize()
+            q.setFromAxisAngle(right, angle)
+          }
 
-        // Rotate camera position around pivot
-        const cam_off = cam.position.clone().sub(pivot)
-        cam_off.applyQuaternion(q)
-        cam.position.copy(pivot).add(cam_off)
+          // Rotate camera position around pivot
+          const cam_off = cam.position.clone().sub(pivot)
+          cam_off.applyQuaternion(q)
+          cam.position.copy(pivot).add(cam_off)
 
-        // Rotate target around same pivot (preserves pan offset)
-        const tgt_off = target.clone().sub(pivot)
-        tgt_off.applyQuaternion(q)
-        target.copy(pivot).add(tgt_off)
+          // Rotate target around same pivot (preserves pan offset)
+          const tgt_off = target.clone().sub(pivot)
+          tgt_off.applyQuaternion(q)
+          target.copy(pivot).add(tgt_off)
 
-        // Rotate up vector so camera stays oriented correctly
-        cam.up.applyQuaternion(q)
-        cam.lookAt(target)
-        cam.updateMatrixWorld(true)
+          // Rotate up vector so camera stays oriented correctly
+          cam.up.applyQuaternion(q)
+          cam.lookAt(target)
+          cam.updateMatrixWorld(true)
 
-        // Sync TrackballControls internal state
-        ctrl._lastAngle = 0
-        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-        if (ctrl._target0) ctrl._target0.copy(target)
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-        if (ctrl._up0) ctrl._up0.copy(cam.up)
+          // Sync TrackballControls internal state
+          ctrl._lastAngle = 0
+          if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+          if (ctrl._target0) ctrl._target0.copy(target)
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+          if (ctrl._up0) ctrl._up0.copy(cam.up)
+        }, () => note_scene_camera_change(revision_before))
       } else {
         // Fallback: rotate the scene directly
         const r = [...scene_props.rotation] as Vec3
@@ -356,21 +367,21 @@
         else r[2] += angle
         scene_props.rotation = r
       }
-      scene_camera_revision += 1
     },
     zoom(delta) {
       if (delta === 0) return
       if (orbit_controls) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
-        const cam_dist = cam.position.distanceTo(target)
-        const dir = new Vector3().subVectors(cam.position, target).normalize()
-        cam.position.addScaledVector(dir, -delta)
-        cam.updateMatrixWorld(true)
+        const revision_before = scene_camera_revision
+        mutate_camera_pose(cam, target, () => {
+          const dir = new Vector3().subVectors(cam.position, target).normalize()
+          cam.position.addScaledVector(dir, -delta)
+          cam.updateMatrixWorld(true)
 
-        const ctrl = orbit_controls as any
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-        scene_camera_revision += 1
+          const ctrl = orbit_controls as any
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+        }, () => note_scene_camera_change(revision_before))
       }
     },
     pan(dx, dy) {
@@ -381,55 +392,57 @@
         const ctrl = orbit_controls as any
         const cam_dist = cam.position.distanceTo(target)
         const canvas_h = height ?? 600
+        const revision_before = scene_camera_revision
 
-        // Convert pixel delta to world units using camera FOV
-        const fov_rad = (cam.fov ?? 50) * Math.PI / 180
-        const world_per_pixel = (2 * cam_dist * Math.tan(fov_rad / 2)) / canvas_h
-        const s = world_per_pixel * 0.35
+        mutate_camera_pose(cam, target, () => {
+          // Convert pixel delta to world units using camera FOV
+          const fov_rad = (cam.fov ?? 50) * Math.PI / 180
+          const world_per_pixel = (2 * cam_dist * Math.tan(fov_rad / 2)) / canvas_h
+          const s = world_per_pixel * 0.35
 
-        // Ensure matrixWorld reflects latest rotation
-        cam.updateMatrixWorld(true)
+          // Ensure matrixWorld reflects latest rotation
+          cam.updateMatrixWorld(true)
 
-        // Use camera's right/up vectors so pan is screen-aligned at any viewing angle
-        const right = new Vector3()
-        const up = new Vector3()
-        cam.matrixWorld.extractBasis(right, up, new Vector3())
-        right.normalize()
-        up.normalize()
+          // Use camera's right/up vectors so pan is screen-aligned at any viewing angle
+          const right = new Vector3()
+          const up = new Vector3()
+          cam.matrixWorld.extractBasis(right, up, new Vector3())
+          right.normalize()
+          up.normalize()
 
-        const shift = new Vector3()
-          .addScaledVector(right, dx * s)
-          .addScaledVector(up, -dy * s)
+          const shift = new Vector3()
+            .addScaledVector(right, dx * s)
+            .addScaledVector(up, -dy * s)
 
-        // Move camera AND target together (pure translation, no rotation)
-        cam.position.add(shift)
-        target.add(shift)
+          // Move camera AND target together (pure translation, no rotation)
+          cam.position.add(shift)
+          target.add(shift)
 
-        // Hard clamp: keep target within visible frustum
-        const origin = rotation_target_ref
-          ? new Vector3(...rotation_target_ref)
-          : new Vector3(0, 0, 0)
-        const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
-        const max_drift = visible_h * 0.3
-        const drift = target.distanceTo(origin)
-        if (drift > max_drift) {
-          const excess = new Vector3().subVectors(target, origin)
-          excess.setLength(max_drift)
-          const clamped_target = origin.clone().add(excess)
-          const correction = new Vector3().subVectors(clamped_target, target)
-          cam.position.add(correction)
-          target.add(correction)
-        }
+          // Hard clamp: keep target within visible frustum
+          const origin = rotation_target_ref
+            ? new Vector3(...rotation_target_ref)
+            : new Vector3(0, 0, 0)
+          const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
+          const max_drift = visible_h * 0.3
+          const drift = target.distanceTo(origin)
+          if (drift > max_drift) {
+            const excess = new Vector3().subVectors(target, origin)
+            excess.setLength(max_drift)
+            const clamped_target = origin.clone().add(excess)
+            const correction = new Vector3().subVectors(clamped_target, target)
+            cam.position.add(correction)
+            target.add(correction)
+          }
 
-        cam.updateMatrixWorld(true)
+          cam.updateMatrixWorld(true)
 
-        // Sync ALL TrackballControls internal state — do NOT call ctrl.update()
-        ctrl._lastAngle = 0
-        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-        if (ctrl._target0) ctrl._target0.copy(target)
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-        if (ctrl._up0) ctrl._up0.copy(cam.up)
-        scene_camera_revision += 1
+          // Sync ALL TrackballControls internal state — do NOT call ctrl.update()
+          ctrl._lastAngle = 0
+          if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+          if (ctrl._target0) ctrl._target0.copy(target)
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+          if (ctrl._up0) ctrl._up0.copy(cam.up)
+        }, () => note_scene_camera_change(revision_before))
       }
     },
     atom_at(sx, sy) {
@@ -614,35 +627,38 @@
         .addScaledVector(right, -disp_x * world_per_norm_x)
         .addScaledVector(up, disp_y * world_per_norm_y)
 
-      // Set absolute positions (not additive — no drift accumulation)
-      cam.position.copy(grab_cam_pos!).add(world_shift)
-      target.copy(grab_target_pos!).add(world_shift)
+      const revision_before = scene_camera_revision
+      mutate_camera_pose(cam, target, () => {
+        // Set absolute positions (not additive — no drift accumulation)
+        cam.position.copy(grab_cam_pos!).add(world_shift)
+        target.copy(grab_target_pos!).add(world_shift)
 
-      // Clamp: keep target within visible frustum
-      const origin = rotation_target_ref
-        ? new Vector3(...rotation_target_ref)
-        : new Vector3(0, 0, 0)
-      // max_drift uses the un-gained visible height to set an absolute screen limit
-      const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
-      const max_drift = visible_h * 0.25
-      const drift = target.distanceTo(origin)
-      if (drift > max_drift) {
-        const excess = new Vector3().subVectors(target, origin)
-        excess.setLength(max_drift)
-        const clamped = origin.clone().add(excess)
-        const correction = new Vector3().subVectors(clamped, target)
-        cam.position.add(correction)
-        target.add(correction)
-      }
+        // Clamp: keep target within visible frustum
+        const origin = rotation_target_ref
+          ? new Vector3(...rotation_target_ref)
+          : new Vector3(0, 0, 0)
+        // max_drift uses the un-gained visible height to set an absolute screen limit
+        const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
+        const max_drift = visible_h * 0.25
+        const drift = target.distanceTo(origin)
+        if (drift > max_drift) {
+          const excess = new Vector3().subVectors(target, origin)
+          excess.setLength(max_drift)
+          const clamped = origin.clone().add(excess)
+          const correction = new Vector3().subVectors(clamped, target)
+          cam.position.add(correction)
+          target.add(correction)
+        }
 
-      cam.updateMatrixWorld(true)
+        cam.updateMatrixWorld(true)
 
-      // Sync TrackballControls
-      ctrl._lastAngle = 0
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      if (ctrl._target0) ctrl._target0.copy(target)
-      if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-      if (ctrl._up0) ctrl._up0.copy(cam.up)
+        // Sync TrackballControls
+        ctrl._lastAngle = 0
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        if (ctrl._target0) ctrl._target0.copy(target)
+        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+        if (ctrl._up0) ctrl._up0.copy(cam.up)
+      }, () => note_scene_camera_change(revision_before))
       return
     }
 
@@ -2407,17 +2423,20 @@
     camera_has_moved = false
 
     if (orbit_controls && camera) {
-      if (orbit_controls.target && rotation_target_ref) {
-        const [x, y, z] = rotation_target_ref
-        orbit_controls.target.set(x, y, z)
-      }
-      if (`zoom` in camera && initial_computed_zoom !== undefined) {
-        camera.zoom = initial_computed_zoom
-        camera.updateProjectionMatrix()
-      }
-      if (typeof orbit_controls.update === `function`) {
-        orbit_controls.update()
-      }
+      const revision_before = scene_camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        if (orbit_controls.target && rotation_target_ref) {
+          const [x, y, z] = rotation_target_ref
+          orbit_controls.target.set(x, y, z)
+        }
+        if (`zoom` in camera && initial_computed_zoom !== undefined) {
+          camera.zoom = initial_computed_zoom
+          camera.updateProjectionMatrix()
+        }
+        if (typeof orbit_controls.update === `function`) {
+          orbit_controls.update()
+        }
+      }, () => note_scene_camera_change(revision_before))
     }
 
     on_camera_reset?.({ structure, camera_has_moved, camera_position: [0, 0, 0] })
@@ -2439,17 +2458,20 @@
     if (dir_v.lengthSq() < 1e-12 || up_v.lengthSq() < 1e-12) return
     dir_v.normalize()
     const dist = camera.position.distanceTo(target) || 1
-    camera.position.copy(target).addScaledVector(dir_v, -dist)
-    camera.up.copy(up_v.normalize())
-    camera.lookAt(target)
-    camera.updateMatrixWorld?.(true)
-    // Clear pending TrackballControls rotation inertia (staticMoving is false,
-    // so update() would re-apply the last drag's _lastAxis/_lastAngle and pull
-    // the pose off-target — same pattern as every other imperative pose path).
-    const ctrl = orbit_controls as any
-    if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-    ctrl._lastAngle = 0
-    orbit_controls.update?.()
+    const revision_before = scene_camera_revision
+    mutate_camera_pose(camera, target, () => {
+      camera.position.copy(target).addScaledVector(dir_v, -dist)
+      camera.up.copy(up_v.normalize())
+      camera.lookAt(target)
+      camera.updateMatrixWorld?.(true)
+      // Clear pending TrackballControls rotation inertia (staticMoving is false,
+      // so update() would re-apply the last drag's _lastAxis/_lastAngle and pull
+      // the pose off-target — same pattern as every other imperative pose path).
+      const ctrl = orbit_controls as any
+      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+      ctrl._lastAngle = 0
+      orbit_controls.update?.()
+    }, () => note_scene_camera_change(revision_before))
     if (mark_moved) camera_has_moved = true
   }
 
