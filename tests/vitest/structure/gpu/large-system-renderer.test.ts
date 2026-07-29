@@ -439,6 +439,63 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     expect(device.buffers.get(`large-system-supercell`)?.destroy_calls).toBe(1)
   })
 
+  it(`detects in-place caller tuple mutations without breaking equal no-ops`, () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const shading: ResolvedVisualShading = {
+      light_dir: [0.11, -0.22, 0.33],
+      is_ortho: false,
+      ambient: 0.44,
+      directional: 1.55,
+      spec_strength: 0.66,
+      roughness: 0.77,
+      metalness: 0.88,
+      render_style: 2,
+      outline: 0.99,
+      depth_cueing: 0.12,
+      depth_near: 3.25,
+      depth_far: 47.5,
+      depth_bg: [0.14, 0.25, 0.36],
+      toon_shadow_threshold: 0.31,
+      toon_highlight_threshold: 0.82,
+      toon_shadow_brightness: 0.43,
+    }
+
+    device.write_records.length = 0
+    expect(renderer.set_shading(shading)).toBe(true)
+    expect(renderer.set_shading(shading)).toBe(false)
+
+    shading.light_dir[0] = 0.51
+    shading.depth_bg[2] = 0.71
+    expect(renderer.set_shading(shading)).toBe(true)
+
+    const shading_writes = device.write_records.filter(
+      ({ label }) => label === `large-system-shading`,
+    )
+    expect(shading_writes).toHaveLength(2)
+    const payload = new Float32Array(
+      shading_writes[1].bytes.buffer,
+      shading_writes[1].bytes.byteOffset,
+      shading_writes[1].bytes.byteLength / 4,
+    )
+    expect(payload[0]).toBeCloseTo(0.51)
+    expect(payload[18]).toBeCloseTo(0.71)
+
+    expect(renderer.set_shading({
+      ...shading,
+      light_dir: [...shading.light_dir],
+      depth_bg: [...shading.depth_bg],
+    })).toBe(false)
+    expect(device.write_records.filter(
+      ({ label }) => label === `large-system-shading`,
+    )).toHaveLength(2)
+
+    renderer.destroy()
+  })
+
   it(`destroys renderer-owned uniforms exactly once after device loss`, async () => {
     const device = make_mock_device()
     const renderer = create_large_system_renderer(
