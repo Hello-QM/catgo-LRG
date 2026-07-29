@@ -7,6 +7,7 @@ display and downstream node processing.
 
 from __future__ import annotations
 import json
+import shlex
 import logging
 from typing import Any, Optional
 
@@ -65,6 +66,7 @@ async def on_task_completed(
         "orca_neb_ts": ("ORCA NEB-TS", collect_orca_neb_results),
     }
 
+    published: tuple | None = None
     try:
         collector_entry = _ORCA_COLLECTORS.get(resolved_type)
         if collector_entry:
@@ -85,10 +87,7 @@ async def on_task_completed(
             # Store results in task_results table
             db.store_result(task_id, workflow_id, outputs_json=outputs, **extra_fields)
             logger.info(f"Task {task_id}: collected {label} results")
-            # A reaction path is worth watching, not just reading a barrier off.
-            await _publish_path_trajectory(
-                hpc_connection, work_dir, task_id, resolved_type
-            )
+            published = (hpc_connection, work_dir, task_id, resolved_type)
         else:
             logger.debug(f"Task {task_id}: no result collector for {task_type}")
 
@@ -105,6 +104,13 @@ async def on_task_completed(
         })
         workflow_id = task.get("workflow_id", "")
         db.store_result(task_id, workflow_id, outputs_json=error_output)
+        return
+
+    # OUTSIDE the try: `store_result` is INSERT OR REPLACE, and the handler above
+    # overwrites the committed scientific results with an error row. A display
+    # side-effect must never be able to trigger that.
+    if published:
+        await _publish_path_trajectory(*published)
 
 
 # A path calculation already writes its whole path as one multi-frame XYZ, so
@@ -133,9 +139,10 @@ async def _publish_path_trajectory(
     for name in candidates:
         path = f"{work_dir}/{name}"
         try:
+            quoted = shlex.quote(path)
             sized = await hpc_connection.run_on_owner(
-                lambda path=path: hpc_connection.conn.run(
-                    f"stat -c %s {path}", check=False
+                lambda q=quoted: hpc_connection.conn.run(
+                    f"stat -c %s {q}", check=False
                 )
             )
             if sized.exit_status != 0:
@@ -148,14 +155,21 @@ async def _publish_path_trajectory(
                 )
                 continue
             read = await hpc_connection.run_on_owner(
-                lambda path=path: hpc_connection.conn.run(f"cat {path}", check=False)
+                lambda q=quoted: hpc_connection.conn.run(f"cat {q}", check=False)
             )
             content = read.stdout or ""
             if read.exit_status != 0 or content.count("\n") < 4:
                 continue
             from catgo.routers import view_state
 
-            view_state.push_trajectory(view_state.last_active_panel_id, content, name)
+            # NOT `last_active_panel_id`: that is by definition the pane the human
+            # is touching, and push_trajectory is DESTRUCTIVE — it pops
+            # `panel_structures` for that panel. A job finishing in the background
+            # would delete the slab the user is editing, and the next tool that
+            # auto-injects "the current structure" would silently pick up some
+            # other pane's geometry. The remote/External pane is the inbox for
+            # anything the user did not initiate.
+            view_state.push_trajectory("default", content, name)
             logger.info("Task %s: pushed %s to the viewer (%d bytes)", task_id, name, size)
             return
         except Exception:

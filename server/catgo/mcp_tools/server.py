@@ -474,7 +474,7 @@ async def _announce_direct_result(tool_name: str, result: object) -> None:
     if not kind or not isinstance(result, dict):
         return
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(
                 f"{API_BASE}/view/result/push",
                 json={"kind": kind, "payload": {"tool": tool_name, **result}},
@@ -504,15 +504,28 @@ async def _publish_tool_output(output_type: str, data: object) -> None:
     if not isinstance(data, dict) or not output_type:
         return
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # 3 s, not 10: this is a display side-effect on the tool's critical path.
+        async with httpx.AsyncClient(timeout=3.0) as client:
             if output_type == "structure":
                 struct = data.get("structure") if "structure" in data else data
-                if isinstance(struct, dict) and struct:
-                    await client.post(
-                        f"{API_BASE}/view/structure/push",
-                        params={"intent": "load"},
-                        json={"structure": struct},
-                    )
+                # A tool that DECLARES structure output can still return an error
+                # dict; without this check that dict lands in the viewer store and
+                # every later auto-injected `structure` argument is that garbage.
+                if not (isinstance(struct, dict) and struct.get("sites")):
+                    return
+                # Two legs: /structure/push seeds the store, but its own docstring
+                # says it emits NO SSE event — that is /structure/pending-update's
+                # job, and it is what makes a mounted pane actually apply it.
+                await client.post(
+                    f"{API_BASE}/view/structure/push",
+                    params={"intent": "load"},
+                    json={"structure": struct},
+                )
+                await client.post(
+                    f"{API_BASE}/view/structure/pending-update",
+                    params={"intent": "load"},
+                    json={"structure": struct},
+                )
                 return
             kind = _ANALYSIS_OUTPUT_KINDS.get(output_type)
             if kind and data.get("session_id"):
@@ -796,7 +809,13 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 # defect, strain) built its geometry and showed the user
                 # nothing. What decides is the RESPONSE shape, not the request.
                 result_struct = None
-                if isinstance(data, dict):
+                # A response whose real product is a SESSION (dos/bands from-dir)
+                # carries the run's geometry alongside it. Pushing that would
+                # replace whatever the user is editing with an unrelated run's
+                # bulk cell — and the analysis event already hands the pane that
+                # same geometry through `initial_session`, with adoption
+                # semantics. Leave the viewer alone here.
+                if isinstance(data, dict) and not data.get("session_id"):
                     if isinstance(data.get("structure"), dict):
                         result_struct = data["structure"]
                     elif data.get("slabs"):
@@ -827,7 +846,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                     # merely carries geometry alongside its real product (a DOS
                     # session's `session_id`, a job id) must come back whole, or
                     # the agent loses the handle it needs for the next call.
-                    if "session_id" not in data:
+                    # `structures`/`slabs` results carry per-candidate labels the
+                    # summarizer drops (it re-emits scalars only), leaving the
+                    # agent unable to name the other N-1 structures it just made.
+                    if not data.get("structures") and not data.get("slabs"):
                         summary = _summarize_structure_result(
                             {**data, "structure": result_struct} if "structure" not in data else data
                         )

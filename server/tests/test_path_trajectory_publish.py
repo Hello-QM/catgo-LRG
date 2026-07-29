@@ -77,8 +77,12 @@ def _publish(files, resolved_type="orca_neb_ts", work_dir="/scratch/run"):
 
 
 def test_a_neb_path_is_pushed_as_an_animatable_trajectory():
+    # It lands in the External/remote pane, NOT in whichever pane the human
+    # happens to be using: push_trajectory pops that panel's structure, so
+    # targeting the active pane would delete the geometry under the user.
     view_state.mark_active("structure-1")
-    q = view_state.subscribe("structure-1")
+    view_state.push_structure({"sites": [{"label": "Pt"}]}, panel_id="structure-1")
+    q = view_state.subscribe("default")
 
     _publish({"/scratch/run/ORCA_MEP_trj.xyz": MEP})
 
@@ -87,11 +91,12 @@ def test_a_neb_path_is_pushed_as_an_animatable_trajectory():
     assert events[0]["data"]["content"] == MEP
     assert events[0]["data"]["filename"] == "ORCA_MEP_trj.xyz"
     # stored too, so a viewer connecting later still gets it on replay
-    assert view_state.get_trajectory("structure-1")["filename"] == "ORCA_MEP_trj.xyz"
+    assert view_state.get_trajectory("default")["filename"] == "ORCA_MEP_trj.xyz"
+    # and the pane the user was working in is untouched
+    assert view_state.get_structure("structure-1")
 
 
 def test_an_irc_path_uses_its_own_file():
-    view_state.mark_active("default")
     q = view_state.subscribe("default")
 
     _publish({"/scratch/run/ORCA_IRC_Full_trj.xyz": MEP}, resolved_type="orca_irc")
@@ -100,7 +105,6 @@ def test_an_irc_path_uses_its_own_file():
 
 
 def test_the_first_available_candidate_wins_and_only_one_is_pushed():
-    view_state.mark_active("default")
     q = view_state.subscribe("default")
 
     _publish({

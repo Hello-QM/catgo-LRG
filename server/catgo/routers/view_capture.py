@@ -463,6 +463,18 @@ def get_pending_structure_update(
 # ---------------------------------------------------------------------------
 
 
+# An SSE event is fanned to every subscriber and serialized on the event loop.
+# Anything above this is a data transfer wearing an event's clothes.
+_MAX_EVENT_BYTES = 256_000
+
+
+def _oversized(payload: dict) -> bool:
+    try:
+        return len(json.dumps(payload, default=str)) > _MAX_EVENT_BYTES
+    except (TypeError, ValueError):
+        return True  # unserializable: the SSE generator would fail on it anyway
+
+
 @router.get("/analysis-sessions")
 def list_analysis_sessions():
     """List the analysis sessions currently loaded, newest first.
@@ -516,6 +528,10 @@ def push_analysis(data: dict[str, Any]):
         raise HTTPException(
             status_code=400, detail="kind and session (object with session_id) are required"
         )
+    if _oversized(session):
+        raise HTTPException(
+            status_code=413, detail=f"session exceeds {_MAX_EVENT_BYTES} bytes"
+        )
     view_state.announce_analysis(kind, session, panel_id=str(data.get("panel_id", "")))
     return {"ok": True}
 
@@ -532,6 +548,16 @@ def push_result(data: dict[str, Any]):
     payload = data.get("payload")
     if not kind or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="kind and payload (object) are required")
+    # A result event is fanned into every subscriber queue and json.dumps'd on the
+    # event loop by the SSE generator. A tool that returns a full PDOS grid (tens
+    # of MB) would stall the loop for every connected pane, so refuse it here —
+    # the payload is meant to be a summary, not a data transfer.
+    if _oversized(payload):
+        raise HTTPException(
+            status_code=413,
+            detail=f"payload exceeds {_MAX_EVENT_BYTES} bytes; send a summary, "
+                   "or a session id the viewer can fetch from",
+        )
     view_state.announce_result(kind, payload, panel_id=str(data.get("panel_id", "")))
     return {"ok": True}
 

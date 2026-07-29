@@ -112,11 +112,19 @@ def announce_node_result(task_id: str, workflow_id: str, fields: dict) -> None:
     """Publish, best-effort. Import is lazy so the workflow DB stays usable in
     contexts with no FastAPI app (CLI, tests, offline analysis)."""
     try:
+        from catgo.routers import view_state
+
+        # Every node completion would otherwise pay a full json.loads of
+        # `outputs_json` (an entire ORCA parse, multi-MB) on the engine's scan
+        # cycle — N times over in a map/zone campaign — even with nobody
+        # watching. Ask first; the panel resolution is the same one announce
+        # uses.
+        panel = view_state.resolve_panel_id(view_state.last_active_panel_id)
+        if not view_state.has_subscribers(panel):
+            return
         payload = build_payload(task_id, workflow_id, fields)
         if payload is None:
             return
-        from catgo.routers import view_state
-
         view_state.announce_result("node", payload)
     except Exception:  # pragma: no cover - display must never break compute
         logger.debug("announce_node_result(%s) failed", task_id, exc_info=True)
