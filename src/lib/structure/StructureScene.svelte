@@ -7,12 +7,14 @@
   import * as math from '$lib/math'
   import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, should_reduce_motion, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
-  import type { LargeSystemShading } from '$lib/structure/gpu/large-system-renderer'
   import {
     find_theme_background,
     resolve_background_linear,
   } from '$lib/structure/rendering/background'
-  import type { ResolvedVisualState } from '$lib/structure/rendering/visual-state'
+  import type {
+    ResolvedVisualState,
+    VisualStateSource,
+  } from '$lib/structure/rendering/visual-state'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -781,21 +783,10 @@
     // Without the parent binding, this default keeps StructureScene self-
     // contained for any test harness that mounts it directly.
     atom_manager = $bindable<AtomManager>(new AtomManager()),
-    // WebGPU large-system overlay shading bridge: a getter the parent hands to the
-    // overlay so it can shade its impostor spheres with the SAME values this
-    // scene feeds the WebGL atom shader — headlamp direction, the active
-    // render_style's lighting profile, the render-style branch, depth cueing and
-    // the silhouette outline. Mirrored instead of re-derived so the two renderers
-    // cannot drift (they did: the overlay used to hard-code `0.35 + 0.65·lambert`
-    // and ignore every lighting setting, which is why performance mode looked
-    // flat next to the normal view).
-    //
-    // A getter, not a value: the depth-cue near/far planes track the CAMERA
-    // DISTANCE, so they change on every orbit/zoom. It also recomputes them on
-    // call rather than reading the cached uniform object, because the per-frame
-    // useTask that normally refreshes them belongs to the WebGL render loop —
-    // which is exactly what's suspended while the overlay is up.
-    get_shading_state = $bindable<(() => LargeSystemShading | null) | null>(null),
+    // Single revision-bearing source for both visual adapters. The snapshot
+    // resolver remains live for camera-dependent depth planes; the explicit
+    // revision makes semantic changes visible to a sleeping WebGPU overlay.
+    visual_state_source = $bindable<VisualStateSource | null>(null),
     deleted_bond_keys = new Set<string>(),
 
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
@@ -1103,10 +1094,8 @@
     atom_fast_ops?: AtomFastOps | null
     /** Plan v3 Phase 1: atom_manager $bindable for parent-driven position writes. */
     atom_manager?: AtomManager
-    /** WebGPU overlay shading bridge: getter returning the resolved atom-shading state
-     *  (headlamp, lighting profile, render-style branch, depth cueing, outline)
-     *  the WebGL atom shader is fed, so the overlay shades identically. */
-    get_shading_state?: (() => LargeSystemShading | null) | null
+    /** Single revision-bearing visual source shared by WebGL2 and WebGPU. */
+    visual_state_source?: VisualStateSource | null
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -1431,6 +1420,7 @@
   const __theme_bg = new Color()
   const __scratch_bg = new Color()
   let resolved_background_linear: [number, number, number] = [0, 0, 0]
+  let theme_revision = $state(0)
 
   function compute_canvas_bg(target: Color): Color {
     const theme = find_theme_background(
@@ -1487,7 +1477,11 @@
 
     // Re-sync when theme changes (class/attribute changes on html or body)
     const observer = new MutationObserver(() => {
-      requestAnimationFrame(() => sync_clear_color())
+      requestAnimationFrame(() => {
+        sync_clear_color()
+        // Publish only after the newly resolved linear background is ready.
+        theme_revision += 1
+      })
     })
     observer.observe(document.documentElement, { attributes: true, attributeFilter: [`class`, `data-theme`, `style`] })
     observer.observe(document.body, { attributes: true, attributeFilter: [`class`, `data-theme`, `style`] })
@@ -5305,10 +5299,6 @@
     return buf
   })
 
-  type PublishedLargeSystemVisualState =
-    & LargeSystemShading
-    & Pick<ResolvedVisualState, `background_linear`>
-
   /** Build the one shared visual snapshot consumed by both backend adapters.
    *  Background resolution itself is owned by sync_clear_color; this function
    *  republishes that exact linear triple and only refreshes camera-dependent
@@ -5348,19 +5338,33 @@
     }
   }
 
-  // WebGPU overlay bridge: hand the overlay the SAME shading inputs the WebGL
-  // atom shader gets plus the already-resolved linear background. The staged
-  // flat shape preserves the existing callback contract until Task 4 replaces
-  // it with the revision-bearing VisualStateSource.
+  // Publish a new source whenever a semantic visual input changes. Camera
+  // movement stays out of this key: the existing interaction wake calls the
+  // same resolver, which refreshes camera-dependent fields for that frame.
   $effect(() => {
-    get_shading_state = (): PublishedLargeSystemVisualState => {
-      const state = resolve_current_visual_state()
-      return {
-        ...state.shading,
-        background_linear: state.background_linear,
-      } as PublishedLargeSystemVisualState
+    const revision = [
+      render_style,
+      active_light_azimuth,
+      active_light_elevation,
+      active_ambient_light,
+      active_directional_light,
+      active_highlight_strength,
+      depth_cueing,
+      depth_cue_start,
+      depth_cue_end,
+      atom_outline_strength,
+      background_color ?? `#000000`,
+      background_opacity,
+      camera_projection,
+      theme_revision,
+    ].join(`|`)
+    visual_state_source = {
+      revision,
+      resolve: resolve_current_visual_state,
     }
-    return () => { get_shading_state = null }
+  })
+  onDestroy(() => {
+    visual_state_source = null
   })
 
   // Flat row-major Float64Array(9) for BondManagerInstances. Rows are the

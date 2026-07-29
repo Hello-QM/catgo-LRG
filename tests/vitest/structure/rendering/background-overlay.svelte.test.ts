@@ -74,31 +74,36 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
   it(`reads one queued-frame snapshot and forwards its exact background to both adapters`, async () => {
     const background_linear: [number, number, number] = [0.0123, 0.2345, 0.4567]
     const snapshot = {
-      light_dir: [0, 0, 1] as [number, number, number],
-      is_ortho: false,
-      ambient: 0.4,
-      directional: 0.6,
-      spec_strength: 0.5,
-      roughness: 0.2,
-      metalness: 0,
-      render_style: 0 as const,
-      outline: 0,
-      depth_cueing: 1,
-      depth_near: 2,
-      depth_far: 8,
-      depth_bg: background_linear,
-      toon_shadow_threshold: 0.3,
-      toon_highlight_threshold: 0.97,
-      toon_shadow_brightness: 0.5,
+      shading: {
+        light_dir: [0, 0, 1] as [number, number, number],
+        is_ortho: false,
+        ambient: 0.4,
+        directional: 0.6,
+        spec_strength: 0.5,
+        roughness: 0.2,
+        metalness: 0,
+        render_style: 0 as const,
+        outline: 0,
+        depth_cueing: 1,
+        depth_near: 2,
+        depth_far: 8,
+        depth_bg: background_linear,
+        toon_shadow_threshold: 0.3,
+        toon_highlight_threshold: 0.97,
+        toon_shadow_brightness: 0.5,
+      },
       background_linear,
     }
-    const get_shading = vi.fn(() => snapshot)
+    const resolve = vi.fn(() => snapshot)
 
     const component = mount(LargeSystemOverlay, {
       target: document.body,
       props: {
         enabled: true,
-        get_shading,
+        visual_state_source: {
+          revision: `background:1`,
+          resolve,
+        },
       },
     })
     mounted.push(component)
@@ -108,7 +113,7 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
     await tick()
 
     expect(mocks.create_large_system_renderer).toHaveBeenCalledTimes(1)
-    expect(get_shading).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
 
     // Svelte's runtime also queues private rAF work in this environment. Select
     // the overlay's named frame callback so this test advances exactly one
@@ -117,14 +122,11 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
     expect(overlay_frames).toHaveLength(1)
     overlay_frames[0](16)
 
-    expect(get_shading).toHaveBeenCalledTimes(1)
+    expect(resolve).toHaveBeenCalledTimes(1)
     expect(mocks.renderer.set_background).toHaveBeenCalledTimes(1)
     expect(mocks.renderer.set_shading).toHaveBeenCalledTimes(1)
     expect(mocks.renderer.set_background.mock.calls[0][0]).toBe(background_linear)
-    expect(mocks.renderer.set_shading.mock.calls[0][0]).toBe(snapshot)
-    expect(
-      mocks.renderer.set_shading.mock.calls[0][0].background_linear,
-    ).toBe(background_linear)
+    expect(mocks.renderer.set_shading.mock.calls[0][0]).toBe(snapshot.shading)
     expect(mocks.renderer.render).toHaveBeenCalledTimes(1)
   })
 })

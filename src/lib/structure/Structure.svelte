@@ -77,7 +77,7 @@
   } from './index'
   import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
-  import type { LargeSystemShading } from './gpu/large-system-renderer'
+  import type { VisualStateSource } from './rendering/visual-state'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { clone_structure } from '$lib/structure/clone'
@@ -258,11 +258,9 @@
   // so the second allocation is discarded (small one-time cost).
   let scene_atom_manager = $state(new AtomManager())
 
-  // WebGPU overlay bridge for SHADING inputs (headlamp, lighting
-  // profile, render style, depth cueing, outline) — the values StructureScene
-  // already resolves for the WebGL atom shader. Mirrored instead of re-derived so
-  // the two renderers can't drift. Null until mount.
-  let scene_get_shading_state = $state<(() => LargeSystemShading | null) | null>(null)
+  // StructureScene is the single visual-state publisher. Its visible revision
+  // wakes the WebGPU overlay even after the overlay frame loop has suspended.
+  let scene_visual_state_source = $state<VisualStateSource | null>(null)
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -4731,7 +4729,7 @@
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
-            bind:get_shading_state={scene_get_shading_state}
+            bind:visual_state_source={scene_visual_state_source}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4825,13 +4823,11 @@
             hide_incomplete_bonds={scene_props.hide_incomplete_bonds}
             {image_atom_opacity}
             show_bonds={scene_props.show_bonds}
-            {background_color}
-            {background_opacity}
             show_cell={scene_props.show_cell}
             cell_edge_color={scene_props.cell_edge_color}
             {trajectory_positions_version}
             {trajectory_step_idx}
-            get_shading={scene_get_shading_state}
+            visual_state_source={scene_visual_state_source}
             {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {

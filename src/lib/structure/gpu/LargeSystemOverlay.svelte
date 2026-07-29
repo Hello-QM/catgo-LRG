@@ -18,7 +18,11 @@
     type LargeSystemRenderer,
     type LargeSystemShading,
   } from '$lib/structure/gpu/large-system-renderer'
-  import type { ResolvedVisualState } from '$lib/structure/rendering/visual-state'
+  import {
+    same_visual_shading,
+    type ResolvedVisualShading,
+    type VisualStateSource,
+  } from '$lib/structure/rendering/visual-state'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type {
     ImageInstanceTable,
@@ -42,8 +46,6 @@
     hide_incomplete_bonds = DEFAULTS.structure.hide_incomplete_bonds,
     image_atom_opacity = 1,
     show_bonds = `crystals`,
-    background_color = undefined,
-    background_opacity = 0.1,
     show_cell = false,
     cell_edge_color = `#808080`,
     frame_positions = undefined,
@@ -55,7 +57,7 @@
     on_pick = undefined,
     supercell = [1, 1, 1],
     show_image_atoms = false,
-    get_shading = undefined,
+    visual_state_source = null,
     hud_safe = { l: 0, r: 0, t: 0, b: 0 },
   }: {
     enabled?: boolean
@@ -103,11 +105,6 @@
      *  draw (atoms + cell box still render). Defaults to `crystals` (the app
      *  default) so an absent prop matches the typical periodic-structure view. */
     show_bonds?: ShowBonds
-    /** Viewer canvas background color. StructureScene owns resolution; this
-     *  input remains as a wake signal until the revision-bearing bridge lands. */
-    background_color?: string | undefined
-    /** Background override strength. Also retained only as a wake signal. */
-    background_opacity?: number
     /** Whether to draw the unit-cell box (lattice wireframe), mirroring the WebGL
      *  view's `scene_props.show_cell`. Default off ⇒ zero change. Only draws when
      *  true AND the structure carries a non-zero lattice (periodic). */
@@ -152,20 +149,11 @@
      *  bonds complete to them for ANY visual-supercell dims. false selects
      *  `stub` (the existing incomplete edge). */
     show_image_atoms?: boolean
-    /** Getter for the viewer's resolved atom-shading state (StructureScene's
-     *  `get_shading_state` bridge): view-space headlamp, ambient / directional
-     *  intensities, render style, depth cueing, silhouette outline — the exact
-     *  values the WebGL atom shader's matching uniforms receive. Mirrored rather
-     *  than re-derived here so the two renderers cannot drift apart.
-     *
-     *  A GETTER, not a plain value: the depth-cue near/far planes track the
-     *  CAMERA DISTANCE, so they change on every orbit/zoom with no prop identity
-     *  change to drive a re-render. The overlay's frame loop calls this each
-     *  frame and gets a fresh, authoritative answer.
-     *
-     *  undefined / null ⇒ the renderer keeps its neutral defaults (a `glossy`
-     *  profile with depth cueing off), i.e. the pre-bridge behaviour. */
-    get_shading?: (() => LargeSystemShading | null) | null | undefined
+    /** Revision-bearing visual snapshot source published by StructureScene.
+     *  The revision is a visible Svelte dependency that wakes a sleeping loop;
+     *  resolve() is called exactly once by each active frame so camera-dependent
+     *  depth planes remain current without duplicating theme/style resolution. */
+    visual_state_source?: VisualStateSource | null
     /** Pane HUD safe-area insets (CSS px) — the SAME hud_safe StructureScene
      *  hands its WebGL gizmo (`offset: {left: 5+l, bottom: 5+b}`), so the
      *  overlay's corner gizmo dodges a docked toolbar identically. */
@@ -528,6 +516,7 @@
   // The last linear-RGB background pushed to the renderer, so we only re-push
   // when StructureScene publishes a different resolved triple.
   let last_bg: [number, number, number] | null = null
+  let last_visual_shading: ResolvedVisualShading | null = null
 
   /** Push StructureScene's resolved background when it changed. set_background
    *  accepts linear RGB and performs the one required clear-value encoding. */
@@ -546,20 +535,27 @@
     return true
   }
 
-  type PublishedLargeSystemVisualState =
-    & LargeSystemShading
-    & Partial<Pick<ResolvedVisualState, `background_linear`>>
-
-  /** Pull one viewer-owned visual snapshot, then feed its two backend adapters.
-   *  The overlay never inspects DOM or re-resolves CSS. */
+  /** Resolve one viewer-owned snapshot for this frame, then feed its two thin
+   *  backend adapters. The overlay never inspects DOM or re-resolves CSS. */
   function sync_visual_state(): boolean {
-    if (!renderer || !get_shading) return false
-    const state = get_shading() as PublishedLargeSystemVisualState | null
-    if (!state) return false
-    const background_changed = state.background_linear
-      ? sync_background(state.background_linear)
-      : false
-    return renderer.set_shading(state) || background_changed
+    if (!renderer || !visual_state_source) return false
+    const state = visual_state_source.resolve()
+    const background_changed = sync_background(state.background_linear)
+    let shading_changed = false
+    if (
+      !last_visual_shading ||
+      !same_visual_shading(last_visual_shading, state.shading)
+    ) {
+      last_visual_shading = {
+        ...state.shading,
+        light_dir: [...state.shading.light_dir],
+        depth_bg: [...state.shading.depth_bg],
+      }
+      shading_changed = renderer.set_shading(
+        state.shading as LargeSystemShading,
+      )
+    }
+    return shading_changed || background_changed
   }
 
   /** Cheap signature of the radius-affecting inputs; changes when any of them
@@ -671,6 +667,8 @@
   // lets control inertia/momentum settle before we stop scheduling.
   let stable_frames = 0
   const STABLE_FRAMES_TO_SLEEP = 24
+  let observed_visual_revision: string | null = null
+  let has_observed_visual_source = false
 
   // Bound listener handles, kept so teardown can remove exactly what it added.
   let on_wake_event: ((ev: Event) => void) | null = null
@@ -975,6 +973,7 @@
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
     last_bg = null
+    last_visual_shading = null
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
     // Fresh renderer ⇒ force visual bond settings into its uniform.
@@ -1146,10 +1145,24 @@
   })
 
   $effect(() => {
-    // Background-input wake trigger. StructureScene owns CSS resolution; these
-    // props only revive the staged getter bridge so the next frame consumes its
-    // newly published linear triple. Task 4 replaces this with a revision.
-    void [background_color, background_opacity]
+    // Semantic visual changes must revive a fully sleeping loop. Comparing the
+    // revision prevents an equal source/state republication from creating a
+    // wake cycle, while a source that arrives after session start wakes once.
+    const source = visual_state_source
+    const revision = source?.revision
+    if (!source) {
+      observed_visual_revision = null
+      has_observed_visual_source = false
+      return
+    }
+    if (
+      has_observed_visual_source &&
+      revision === observed_visual_revision
+    ) {
+      return
+    }
+    observed_visual_revision = revision
+    has_observed_visual_source = true
     if (renderer) {
       needs_render = true
       wake()
