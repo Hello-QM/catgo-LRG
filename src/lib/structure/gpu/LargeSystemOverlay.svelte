@@ -31,6 +31,10 @@
     apply_view_transform_to_positions,
     resolve_view_transform,
   } from '$lib/structure/rendering/view-transform'
+  import {
+    EMPTY_HUD_SAFE_AREA,
+    type HudSafeArea,
+  } from '$lib/structure/rendering/gizmo'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type {
     ImageInstanceTable,
@@ -65,7 +69,7 @@
     supercell = [1, 1, 1],
     show_image_atoms = false,
     visual_state_source = null,
-    hud_safe = { l: 0, r: 0, t: 0, b: 0 },
+    hud_safe = EMPTY_HUD_SAFE_AREA,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -163,7 +167,7 @@
     /** Pane HUD safe-area insets (CSS px) — the SAME hud_safe StructureScene
      *  hands its WebGL gizmo (`offset: {left: 5+l, bottom: 5+b}`), so the
      *  overlay's corner gizmo dodges a docked toolbar identically. */
-    hud_safe?: { l: number; r: number; t: number; b: number }
+    hud_safe?: Readonly<HudSafeArea>
   } = $props()
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)

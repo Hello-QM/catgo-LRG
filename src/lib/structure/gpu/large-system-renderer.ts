@@ -60,6 +60,15 @@ import type {
   TypedBondInput,
   TypedBondTable,
 } from '$lib/structure/workers/bond-worker-runtime'
+import {
+  GIZMO_AXIS_HEX,
+  GIZMO_NEG_AXIS_HEX,
+  gizmo_wgsl_color_vectors,
+  resolve_gizmo_layout,
+} from '$lib/structure/rendering/gizmo'
+
+export { GIZMO_AXIS_HEX, GIZMO_NEG_AXIS_HEX }
+
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
 
@@ -380,14 +389,6 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 }
 ` + LINEAR_TO_SRGB_WGSL
 
-/** Gizmo axis colors — the SAME hex constants the WebGL viewport gizmo receives
- *  from src/lib/colors (axis_colors / neg_axis_colors). Hardcoded here instead
- *  of imported because $lib/colors pulls in d3-color + 8 JSON palettes — far too
- *  heavy for this lean GPU module. A unit test pins these against $lib/colors so
- *  they cannot silently drift. Exported for that test. */
-export const GIZMO_AXIS_HEX = [`#d75555`, `#55b855`, `#5555d7`] as const
-export const GIZMO_NEG_AXIS_HEX = [`#b84444`, `#44a044`, `#4444b8`] as const
-
 /** WGSL axis-orientation gizmo. A WebGPU replica of the WebGL viewer's
  *  three-viewport-gizmo widget (sphere type, as configured in StructureScene's
  *  gizmo_props), which is gone while WebGL is suspended in overlay mode. Visual
@@ -409,14 +410,14 @@ export const GIZMO_NEG_AXIS_HEX = [`#b84444`, `#44a044`, `#4444b8`] as const
  *  Orientation uses ONLY the camera view ROTATION (upper-3×3 of camera.view),
  *  so the triad spins with the camera but stays pinned to its corner. A head
  *  pointing at the viewer projects toward the widget center — same as the
- *  WebGL gizmo. Colors are hand-authored DISPLAY-space constants (see
- *  GIZMO_AXIS_HEX): written verbatim to the non-sRGB target, NO linear→sRGB
- *  encode — encoding would wash them out.
+ *  WebGL gizmo. Shared DISPLAY-space colors from rendering/gizmo.ts are written
+ *  verbatim to the non-sRGB target, with NO linear→sRGB encode — encoding would
+ *  wash them out.
  *
  *  Always on top: depthCompare:`always`, no depth write, drawn LAST.
  *
- *  Exported (like the hex constants above) so the parity unit test can check
- *  the float color literals below against GIZMO_AXIS_HEX / $lib/colors. */
+ *  Exported so the parity unit test can check the generated WGSL table against
+ *  the shared palette. */
 export const GIZMO_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
@@ -446,17 +447,13 @@ const AXES = array<vec3<f32>, 3>(
   vec3<f32>(0.0, 1.0, 0.0),
   vec3<f32>(0.0, 0.0, 1.0),
 );
-// axis_colors x/y/z — display-space sRGB floats of GIZMO_AXIS_HEX.
+// Shared positive-axis palette, generated from rendering/gizmo.ts.
 const AXIS_COLORS = array<vec3<f32>, 3>(
-  vec3<f32>(0.843, 0.333, 0.333),  // #d75555
-  vec3<f32>(0.333, 0.722, 0.333),  // #55b855
-  vec3<f32>(0.333, 0.333, 0.843),  // #5555d7
+${gizmo_wgsl_color_vectors(GIZMO_AXIS_HEX)}
 );
-// neg_axis_colors nx/ny/nz — GIZMO_NEG_AXIS_HEX.
+// Shared negative-axis palette, generated from rendering/gizmo.ts.
 const NEG_AXIS_COLORS = array<vec3<f32>, 3>(
-  vec3<f32>(0.722, 0.267, 0.267),  // #b84444
-  vec3<f32>(0.267, 0.627, 0.267),  // #44a044
-  vec3<f32>(0.267, 0.267, 0.722),  // #4444b8
+${gizmo_wgsl_color_vectors(GIZMO_NEG_AXIS_HEX)}
 );
 const LABEL_COLOR = vec3<f32>(0.067, 0.067, 0.067); // labelColor #111
 const POS_ALPHA : f32 = 0.8;   // positive-axis opacity (gizmo_props)
@@ -2587,15 +2584,6 @@ export function create_large_system_renderer(
    *  avoidance) — the same hud_safe the WebGL gizmo's offset uses. */
   const gizmo_layout = { dpr: 1, safe_left: 0, safe_bottom: 0 }
 
-  /** WebGL gizmo placement spec, in CSS px — kept in lockstep with the DOM side:
-   *  - offset: `{ left: 5 + hud_safe.l, bottom: 5 + hud_safe.b }` (StructureScene's
-   *    gizmo_props)
-   *  - size: `clamp(70px, 18cqmin, 100px)` (the .responsive-gizmo CSS rule) */
-  const GIZMO_EDGE_PX = 5
-  const GIZMO_MIN_PX = 70
-  const GIZMO_MAX_PX = 100
-  const GIZMO_CQMIN_FRAC = 0.18
-
   /** Pack + upload the gizmo placement uniform from the canvas backing size +
    *  the DOM layout inputs. Replicates the WebGL widget's box: bottom-left
    *  anchored, responsive size, HUD-safe-area offset. Layout (see GizmoU):
@@ -2606,29 +2594,21 @@ export function create_large_system_renderer(
    *  - px.xy:    device-px → NDC scale (2/w, 2/h)
    *  - px.z:     axis line HALF-width in device px (lineWidth 4 CSS px / 2) */
   function upload_gizmo_uniform(): void {
-    const w = Math.max(1, canvas.width)
-    const h = Math.max(1, canvas.height)
-    const dpr = Math.max(gizmo_layout.dpr, 0.1)
-    // The responsive-size clamp works in CSS px (cqmin = 1% of the smaller
-    // container edge); resolve there, then convert to device px.
-    const cqmin = Math.min(w, h) / dpr / 100
-    const size_css = Math.min(
-      Math.max(GIZMO_MIN_PX, GIZMO_CQMIN_FRAC * 100 * cqmin),
-      GIZMO_MAX_PX,
-    )
-    const r_px = (size_css / 2) * dpr
-    const left_px = (GIZMO_EDGE_PX + gizmo_layout.safe_left) * dpr
-    const bottom_px = (GIZMO_EDGE_PX + gizmo_layout.safe_bottom) * dpr
-    const cx = -1 + (2 * (left_px + r_px)) / w // from the LEFT edge
-    const cy = -1 + (2 * (bottom_px + r_px)) / h // from the BOTTOM edge (NDC y up)
+    const layout = resolve_gizmo_layout({
+      width_device_px: canvas.width,
+      height_device_px: canvas.height,
+      dpr: gizmo_layout.dpr,
+      safe_left_css_px: gizmo_layout.safe_left,
+      safe_bottom_css_px: gizmo_layout.safe_bottom,
+    })
     const u = new Float32Array(8)
-    u[0] = cx
-    u[1] = cy
-    u[2] = r_px
-    u[3] = r_px / 1.8
-    u[4] = 2 / w
-    u[5] = 2 / h
-    u[6] = 2 * dpr // 4 CSS px line width → half-width in device px
+    u[0] = layout.center_ndc[0]
+    u[1] = layout.center_ndc[1]
+    u[2] = layout.radius_device_px
+    u[3] = layout.unit_device_px
+    u[4] = layout.pixel_to_ndc[0]
+    u[5] = layout.pixel_to_ndc[1]
+    u[6] = layout.line_half_width_device_px
     u[7] = 0
     device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
   }

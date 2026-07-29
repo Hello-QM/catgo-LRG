@@ -78,6 +78,12 @@
   import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import type { VisualStateSource } from './rendering/visual-state'
+  import {
+    EMPTY_HUD_SAFE_AREA,
+    GIZMO_SIZE_CSS,
+    normalize_hud_safe_area,
+    type HudSafeArea,
+  } from './rendering/gizmo'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { clone_structure } from '$lib/structure/clone'
@@ -820,6 +826,7 @@
     supercell_scaling = $bindable(`1x1x1`),
     fullscreen_toggle = DEFAULTS.structure.fullscreen_toggle,
     hidden_toolbar_items = [] as string[],
+    hud_safe_area = EMPTY_HUD_SAFE_AREA,
     bottom_left,
     data_url,
     structure_string,
@@ -1004,6 +1011,8 @@
       align_on_load?: `none` | `principal_axes`
       // Remote file origin for "save structure back" feature
       remote_origin?: { session_id: string; file_path: string } | null
+      /** Host-provided pane HUD insets, consumed by both renderer gizmos. */
+      hud_safe_area?: Partial<HudSafeArea>
       // Bulk reference for pseudo-hydrogen passivation (auto-set from slab cutter, or passed externally)
       initial_bulk?: PymatgenStructure | null
       // Raw cube file for isosurface processing (passed from desktop app when .cube file is opened)
@@ -2024,6 +2033,7 @@
     show_controls === true ||
       (typeof show_controls === `number` && width > show_controls),
   )
+  const hud_safe = $derived(normalize_hud_safe_area(hud_safe_area))
 
   // ── Transform pipeline (cell type -> supercell -> PBC images -> displayed_structure) ──
   // Managed by transform controller (controllers/transform-controller.svelte.ts)
@@ -3552,6 +3562,7 @@
   }}
   {...rest}
   class="structure {rest.class ?? ``}"
+  style:--structure-gizmo-size={GIZMO_SIZE_CSS}
   class:pencil-mode-active={pencil.pencil_mode_active}
   class:crop-mode-active={interaction.crop_mode_active}
   class:md-split={show_md_panel}
@@ -4614,6 +4625,7 @@
             and orphan cross-cell bond stubs render with image atoms off.
           -->
           <StructureScene
+            {hud_safe}
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
             {webgl_suspended}
@@ -4827,6 +4839,7 @@
             {trajectory_positions_version}
             {trajectory_step_idx}
             visual_state_source={scene_visual_state_source}
+            {hud_safe}
             {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {

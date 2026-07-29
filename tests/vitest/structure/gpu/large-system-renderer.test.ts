@@ -88,9 +88,8 @@ describe(`large-system cell transform packing`, () => {
   })
 })
 
-// The gizmo colors are HARDCODED in the GPU module (importing $lib/colors there
-// would drag d3 + the palette JSONs into the lean renderer). These tests are the
-// lockstep guarantee: if the app's axis colors change, they fail and point here.
+// The lean shared gizmo module owns the palette and generates the GPU literals;
+// these assertions retain compatibility coverage for the renderer's old exports.
 describe(`gizmo color parity with $lib/colors`, () => {
   it(`GIZMO_AXIS_HEX matches axis_colors`, () => {
     expect(GIZMO_AXIS_HEX).toEqual(axis_colors.map(([, color]) => color))

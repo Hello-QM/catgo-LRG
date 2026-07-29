@@ -316,4 +316,47 @@ describe(`visual source ownership and wiring`, () => {
     expect(overlay).not.toContain(`background_opacity`)
     expect(overlay).not.toContain(`get_shading`)
   })
+
+  it(`passes one Structure HUD safe-area to both WebGL and WebGPU gizmos`, () => {
+    const scene = readFileSync(
+      resolve_path(`src/lib/structure/StructureScene.svelte`),
+      `utf8`,
+    )
+    const structure = readFileSync(
+      resolve_path(`src/lib/structure/Structure.svelte`),
+      `utf8`,
+    )
+
+    expect(scene).toContain(`hud_safe = EMPTY_HUD_SAFE_AREA`)
+    expect(scene).toContain(`offset: gizmo_dom_offset(hud_safe)`)
+    expect(scene).toContain(`var(--structure-gizmo-size)`)
+    expect(structure).toContain(`const hud_safe = $derived(`)
+    expect(structure).toContain(`style:--structure-gizmo-size={GIZMO_SIZE_CSS}`)
+    expect(structure).toContain(`<StructureScene\n            {hud_safe}`)
+    expect(structure).toContain(`visual_state_source={scene_visual_state_source}\n            {hud_safe}`)
+  })
+})
+
+describe(`LargeSystemOverlay gizmo layout`, () => {
+  it(`seeds and reactively forwards the same HUD safe-area`, async () => {
+    const component = mount(OverlayHarness, { target: document.body })
+    mounted.push(component)
+    component.publish_hud_safe({ l: 12, r: 2, t: 3, b: 20 })
+    await settle_mount()
+
+    expect(mocks.renderer.set_gizmo_layout).toHaveBeenCalledWith({
+      safe_left: 12,
+      safe_bottom: 20,
+    })
+
+    mocks.renderer.set_gizmo_layout.mockClear()
+    component.publish_hud_safe({ l: 30, r: 2, t: 3, b: 40 })
+    flushSync()
+
+    expect(mocks.renderer.set_gizmo_layout).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_gizmo_layout).toHaveBeenCalledWith({
+      safe_left: 30,
+      safe_bottom: 40,
+    })
+  })
 })

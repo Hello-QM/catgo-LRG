@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { AnyStructure, BondPair, ElementSymbol, HBondConnectivity, Site, Vec3 } from '$lib'
   import type { Crystal } from './index'
-  import { atomic_radii, axis_colors, element_data, neg_axis_colors } from '$lib'
+  import { atomic_radii, element_data } from '$lib'
   import { resolve_css_var } from '$lib/css-utils'
   import { format_num } from '$lib/labels'
   import * as math from '$lib/math'
@@ -46,6 +46,13 @@
     render_style_to_backend,
     style_pbr,
   } from './rendering/visual-state'
+  import {
+    EMPTY_HUD_SAFE_AREA,
+    GIZMO_AXIS_COLORS,
+    GIZMO_NEG_AXIS_COLORS,
+    gizmo_dom_offset,
+    type HudSafeArea,
+  } from './rendering/gizmo'
   import WebGLReplicaLayer from './gpu/WebGLReplicaLayer.svelte'
   import {
     combined_packet_render_eligible,
@@ -629,6 +636,7 @@
     force_range_min = DEFAULTS.structure.force_range_min,
     force_range_max = DEFAULTS.structure.force_range_max,
     gizmo = DEFAULTS.structure.show_gizmo,
+    hud_safe = EMPTY_HUD_SAFE_AREA,
     hovered_idx = $bindable(null),
     hovered_site = $bindable(null),
     float_fmt = `.3~f`,
@@ -916,6 +924,8 @@
     force_range_min?: number
     force_range_max?: number
     gizmo?: boolean | ComponentProps<typeof extras.Gizmo>
+    /** Pane HUD safe-area insets shared by both renderer gizmos. */
+    hud_safe?: Readonly<HudSafeArea>
     hovered_idx?: number | null
     hovered_site?: Site | null
     float_fmt?: string
@@ -6472,7 +6482,7 @@
 
   let gizmo_props = $derived.by(() => {
     const axis_options = Object.fromEntries(
-      [...axis_colors, ...neg_axis_colors].map(([axis, color, hover_color]) => [
+      [...GIZMO_AXIS_COLORS, ...GIZMO_NEG_AXIS_COLORS].map(([axis, color, hover_color]) => [
         axis,
         {
           color,
@@ -6491,7 +6501,7 @@
       className: `responsive-gizmo`,
       ...axis_options,
       ...(typeof gizmo === `boolean` ? {} : gizmo),
-      offset: { left: 5, bottom: 5 },
+      offset: gizmo_dom_offset(hud_safe),
       onend: handle_gizmo_end,
     }
   })
@@ -7733,8 +7743,8 @@
 
 <style>
   :global(.structure .responsive-gizmo) {
-    width: clamp(70px, 18cqmin, 100px) !important;
-    height: clamp(70px, 18cqmin, 100px) !important;
+    width: var(--structure-gizmo-size) !important;
+    height: var(--structure-gizmo-size) !important;
   }
   /* Force all Threlte HTML wrappers for labels to not block pointer events
      and prevent text selection when dragging from outside (e.g. sidebar) */
