@@ -1,11 +1,18 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { detect_bonds_reference, type RefBondOptions } from '$lib/structure/gpu/bond-detect-reference'
 import { compute_bonds_sync } from '$lib/structure/workers/bond-worker-api'
 import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
 import { build_atom_radii } from '$lib/structure/gpu/radius-lut'
+import { parse_cif } from '$lib/structure/parsers/cif'
 import type { PymatgenStructure } from '$lib/structure'
 
-const OPTS: RefBondOptions = { scale: 1.2, max_bond_dist: 5.0, min_bond_dist: 0.4 }
+const OPTS: RefBondOptions = {
+  tolerance: 0.45,
+  max_bond_dist: 3.0,
+  min_bond_dist: 0.1,
+}
 
 describe(`detect_bonds_reference`, () => {
   it(`finds a single bond between two close atoms (non-periodic)`, () => {
@@ -16,17 +23,17 @@ describe(`detect_bonds_reference`, () => {
     expect(bonds[0]).toMatchObject({ a: 0, b: 1, jimage: [0, 0, 0] })
   })
 
-  it(`rejects atoms beyond the scaled covalent-radii sum`, () => {
+  it(`rejects atoms beyond the covalent-radii sum plus tolerance`, () => {
     const pos = new Float32Array([0, 0, 0, 2.0, 0, 0])
     const radii = new Float32Array([0.76, 0.76])
     expect(detect_bonds_reference(pos, new Float32Array(9), radii, OPTS)).toHaveLength(0)
   })
 
-  it(`uses multiplicative scale rather than a fixed absolute tolerance`, () => {
-    const pos = new Float32Array([0, 0, 0, 3.5, 0, 0])
-    const radii = new Float32Array([1.48, 1.48])
-    // Rust keeps this contact: 3.5 Å < 1.2 × (1.48 + 1.48) = 3.552 Å.
-    // The retired fixed-pad rule would incorrectly reject it: 2.96 + 0.45 = 3.41 Å.
+  it(`uses a fixed absolute tolerance rather than multiplicative scale`, () => {
+    const pos = new Float32Array([0, 0, 0, 1.4, 0, 0])
+    const radii = new Float32Array([0.5, 0.5])
+    // Fixed-pad keeps this contact: 1.4 Å < 0.5 + 0.5 + 0.45 = 1.45 Å.
+    // A 1.2 multiplicative scale would incorrectly reject it at 1.2 Å.
     expect(detect_bonds_reference(pos, new Float32Array(9), radii, OPTS)).toHaveLength(1)
   })
 
@@ -67,7 +74,11 @@ describe(`detect_bonds_reference`, () => {
     // 1.0 Å fallback never triggers (which would diverge from the CPU path).
     const struct = make_test_structure()
 
-    const cpu = compute_bonds_sync(struct, `atom_radii`, { max_bond_dist: 3, scale: 1.15 })
+    const cpu = compute_bonds_sync(struct, `atom_radii`, {
+      tolerance: 0.45,
+      max_bond_dist: 3,
+      min_bond_dist: 0.1,
+    })
     // compute_bonds_sync returns null when Rust WASM is not initialized in the
     // vitest env. Skip the comparison but keep the test in place.
     if (cpu == null) return
@@ -76,13 +87,43 @@ describe(`detect_bonds_reference`, () => {
       pack_positions(struct.sites),
       pack_lattice(struct.lattice),
       build_atom_radii(struct.sites),
-      { scale: 1.15, max_bond_dist: 3, min_bond_dist: 0.4 },
+      OPTS,
     )
     const key = (a: number, b: number) => `${Math.min(a, b)}-${Math.max(a, b)}`
     const cpu_set = new Set(cpu.map((b) => key(b.site_idx_1, b.site_idx_2)))
     const ref_set = new Set(ref.map((b) => key(b.a, b.b)))
 
     expect([...ref_set].sort()).toEqual([...cpu_set].sort())
+  })
+
+  it(`preserves LiFePO4 octahedral Fe–O coordination from the pre-change viewer`, () => {
+    const structure = parse_cif(
+      readFileSync(resolve(`src/site/structures/LiFePO4.cif`), `utf8`),
+    ) as PymatgenStructure
+    const bonds = detect_bonds_reference(
+      pack_positions(structure.sites),
+      pack_lattice(structure.lattice),
+      build_atom_radii(structure.sites),
+      OPTS,
+    )
+    const fe_o = bonds.filter(({ a, b }) => {
+      const pair = [
+        structure.sites[a].species[0]?.element,
+        structure.sites[b].species[0]?.element,
+      ].sort().join(`-`)
+      return pair === `Fe-O`
+    })
+    const fe_degree = new Map<number, number>()
+    for (const bond of fe_o) {
+      const fe_idx = structure.sites[bond.a].species[0]?.element === `Fe`
+        ? bond.a
+        : bond.b
+      fe_degree.set(fe_idx, (fe_degree.get(fe_idx) ?? 0) + 1)
+    }
+
+    expect(bonds).toHaveLength(72)
+    expect(fe_o).toHaveLength(24)
+    expect([...fe_degree.values()].sort()).toEqual([6, 6, 6, 6])
   })
 })
 

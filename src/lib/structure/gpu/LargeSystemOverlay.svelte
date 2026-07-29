@@ -238,7 +238,7 @@
   let bond_lattice: Float32Array = new Float32Array(9)
   let bond_periodic = false
   let bond_options_sig = ``
-  let bond_compute_opts = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
+  let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_bond_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
 

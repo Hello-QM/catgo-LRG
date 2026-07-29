@@ -302,7 +302,7 @@ const load_scene = (renderer: {
   set_bond_data: (
     cov: Float32Array,
     lat: Float32Array,
-    opts: { scale: number; max_bond_dist: number; min_bond_dist: number },
+    opts: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
     periodic: boolean,
   ) => void
 }) => {
@@ -322,7 +322,7 @@ const load_scene = (renderer: {
   renderer.set_bond_data(
     new Float32Array(n).fill(0.76),
     new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20]),
-    { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+    { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
     true,
   )
 }
@@ -551,7 +551,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     const colors = new Float32Array(n * 3).fill(0.5)
     const covalent = new Float32Array(n).fill(0.76)
     const lattice = new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20])
-    const opts = { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 }
 
     renderer.set_atoms(positions, radii, colors, n)
     renderer.set_bond_data(covalent, lattice, opts, true)
@@ -623,7 +623,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(n).fill(0.76),
       lattice,
-      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
       true,
     )
     renderer.render() // dispatches the candidate bond compute
@@ -1042,7 +1042,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(n).fill(0.76),
       thin,
-      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
       true,
     )
     renderer.render()
@@ -1056,7 +1056,11 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     expect(input.positions.length).toBe(n * 3)
     expect(input.pbc).toEqual([true, true, true])
     expect(input.lattice_matrix).toEqual([[40, 0, 0], [0, 2, 0], [0, 0, 40]])
-    expect(input.options).toEqual({ scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 })
+    expect(input.options).toEqual({
+      tolerance: 0.45,
+      max_bond_dist: 3,
+      min_bond_dist: 0.1,
+    })
 
     await flush() // typed table resolves ⇒ ACTIVE graph upload + host wake
     expect(on_work).toHaveBeenCalled()

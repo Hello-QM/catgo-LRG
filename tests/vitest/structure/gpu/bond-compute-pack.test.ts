@@ -9,9 +9,9 @@ import {
 import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
 
 const make_run = (over: Partial<BondComputeRun> = {}): BondComputeRun => ({
-  scale: 1.2,
-  max_bond_dist: 5,
-  min_bond_dist: 0.4,
+  tolerance: 0.45,
+  max_bond_dist: 3,
+  min_bond_dist: 0.1,
   positions: new Float32Array([0, 0, 0]),
   radii: new Float32Array([0.76]),
   lattice: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
@@ -45,12 +45,12 @@ describe(`pack_params`, () => {
     const buf = pack_params(
       1,
       8,
-      make_run({ scale: 1.15, max_bond_dist: 5, min_bond_dist: 0.4 }),
+      make_run({ tolerance: 0.35, max_bond_dist: 3, min_bond_dist: 0.1 }),
     )
     const f32 = new Float32Array(buf)
-    expect(f32[4]).toBeCloseTo(1.15, 6) // scale
-    expect(f32[5]).toBeCloseTo(5, 6) // max_bond_dist
-    expect(f32[6]).toBeCloseTo(0.4, 6) // min_bond_dist
+    expect(f32[4]).toBeCloseTo(0.35, 6) // tolerance
+    expect(f32[5]).toBeCloseTo(3, 6) // max_bond_dist
+    expect(f32[6]).toBeCloseTo(0.1, 6) // min_bond_dist
     expect(f32[7]).toBe(0) // _pad1
   })
 

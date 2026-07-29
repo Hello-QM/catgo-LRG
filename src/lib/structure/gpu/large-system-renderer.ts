@@ -1800,7 +1800,7 @@ export type LargeSystemRenderer = {
   set_bond_data(
     covalent_radii: Float32Array,
     lattice: Float32Array,
-    options: { scale: number; max_bond_dist: number; min_bond_dist: number },
+    options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
     periodic: boolean,
   ): void
   /** Mirror the viewer's bond visual settings without changing packet/legacy
@@ -2212,7 +2212,7 @@ export function create_large_system_renderer(
   let bond_detector_lattice = new Float32Array(9)
   let bond_render_lattice = new Float32Array(9)
   let bond_style = normalize_bond_style()
-  let bond_options = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
+  let bond_options = { tolerance: 0, max_bond_dist: 0, min_bond_dist: 0 }
   let bond_periodic = false
   let bond_n = 0 // atom count the detection should range over
   // ── Dirty-kind split (design §8.2 items 4-6). `graph_dirty`: the base bond
@@ -3824,7 +3824,7 @@ export function create_large_system_renderer(
     set_bond_data(
       covalent_radii: Float32Array,
       lattice: Float32Array,
-      options: { scale: number; max_bond_dist: number; min_bond_dist: number },
+      options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
       periodic: boolean,
     ): void {
       if (destroyed || device_lost) return
@@ -4357,7 +4357,7 @@ export function create_large_system_renderer(
           device.queue.writeBuffer(
             bond_params_buffer, 0,
             pack_params(bond_n, candidate_pairs_capacity, {
-              scale: bond_options.scale,
+              tolerance: bond_options.tolerance,
               max_bond_dist: bond_options.max_bond_dist,
               min_bond_dist: bond_options.min_bond_dist,
               positions: new Float32Array(0), // unused by pack_params

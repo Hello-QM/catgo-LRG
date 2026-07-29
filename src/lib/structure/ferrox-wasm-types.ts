@@ -166,7 +166,9 @@ export interface WasmBond {
 }
 
 export interface AtomRadiiBondingOptions {
-  /** Tolerance factor for covalent radii sum (default: 0.45) */
+  /** Multiplicative cutoff on the covalent-radii sum (ordinary-mode default: 1.2). */
+  scale?: number
+  /** Optional fixed additive cutoff in Angstroms; when set, it takes precedence over scale. */
   tolerance?: number
   /** Minimum bond distance in Angstroms (default: 0.4) */
   min_bond_dist?: number

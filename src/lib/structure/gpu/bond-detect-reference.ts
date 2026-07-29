@@ -1,5 +1,5 @@
 export type RefBondOptions = {
-  scale: number
+  tolerance: number
   max_bond_dist: number
   min_bond_dist: number
 }
@@ -8,10 +8,10 @@ export type RefBond = { a: number; b: number; dist: number; jimage: [number, num
 /** Reference atom_radii bond detector with minimum-image PBC. Matches the Rust
  *  detect_bonds_atom_radii predicate (extensions/rust/src/bonding.rs):
  *  bond between i<j iff minimum-image distance d satisfies
- *    min_bond_dist <= d <= max_bond_dist AND d <= scale * (r_i + r_j).
+ *    min_bond_dist <= d <= max_bond_dist AND d <= r_i + r_j + tolerance.
  *  This is the source-of-truth oracle the WGSL compute shader (Task 5/6) must
  *  match. O(N^2) — oracle/test + small structures only; the GPU path uses a
- *  uniform grid for scale.
+ *  uniform grid for larger inputs.
  *
  *  jimage CONVENTION (the contract Tasks 5/6/8 inherit): jimage is the integer
  *  image offset (in lattice units) applied to atom b so that b + jimage*L lands
@@ -45,7 +45,7 @@ export function detect_bonds_reference(
         : { d2: dx * dx + dy * dy + dz * dz, jimage: [0, 0, 0] as [number, number, number] }
       const d = Math.sqrt(mi.d2)
       if (d < opts.min_bond_dist || d > opts.max_bond_dist) continue
-      if (d <= (radii[i] + radii[j]) * opts.scale) {
+      if (d <= radii[i] + radii[j] + opts.tolerance) {
         out.push({ a: i, b: j, dist: d, jimage: mi.jimage })
       }
     }

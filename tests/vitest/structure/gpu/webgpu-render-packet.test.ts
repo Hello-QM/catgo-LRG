@@ -651,7 +651,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array([0.76, 0.66]),
       packet.frame.lattice,
-      { scale: 1.2, min_bond_dist: 0.4, max_bond_dist: 5 },
+      { tolerance: 0.45, min_bond_dist: 0.1, max_bond_dist: 3 },
       true,
     )
 
@@ -1147,7 +1147,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       new Float32Array([9, 0, 0, 0, 9, 0, 0, 0, 9]),
-      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
       true,
     )
     renderer.set_packet(packet, EMPTY_IMAGES) // SAME object + versions
@@ -1255,7 +1255,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       make_frame().lattice,
-      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
       true,
     )
 
@@ -1311,7 +1311,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       make_frame().lattice,
-      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
       true,
     )
     renderer.render()

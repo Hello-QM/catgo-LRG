@@ -70,7 +70,7 @@ struct Params {
   capacity: u32,
   periodic: u32,
   _pad0: u32,
-  scale: f32,
+  tolerance: f32,
   max_bond_dist: f32,
   min_bond_dist: f32,
   rule_count: u32,   // number of element-pair distance rules in the rules buffer
@@ -150,7 +150,7 @@ fn try_emit(i: u32, j: u32, pi: vec3<f32>, ri: f32) {
   }
   let d = sqrt(best_d2);
   if (d < P.min_bond_dist || d > P.max_bond_dist) { return; }
-  if (d <= (ri + radii[j]) * P.scale) {
+  if (d <= ri + radii[j] + P.tolerance) {
     // Per-element-pair rule post-filter (matches visibility.ts). Applied only
     // AFTER the atom_radii test passes; can only remove a detected bond.
     if (!rules_keep(elem_ids[i], elem_ids[j], d)) { return; }
