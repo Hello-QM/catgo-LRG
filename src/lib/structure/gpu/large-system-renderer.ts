@@ -131,10 +131,9 @@ export function pack_cell_uniform(
  *  (triangle-strip ⇒ this many verts). */
 const BOND_VERTS_PER_CYLINDER = 6
 
-/** Neutral bond color (linear rgb). Half-A/half-B coloring is a later milestone. */
-const BOND_COLOR: [number, number, number] = [0.7, 0.7, 0.7]
-
-/** Bond-render uniform: 3 padded lattice rows + 2 style/color vec4s. */
+/** Bond-render uniform: 3 padded lattice rows + 2 style vec4s. The final three
+ *  lanes remain reserved so the established 80-byte ABI does not move; rendered
+ *  endpoint colors come exclusively from the authoritative atom-color buffer. */
 export const BOND_RENDER_BYTES = 80
 
 export type LargeSystemBondStyle = {
@@ -184,7 +183,6 @@ export function normalize_bond_style(
 export function pack_bond_render_uniform(
   lattice: Float32Array,
   style: LargeSystemBondStyle,
-  color: readonly [number, number, number] = BOND_COLOR,
 ): Float32Array {
   const u = new Float32Array(BOND_RENDER_BYTES / 4)
   u[0] = lattice[0]; u[1] = lattice[1]; u[2] = lattice[2]; u[3] = 0
@@ -195,7 +193,7 @@ export function pack_bond_render_uniform(
   u[14] = style.incomplete_edge_length_scale
   u[15] = style.hide_incomplete_bonds ? 1 : 0
   u[16] = style.periodic_bond_opacity
-  u[17] = color[0]; u[18] = color[1]; u[19] = color[2]
+  // u[17..19] are reserved to retain the 80-byte BondU ABI.
   return u
 }
 
@@ -1151,13 +1149,14 @@ struct Camera {
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Bond uniform: lattice rows a,b,c (vec3+pad each), edge style, opacity + color.
+// Bond uniform: lattice rows a,b,c (vec3+pad each), edge style, opacity +
+// reserved lanes. Endpoint colors are read from binding 7.
 struct BondU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
   style0 : vec4<f32>, // radius, incomplete mode, length scale, hide incomplete
-  style1 : vec4<f32>, // incomplete opacity, color rgb
+  style1 : vec4<f32>, // incomplete opacity, reserved rgb
 };
 
 // GPU supercell uniform (Phase 2). Same layout as the atom impostor's Supercell:
@@ -1193,21 +1192,25 @@ struct Shading {
   toon      : vec4<f32>,
 };
 @group(0) @binding(6) var<uniform> shading : Shading;
+// Authoritative base-topology linear RGB buffer. This is the SAME buffer used
+// by the atom impostor; no bond-side resolver or duplicate upload exists.
+@group(0) @binding(7) var<storage, read> colors : array<f32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) v0 : vec3<f32>,      // view-space cylinder start (flat)
   @location(1) v1 : vec3<f32>,      // view-space cylinder end   (flat)
   @location(2) radius : f32,        // cylinder radius (flat)
-  @location(3) color : vec3<f32>,
-  @location(4) vpos : vec3<f32>,    // view-space position of this quad corner
+  @location(3) color_start : vec3<f32>,
+  @location(4) color_end : vec3<f32>,
+  @location(5) vpos : vec3<f32>,    // view-space position of this quad corner
   // 1.0 for CROSS-cell stubs, 0.0 for INTRA-cell full cylinders. Flat-interp.
   // The fragment shader pushes cross-cell stubs slightly BACKWARD in depth so a
   // stub coincident with an intra-cell bond at a shared atom loses the depth tie
   // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
-  @location(5) is_stub : f32,
+  @location(6) is_stub : f32,
   // Incomplete periodic half-edge opacity. Full and ghost-complete edges use 1.
-  @location(6) opacity : f32,
+  @location(7) opacity : f32,
 };
 
 struct FsOut {
@@ -1217,6 +1220,28 @@ struct FsOut {
 
 fn atom_pos(i : u32) -> vec3<f32> {
   return vec3<f32>(positions[i*3u], positions[i*3u+1u], positions[i*3u+2u]);
+}
+
+fn atom_color(i : u32) -> vec3<f32> {
+  return vec3<f32>(colors[i*3u], colors[i*3u+1u], colors[i*3u+2u]);
+}
+
+fn studio_env(n : vec3<f32>, key_dir : vec3<f32>) -> vec3<f32> {
+  var col = vec3<f32>(0.72);
+  let key = max(dot(n, key_dir), 0.0);
+  col += vec3<f32>(1.00, 0.97, 0.92) * (key * key) * 0.35;
+  let sky = n.y * 0.5 + 0.5;
+  col += vec3<f32>(0.06, 0.06, 0.07) * sky;
+  return col;
+}
+
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp(
+    (x * (2.51 * x + vec3<f32>(0.03))) /
+      (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0),
+  );
 }
 
 @vertex
@@ -1317,6 +1342,17 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let start = select(cross_start, A, is_full);
   let end = select(cross_end, B_real, is_full);
 
+  // Full cylinders blend smoothly A→B over their complete axis. True boundary
+  // stubs keep each half monochrome: half 0 is A/A and half 1 is B/B.
+  let color_a = atom_color(a);
+  let color_b = atom_color(b);
+  var color_start = select(color_b, color_a, half == 0u);
+  var color_end = color_start;
+  if (is_full) {
+    color_start = color_a;
+    color_end = color_b;
+  }
+
   // Keep the downstream variable name the rest of vs_main uses (is_intra) so the
   // degenerate-half collapse + is_stub flag below are untouched: a full cylinder
   // behaves exactly like an intra-cell bond (half 1 redundant, no depth bias).
@@ -1393,7 +1429,8 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     out_deg.v0 = v0;
     out_deg.v1 = v1;
     out_deg.radius = r;
-    out_deg.color = bond.style1.yzw;
+    out_deg.color_start = color_start;
+    out_deg.color_end = color_end;
     out_deg.vpos = vpos;
     out_deg.is_stub = 0.0; // degenerate (discarded) — value irrelevant
     out_deg.opacity = 0.0;
@@ -1409,7 +1446,8 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.v0 = v0;
   out.v1 = v1;
   out.radius = r;
-  out.color = bond.style1.yzw;
+  out.color_start = color_start;
+  out.color_end = color_end;
   out.vpos = vpos;
   // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
   out.is_stub = select(1.0, 0.0, is_intra);
@@ -1555,20 +1593,32 @@ fn fs_main(in : VsOut) -> FsOut {
     hit_n = normalize(p_ray - p_seg);
   }
 
-  // Lighting ported from the WebGL bond shader (src/lib/structure/Bond.svelte):
-  // Blinn-Phong off the view-space headlamp, with a rim factor + brightness floor
-  // so cylinders seen END-ON (all normals ⊥ view) don't read as hollow interiors.
-  // ambient 0.7 / directional 0.3 are the same FIXED constants Bond.svelte uses —
-  // bonds deliberately don't follow the per-render-style lighting profile, only
-  // the headlamp direction and the specular slider.
-  let light_dir = normalize(shading.light_dir.xyz);
+  // The analytic hit's normalized axis position drives the authoritative A→B
+  // endpoint gradient. Boundary stubs received identical start/end colors above.
+  let axial = clamp(dot(hit_p - pa, axis) / clen, 0.0, 1.0);
+  let base_color = mix(in.color_start, in.color_end, axial);
+
+  // WebGL BondManagerInstances studio lighting, kept literal so the two
+  // backends share env, specular, Fresnel, rim/floor lift, exposure, tonemap,
+  // sRGB encoding, then depth cueing in that order.
   let view_dir = normalize(-hit_p);
-  let diffuse = max(dot(hit_n, light_dir), 0.0);
+  let key_dir = normalize(shading.light_dir.xyz);
+  let env = studio_env(hit_n, key_dir);
+  let half_dir = normalize(key_dir + view_dir);
+  let specular = pow(max(dot(hit_n, half_dir), 0.0), 64.0);
   let NdotV = max(dot(hit_n, view_dir), 0.0);
-  let rim_factor = smoothstep(0.0, 0.25, NdotV);
-  let lighting = max(0.7 * 0.3 + (0.7 * 0.7 + 0.3 * diffuse) * rim_factor, 0.2);
-  let half_dir = normalize(light_dir + view_dir);
-  let specular = pow(max(dot(hit_n, half_dir), 0.0), 60.0);
+  let fresnel = pow(1.0 - NdotV, 5.0);
+  let rim_mask = smoothstep(0.0, 0.25, NdotV);
+  let floor_lift = mix(0.18, 1.0, rim_mask);
+  let spec_color = mix(vec3<f32>(1.0), base_color, 0.55);
+  let ambient_intensity = 0.8;
+  let directional_intensity = 0.3;
+  let exposure = ambient_intensity + directional_intensity * 0.5; // fixed 0.95
+  var final_color =
+    base_color * env * exposure * floor_lift +
+    spec_color * specular * directional_intensity * 0.5 * rim_mask * shading.params0.z +
+    vec3<f32>(fresnel * 0.08) * rim_mask;
+  final_color = aces_tonemap(final_color);
 
   // Correct depth: project the view-space hit point, apply the SAME GL->WebGPU z
   // remap as the vertex stage, then perspective-divide into NDC z (range 0..1).
@@ -1589,12 +1639,7 @@ fn fs_main(in : VsOut) -> FsOut {
   var out : FsOut;
   out.depth = depth;
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
-  // in.color is LINEAR (BOND_COLOR) — shade, add the specular, then encode.
-  // Without the encode the neutral grey bond paints at 86/255 instead of
-  // 157/255 and all but vanishes against a dark background.
-  var rgb = linear_to_srgb(
-    in.color * lighting + vec3<f32>(1.0) * specular * 0.4 * shading.params0.z,
-  );
+  var rgb = linear_to_srgb(final_color);
 
   // Depth cueing — the SAME fog the atoms use (shading.params1.w = depth_cueing).
   // Bonds must fade with it too, or they'd float out of the fog the atoms sink
@@ -2460,6 +2505,9 @@ export function create_large_system_renderer(
       // specular strength and depth-cue params from it, so bonds are lit from the
       // same direction as the atoms and fade into the same fog. FRAGMENT only.
       { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // binding 7 = authoritative base atom colors, indexed by bond endpoint in
+      // vs_main and forwarded as endpoint varyings. VERTEX only.
+      { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
   })
   const bond_render_pipeline = device.createRenderPipeline({
@@ -3230,7 +3278,7 @@ export function create_large_system_renderer(
     return grew
   }
 
-  /** (Re)build the three bond bind groups. Depends on positions_buffer (atom
+  /** (Re)build the three bond bind groups. Depends on positions/colors buffers (atom
    *  realloc), covalent_buffer, the active/candidate pairs buffers, and the elem-ids / rules buffers
    *  (bindings 5/6) — any of which may reallocate. The elem-ids / rules buffers
    *  are auto-created here (with a placeholder if never set) so the auto-layout
@@ -3241,7 +3289,7 @@ export function create_large_system_renderer(
     indirect_bg = null
     bond_render_bg = null
     if (
-      !positions_buffer || !covalent_buffer || !candidate_pairs_buffer ||
+      !positions_buffer || !colors_buffer || !covalent_buffer || !candidate_pairs_buffer ||
       !active_pairs_buffer
     ) return
     // Bindings 5/6 must exist for the auto-layout bind group; lazily create the
@@ -3326,12 +3374,14 @@ export function create_large_system_renderer(
         // binding 6: the shared shading uniform — headlamp + specular + fog, so
         // bonds shade consistently with the atoms.
         { binding: 6, resource: { buffer: shading_buffer } },
+        // binding 7: the SAME authoritative topology.colors buffer the atom
+        // impostor uses. Rebuilt whenever ensure_atom_capacity reallocates it.
+        { binding: 7, resource: { buffer: colors_buffer } },
       ],
     })
   }
 
-  /** Pack + upload the bond render uniform: lattice columns (TRANSPOSED to match
-   *  the compute's column layout) + (radius, color). */
+  /** Pack + upload the bond render uniform: lattice rows plus edge style. */
   /** Upload the GPU supercell uniform: dims (nx,ny,nz,base_count) as u32 + base
    *  lattice rows a,b,c as 3×vec4<f32>. base_count = the current atom_count (the
    *  BASE cell's atom count, since the CPU stays base-cell when GPU-supercell is

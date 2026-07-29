@@ -24,6 +24,21 @@ import type {
 
 type Write = { label: string; bytes: Uint8Array }
 type Pass = { label: string; draws: [number, number][]; indirect: number }
+type RecordedLayout = {
+  label?: string
+  entries: readonly {
+    binding: number
+    visibility: number
+    buffer?: { type?: string }
+  }[]
+}
+type RecordedBindGroup = {
+  label?: string
+  entries: readonly {
+    binding: number
+    resource: { buffer?: { label?: string; size?: number } }
+  }[]
+}
 
 const to_bytes = (
   data: ArrayBuffer | ArrayBufferView,
@@ -52,6 +67,8 @@ const make_recording_device = (opts?: {
   const compute_passes: string[] = []
   const created: string[] = []
   const shader_sources: Record<string, string> = {}
+  const bind_group_layouts: RecordedLayout[] = []
+  const bind_groups: RecordedBindGroup[] = []
   const device = {
     limits: { maxStorageBufferBindingSize: 1 << 27 },
     createBuffer: (desc: { size: number; label?: string }) => {
@@ -93,11 +110,17 @@ const make_recording_device = (opts?: {
       if (desc.label && desc.code) shader_sources[desc.label] = desc.code
       return {}
     },
-    createBindGroupLayout: () => ({}),
+    createBindGroupLayout: (desc: RecordedLayout) => {
+      bind_group_layouts.push(desc)
+      return {}
+    },
     createPipelineLayout: () => ({}),
     createRenderPipeline: () => ({}),
     createComputePipeline: () => ({ getBindGroupLayout: () => ({}) }),
-    createBindGroup: () => ({}),
+    createBindGroup: (desc: RecordedBindGroup) => {
+      bind_groups.push(desc)
+      return {}
+    },
     createCommandEncoder: () => ({
       beginComputePass: (desc?: { label?: string }) => {
         compute_passes.push(desc?.label ?? `?`)
@@ -145,8 +168,19 @@ const make_recording_device = (opts?: {
     passes.length = 0
     compute_passes.length = 0
     created.length = 0
+    bind_groups.length = 0
   }
-  return { device, writes, passes, compute_passes, created, shader_sources, clear }
+  return {
+    device,
+    writes,
+    passes,
+    compute_passes,
+    created,
+    shader_sources,
+    bind_group_layouts,
+    bind_groups,
+    clear,
+  }
 }
 
 const make_mock_canvas = () => ({
@@ -298,7 +332,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     const style_words = new Float32Array(writes[0].bytes.buffer).slice(12)
     const expected_style_words = [
       0.09, 1, 0.15, 1,
-      0.35, 0.7, 0.7, 0.7,
+      0.35, 0, 0, 0,
     ]
     expected_style_words.forEach(
       (value, idx) => expect(style_words[idx]).toBeCloseTo(value),
@@ -315,6 +349,161 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       periodic_bond_opacity: 0.35,
     })
     expect(writes_to(rec.writes, `large-system-bond-render-uniform`)).toHaveLength(0)
+
+    renderer.destroy()
+  })
+
+  it(`binds authoritative atom colors to the bond vertex stage`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+
+    const layout = rec.bind_group_layouts.find(
+      ({ label }) => label === `large-system-bond-render-bgl`,
+    )
+    expect(layout).toBeDefined()
+    expect(layout?.entries.find(({ binding }) => binding === 6)).toMatchObject({
+      binding: 6,
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: { type: `uniform` },
+    })
+    expect(layout?.entries.find(({ binding }) => binding === 7)).toMatchObject({
+      binding: 7,
+      visibility: GPUShaderStage.VERTEX,
+      buffer: { type: `read-only-storage` },
+    })
+
+    renderer.destroy()
+  })
+
+  it(`rebinds bond endpoint colors after authoritative color-buffer growth`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 1]),
+      jimages: new Int8Array([0, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    const packet = {
+      topology: {
+        ...make_topology(graph),
+        atom_count: 2,
+        site_ids: new Uint32Array([0, 1]),
+        atomic_numbers: new Uint8Array([6, 8]),
+        radii: new Float32Array([0.5, 0.6]),
+        colors: new Float32Array([1, 0, 0, 0, 0, 1]),
+      },
+      frame: make_frame({
+        positions: new Float32Array([0, 0, 0, 1, 0, 0]),
+      }),
+      replicas: make_replicas(),
+    } satisfies RenderPacket
+    renderer.set_packet(packet, EMPTY_IMAGES)
+    renderer.set_bond_data(
+      new Float32Array([0.76, 0.66]),
+      packet.frame.lattice,
+      { scale: 1.2, min_bond_dist: 0.4, max_bond_dist: 5 },
+      true,
+    )
+
+    const first_group = rec.bind_groups.filter(
+      ({ label }) => label === `large-system-bond-render-bg`,
+    ).at(-1)
+    const first_colors = first_group?.entries.find(
+      ({ binding }) => binding === 7,
+    )?.resource.buffer
+    expect(first_colors?.label).toBe(`large-system-colors`)
+
+    rec.clear()
+    const grown_count = 20
+    const grown_colors = Float32Array.from(
+      { length: grown_count * 3 },
+      (_, idx) => (idx + 1) / 100,
+    )
+    const grown: RenderPacket = {
+      topology: {
+        version: 2,
+        atom_count: grown_count,
+        site_ids: Uint32Array.from({ length: grown_count }, (_, idx) => idx),
+        atomic_numbers: new Uint8Array(grown_count).fill(6),
+        radii: new Float32Array(grown_count).fill(0.5),
+        colors: grown_colors,
+        bond_graph: graph,
+      },
+      frame: make_frame({
+        positions_version: 2,
+        positions: new Float32Array(grown_count * 3),
+      }),
+      replicas: make_replicas(),
+    }
+    renderer.set_packet(grown, EMPTY_IMAGES)
+
+    const second_group = rec.bind_groups.filter(
+      ({ label }) => label === `large-system-bond-render-bg`,
+    ).at(-1)
+    const second_colors = second_group?.entries.find(
+      ({ binding }) => binding === 7,
+    )?.resource.buffer
+    expect(second_colors?.label).toBe(`large-system-colors`)
+    expect(second_colors).not.toBe(first_colors)
+    expect(second_colors?.size).toBeGreaterThanOrEqual(grown_colors.byteLength)
+    const uploads = writes_to(rec.writes, `large-system-colors`)
+    expect(uploads).toHaveLength(1)
+    expect(Array.from(new Float32Array(uploads[0].bytes.buffer))).toEqual(
+      Array.from(grown_colors),
+    )
+
+    renderer.destroy()
+  })
+
+  it(`uses endpoint gradients and the WebGL bond studio-lighting contract`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const shader = rec.shader_sources[`large-system-bond-render`]
+    expect(shader).toContain(
+      `@group(0) @binding(7) var<storage, read> colors : array<f32>;`,
+    )
+    expect(shader).toContain(`fn atom_color(i : u32) -> vec3<f32>`)
+    expect(shader).toContain(`let color_a = atom_color(a);`)
+    expect(shader).toContain(`let color_b = atom_color(b);`)
+    expect(shader).toContain(
+      `var color_start = select(color_b, color_a, half == 0u);`,
+    )
+    expect(shader).toContain(`var color_end = color_start;`)
+    expect(shader).toContain(`if (is_full) {`)
+    expect(shader).toContain(`color_start = color_a;`)
+    expect(shader).toContain(`color_end = color_b;`)
+    expect(shader).toContain(`let base_color = mix(in.color_start, in.color_end, axial);`)
+    expect(shader).not.toContain(`bond.style1.yzw`)
+
+    expect(shader).toContain(`fn studio_env(n : vec3<f32>, key_dir : vec3<f32>)`)
+    expect(shader).toContain(`fn aces_tonemap(x : vec3<f32>)`)
+    expect(shader).toContain(`64.0`)
+    expect(shader).toContain(`pow(1.0 - NdotV, 5.0)`)
+    expect(shader).toContain(`mix(vec3<f32>(1.0), base_color, 0.55)`)
+    expect(shader).toContain(`let ambient_intensity = 0.8;`)
+    expect(shader).toContain(`let directional_intensity = 0.3;`)
+    expect(shader).toContain(
+      `let exposure = ambient_intensity + directional_intensity * 0.5; // fixed 0.95`,
+    )
+    expect(shader).toContain(`final_color = aces_tonemap(final_color);`)
+
+    const aces = shader.indexOf(`final_color = aces_tonemap(final_color);`)
+    const srgb = shader.indexOf(`var rgb = linear_to_srgb(final_color);`)
+    const fog = shader.indexOf(`if (shading.params1.w > 0.0)`)
+    expect(aces).toBeGreaterThan(-1)
+    expect(srgb).toBeGreaterThan(aces)
+    expect(fog).toBeGreaterThan(srgb)
 
     renderer.destroy()
   })

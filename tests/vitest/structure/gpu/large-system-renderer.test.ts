@@ -45,7 +45,7 @@ describe(`large-system bond visual-style helpers`, () => {
     })
   })
 
-  it(`packs lattice, radius, incomplete-edge controls, opacity, and color`, () => {
+  it(`keeps the 80-byte bond ABI while reserving the obsolete color lanes`, () => {
     const packed = pack_bond_render_uniform(
       new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
       normalize_bond_style({
@@ -55,7 +55,6 @@ describe(`large-system bond visual-style helpers`, () => {
         hide_incomplete_bonds: true,
         periodic_bond_opacity: 0.35,
       }),
-      [0.7, 0.6, 0.5],
     )
     expect(packed.byteLength).toBe(BOND_RENDER_BYTES)
     const expected = [
@@ -63,7 +62,7 @@ describe(`large-system bond visual-style helpers`, () => {
       4, 5, 6, 0,
       7, 8, 9, 0,
       0.09, 1, 0.15, 1,
-      0.35, 0.7, 0.6, 0.5,
+      0.35, 0, 0, 0,
     ]
     expected.forEach((value, idx) => expect(packed[idx]).toBeCloseTo(value))
   })
