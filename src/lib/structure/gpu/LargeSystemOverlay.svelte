@@ -18,6 +18,7 @@
     type LargeSystemRenderer,
     type LargeSystemShading,
   } from '$lib/structure/gpu/large-system-renderer'
+  import type { ResolvedVisualState } from '$lib/structure/rendering/visual-state'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type {
     ImageInstanceTable,
@@ -90,15 +91,10 @@
      *  draw (atoms + cell box still render). Defaults to `crystals` (the app
      *  default) so an absent prop matches the typical periodic-structure view. */
     show_bonds?: ShowBonds
-    /** Viewer canvas background color (hex, e.g. `#000000`), mirroring the WebGL
-     *  path's StructureScene `background_color`. The overlay resolves this the
-     *  SAME way StructureScene's compute_canvas_bg does (lerp toward the theme
-     *  bg by `background_opacity`) and converts it to linear RGB with the SAME
-     *  conversion used for atom colors, so the overlay background matches the
-     *  WebGL viewer's background and dark atoms keep their contrast. */
+    /** Viewer canvas background color. StructureScene owns resolution; this
+     *  input remains as a wake signal until the revision-bearing bridge lands. */
     background_color?: string | undefined
-    /** Override strength of `background_color` over the theme bg: 0 → theme bg,
-     *  1 → picked color, mid → lerp. Mirrors StructureScene's background_opacity. */
+    /** Background override strength. Also retained only as a wake signal. */
     background_opacity?: number
     /** Whether to draw the unit-cell box (lattice wireframe), mirroring the WebGL
      *  view's `scene_props.show_cell`. Default off ⇒ zero change. Only draws when
@@ -493,55 +489,15 @@
     return [_col.r, _col.g, _col.b]
   }
 
-  // ── Background color (Fix 1) ────────────────────────────────────────────
-  // The last linear-RGB background pushed to the renderer, so we only re-push +
-  // re-render when the resolved color actually changes.
+  // ── Shared visual state ─────────────────────────────────────────────────
+  // The last linear-RGB background pushed to the renderer, so we only re-push
+  // when StructureScene publishes a different resolved triple.
   let last_bg: [number, number, number] | null = null
-  const _bg = new Color()
 
-  /** Walk up from the overlay canvas to find the first opaque CSS background
-   *  color (the theme bg), returned in LINEAR RGB. Mirrors
-   *  StructureScene.find_theme_bg so the overlay resolves the same theme
-   *  background the WebGL clear color lerps toward. `setRGB` writes the working
-   *  (linear) space RAW, so the CSS sRGB components need an explicit
-   *  convertSRGBToLinear — unlike Color.set(hex), which converts on its own. */
-  function find_theme_bg(target: Color): Color {
-    let el: HTMLElement | null = canvas ?? null
-    while (el) {
-      const bg = getComputedStyle(el).backgroundColor
-      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
-      if (m) {
-        const a = m[4] !== undefined ? parseFloat(m[4]) : 1
-        if (a >= 0.5) {
-          return target.setRGB(+m[1] / 255, +m[2] / 255, +m[3] / 255).convertSRGBToLinear()
-        }
-      }
-      el = el.parentElement
-    }
-    return target.setRGB(0, 0, 0)
-  }
-
-  /** Resolve the viewer background the SAME way StructureScene.compute_canvas_bg
-   *  does (picked hex, theme bg, or a lerp by background_opacity). Returns the
-   *  LINEAR-RGB triple — every input is already linear (Color.set(hex) converts,
-   *  find_theme_bg converts), so there is NO outer conversion here. The previous
-   *  trailing convertSRGBToLinear() double-darkened any non-black picked
-   *  background (it only looked right on the default #000000, where both spaces
-   *  meet at 0). */
-  function resolve_background_rgb(): [number, number, number] {
-    const picked = new Color(background_color ?? `#000000`)
-    const t = Math.max(0, Math.min(1, background_opacity))
-    if (t >= 0.999) _bg.copy(picked)
-    else if (t <= 0.001) find_theme_bg(_bg)
-    else find_theme_bg(_bg).lerp(picked, t)
-    return [_bg.r, _bg.g, _bg.b]
-  }
-
-  /** Push the resolved background to the renderer when it changed. Marks a
-   *  redraw so the new clear color paints. Returns true if it changed. */
-  function sync_background(): boolean {
+  /** Push StructureScene's resolved background when it changed. set_background
+   *  accepts linear RGB and performs the one required clear-value encoding. */
+  function sync_background(rgb: [number, number, number]): boolean {
     if (!renderer) return false
-    const rgb = resolve_background_rgb()
     if (
       last_bg &&
       Math.abs(last_bg[0] - rgb[0]) < 1e-6 &&
@@ -555,16 +511,20 @@
     return true
   }
 
-  /** Pull the viewer's resolved shading state and push it to the renderer. The
-   *  renderer compares against what it already holds and only re-uploads on a
-   *  real change, returning true when it did — so this is cheap to call every
-   *  frame (the depth-cue near/far DO move with the camera, so it legitimately
-   *  fires on every orbit/zoom). */
-  function sync_shading(): boolean {
+  type PublishedLargeSystemVisualState =
+    & LargeSystemShading
+    & Partial<Pick<ResolvedVisualState, `background_linear`>>
+
+  /** Pull one viewer-owned visual snapshot, then feed its two backend adapters.
+   *  The overlay never inspects DOM or re-resolves CSS. */
+  function sync_visual_state(): boolean {
     if (!renderer || !get_shading) return false
-    const state = get_shading()
+    const state = get_shading() as PublishedLargeSystemVisualState | null
     if (!state) return false
-    return renderer.set_shading(state)
+    const background_changed = state.background_linear
+      ? sync_background(state.background_linear)
+      : false
+    return renderer.set_shading(state) || background_changed
   }
 
   /** Cheap signature of the radius-affecting inputs; changes when any of them
@@ -907,15 +867,10 @@
     // buffer when it changed (overlay click OR external selection change).
     if (sync_selection()) dirty = true
 
-    // Background: resolve the viewer's bg color (theme/opacity/picked) and push
-    // it to the renderer only when it changed. A change repaints so the new
-    // clear color shows. Cheap when static (string compare + no GPU work).
-    if (sync_background()) dirty = true
-
-    // Shading: mirror the viewer's headlamp / lighting profile / render style /
-    // depth cueing / outline. Pulled fresh each frame because the depth-cue
-    // near+far planes track the camera distance.
-    if (sync_shading()) dirty = true
+    // Visual state: one callback read supplies both the already-resolved linear
+    // background and the shading snapshot. Depth-cue near/far still refresh on
+    // every frame while the camera moves.
+    if (sync_visual_state()) dirty = true
 
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
@@ -1150,11 +1105,9 @@
   })
 
   $effect(() => {
-    // Background-color wake trigger. Track the bg inputs so a theme/opacity/
-    // picked-color change revives a suspended loop; the frame re-resolves the
-    // clear color via sync_background and repaints once. (Theme changes that
-    // don't bump these props are caught lazily on the next wake from any other
-    // source — consistent with the WebGL path's own mutation-observer resync.)
+    // Background-input wake trigger. StructureScene owns CSS resolution; these
+    // props only revive the staged getter bridge so the next frame consumes its
+    // newly published linear triple. Task 4 replaces this with a revision.
     void [background_color, background_opacity]
     if (renderer) {
       needs_render = true

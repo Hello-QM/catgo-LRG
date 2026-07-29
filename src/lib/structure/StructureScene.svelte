@@ -8,6 +8,11 @@
   import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, should_reduce_motion, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
   import type { LargeSystemShading } from '$lib/structure/gpu/large-system-renderer'
+  import {
+    find_theme_background,
+    resolve_background_linear,
+  } from '$lib/structure/rendering/background'
+  import type { ResolvedVisualState } from '$lib/structure/rendering/visual-state'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -1408,44 +1413,30 @@
     }
   })
 
-  // Sync renderer clear color with the effective CSS background.
-  // Canvas uses alpha:false (opaque) to avoid compositing glitches caused by
-  // the Gizmo's multi-pass rendering toggling autoClear on a transparent canvas.
-  // Walk DOM to resolve theme background (alpha >= 0.5 wins).
-  function find_theme_bg(): Color {
-    const r = threlte.renderer
-    const canvas = r?.domElement
-    let el: HTMLElement | null = canvas ?? null
-    while (el) {
-      const bg = getComputedStyle(el).backgroundColor
-      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
-      if (m) {
-        const a = m[4] !== undefined ? parseFloat(m[4]) : 1
-        if (a >= 0.5) {
-          return new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255)
-        }
-      }
-      el = el.parentElement
-    }
-    return new Color(0x000000)
-  }
-
-  // Resolve the visible canvas background. Both sync_clear_color and the fog
-  // uniform must produce the same color so depth-cued atoms truly fade INTO
-  // the painted bg. Treat unset background_color as #000000 (matches the
-  // default <input type="color"> swatch) so the opacity slider is always live.
-  function compute_canvas_bg(target: Color): Color {
-    const picked = new Color(background_color ?? `#000000`)
-    const t = Math.max(0, Math.min(1, background_opacity))
-    if (t >= 0.999) return target.copy(picked)
-    if (t <= 0.001) return target.copy(find_theme_bg())
-    return target.copy(find_theme_bg()).lerp(picked, t)
-  }
-
-  // Sync renderer clear color with background_color/opacity. Canvas is
-  // alpha:false (opaque) so `background_opacity` is treated as override
-  // strength: 0 → theme bg, 1 → picked, mid → lerp.
+  // Resolve the effective CSS background once in StructureScene, the owner of
+  // both backend state. CSS arrives as display sRGB; the shared resolver
+  // converts it once and blends in Three's linear working space.
+  const __theme_bg = new Color()
   const __scratch_bg = new Color()
+  let resolved_background_linear: [number, number, number] = [0, 0, 0]
+
+  function compute_canvas_bg(target: Color): Color {
+    const theme = find_theme_background(
+      threlte.renderer?.domElement ?? null,
+      __theme_bg,
+    )
+    const resolved = resolve_background_linear({
+      theme_linear: [theme.r, theme.g, theme.b],
+      picked: background_color ?? `#000000`,
+      opacity: background_opacity,
+    }, target)
+    resolved_background_linear = [resolved.r, resolved.g, resolved.b]
+    return resolved
+  }
+
+  // Canvas uses alpha:false (opaque), so opacity is override strength:
+  // 0 → theme bg, 1 → picked, mid → a linear-RGB blend. WebGL consumes this
+  // same triple directly; the overlay receives it through the visual snapshot.
   function sync_clear_color() {
     const r = threlte.renderer
     if (!r) return
@@ -5314,21 +5305,26 @@
     return 0 // glossy, metallic, and matcap's fallback
   }
 
-  // WebGPU overlay shading bridge: hand the overlay the SAME shading inputs the WebGL
-  // atom shader gets, read live at call time (see the prop's comment for why this
-  // is a getter and why it refreshes the depth-cue planes itself).
-  $effect(() => {
-    get_shading_state = (): LargeSystemShading => {
-      // The useTask that normally keeps the depth-cue planes tracking the camera
-      // is part of the WebGL render loop — suspended while the overlay is up. So
-      // recompute here, against the current camera, rather than reading a value
-      // that stopped updating the moment performance mode was switched on.
-      update_depth_cue_uniforms()
-      const cam = threlte.camera.current
-      // Per-render-style PBR, mirroring style_pbr in AtomManagerInstances.
-      const metallic = render_style === `metallic`
-      const bg = depth_cue_uniforms.uDepthCueBgColor.value
-      return {
+  type PublishedLargeSystemVisualState =
+    & LargeSystemShading
+    & Pick<ResolvedVisualState, `background_linear`>
+
+  /** Build the one shared visual snapshot consumed by both backend adapters.
+   *  Background resolution itself is owned by sync_clear_color; this function
+   *  republishes that exact linear triple and only refreshes camera-dependent
+   *  depth planes. */
+  function resolve_current_visual_state(): ResolvedVisualState {
+    // The useTask that normally keeps the depth-cue planes tracking the camera
+    // is part of the WebGL render loop — suspended while the overlay is up. So
+    // recompute here, against the current camera, rather than reading a value
+    // that stopped updating the moment performance mode was switched on.
+    update_depth_cue_uniforms()
+    const cam = threlte.camera.current
+    // Per-render-style PBR, mirroring style_pbr in AtomManagerInstances.
+    const metallic = render_style === `metallic`
+    const bg = depth_cue_uniforms.uDepthCueBgColor.value
+    return {
+      shading: {
         light_dir: [light_dir.x, light_dir.y, light_dir.z],
         is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
         ambient: active_ambient_light,
@@ -5348,7 +5344,22 @@
         toon_shadow_threshold: 0.3,
         toon_highlight_threshold: 0.97,
         toon_shadow_brightness: 0.5,
-      }
+      },
+      background_linear: [...resolved_background_linear],
+    }
+  }
+
+  // WebGPU overlay bridge: hand the overlay the SAME shading inputs the WebGL
+  // atom shader gets plus the already-resolved linear background. The staged
+  // flat shape preserves the existing callback contract until Task 4 replaces
+  // it with the revision-bearing VisualStateSource.
+  $effect(() => {
+    get_shading_state = (): PublishedLargeSystemVisualState => {
+      const state = resolve_current_visual_state()
+      return {
+        ...state.shading,
+        background_linear: state.background_linear,
+      } as PublishedLargeSystemVisualState
     }
     return () => { get_shading_state = null }
   })
