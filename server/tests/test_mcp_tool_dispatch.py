@@ -212,5 +212,28 @@ async def test_a_direct_catalysis_result_is_published_to_the_viewer(fake_http):
     assert body["payload"]["points"][0]["name"] == "Pt"
 
 
+@pytest.mark.asyncio
+async def test_a_kmc_result_is_published_to_the_viewer(fake_http):
+    # kmc.py has four endpoints and the app had no pixels for any of them.
+    client = fake_http({"coverages": {"CO*": 0.42}, "tof": {"CO2": 1.7e-3}})
+
+    await mcp_server.handle_call_tool("catgo_kmc_simulate", {"model": {}, "temperature": 300})
+
+    pushes = [c for c in client.calls if "/view/result/push" in c[1]]
+    assert pushes, client.calls
+    body = pushes[0][2]["json"]
+    assert body["kind"] == "kinetics"
+    assert body["payload"]["coverages"]["CO*"] == 0.42
+
+
+@pytest.mark.asyncio
+async def test_a_tool_with_no_result_kind_publishes_nothing(fake_http):
+    client = fake_http({"symmetry": "Fm-3m"})
+
+    await mcp_server.handle_call_tool("catgo_structure_info", {})
+
+    assert not [c for c in client.calls if "/view/result/push" in c[1]]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

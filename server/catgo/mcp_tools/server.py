@@ -456,6 +456,11 @@ _DIRECT_RESULT_KINDS = {
     "catgo_catalysis_oer": "overpotential",
     "catgo_catalysis_energy_diagram": "energy_diagram",
     "catgo_catalysis_free_energy": "free_energy",
+    # KMC/microkinetics had four endpoints and no pixels anywhere in the app —
+    # the largest "computes but invisible" surface. Coverages and TOF now land
+    # in the viewer's Results tab like any other computed result.
+    "catgo_kmc_simulate": "kinetics",
+    "catgo_kmc_scan": "kinetics",
 }
 
 
@@ -795,6 +800,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                         ),
                     ]
 
+                await _announce_direct_result(name, data)
                 return [TextContent(type="text", text=json.dumps(data, indent=2))]
             else:
                 # Parse error detail for helpful messages

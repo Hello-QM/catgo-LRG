@@ -4062,6 +4062,19 @@
                       height={240}
                     />
                   {/if}
+                  {#each [`coverages`, `tof`] as table}
+                    {#if node_result[table] && typeof node_result[table] === `object` && !Array.isArray(node_result[table])}
+                      <!-- KMC / microkinetics: four backend endpoints used to
+                           produce these with nowhere in the app to show them -->
+                      <h5 class="sym-heading">{table}</h5>
+                      <dl class="node-result-values">
+                        {#each Object.entries(node_result[table] as Record<string, number>) as [species, value]}
+                          <dt>{species}</dt>
+                          <dd>{typeof value === `number` ? value.toPrecision(4) : value}</dd>
+                        {/each}
+                      </dl>
+                    {/if}
+                  {/each}
                   {#each [`image_energies`, `energies`, `frequencies`] as series}
                     {#if Array.isArray(node_result[series])}
                       <p class="node-result-series">

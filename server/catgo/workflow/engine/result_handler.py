@@ -85,6 +85,10 @@ async def on_task_completed(
             # Store results in task_results table
             db.store_result(task_id, workflow_id, outputs_json=outputs, **extra_fields)
             logger.info(f"Task {task_id}: collected {label} results")
+            # A reaction path is worth watching, not just reading a barrier off.
+            await _publish_path_trajectory(
+                hpc_connection, work_dir, task_id, resolved_type
+            )
         else:
             logger.debug(f"Task {task_id}: no result collector for {task_type}")
 
@@ -101,6 +105,62 @@ async def on_task_completed(
         })
         workflow_id = task.get("workflow_id", "")
         db.store_result(task_id, workflow_id, outputs_json=error_output)
+
+
+# A path calculation already writes its whole path as one multi-frame XYZ, so
+# the reaction can be ANIMATED instead of reduced to a barrier number. Read it
+# while the SSH connection is still alive, like the TS structure above.
+# ponytail: ORCA only — a VASP NEB keeps its images in `00/`…`NN/` sub-dirs and
+# needs N reads plus an ordering rule; add that when a VASP NEB collector exists
+# (today nothing collects one).
+_PATH_TRAJECTORY_FILES = {
+    "orca_neb_ts": ("ORCA_MEP_trj.xyz", "ORCA_MEP_ALL_trj.xyz"),
+    "orca_irc": ("ORCA_IRC_Full_trj.xyz",),
+}
+# The viewer animates a path, not a production MD run. Above this the transfer
+# costs more than the picture is worth — say so in the log rather than stalling
+# the SSE bus with megabytes.
+_MAX_PATH_TRAJECTORY_BYTES = 8_000_000
+
+
+async def _publish_path_trajectory(
+    hpc_connection: Any, work_dir: str, task_id: str, resolved_type: str
+) -> None:
+    """Push a finished path calculation into the viewer as an animation."""
+    candidates = _PATH_TRAJECTORY_FILES.get(resolved_type)
+    if not candidates or not work_dir:
+        return
+    for name in candidates:
+        path = f"{work_dir}/{name}"
+        try:
+            sized = await hpc_connection.run_on_owner(
+                lambda path=path: hpc_connection.conn.run(
+                    f"stat -c %s {path}", check=False
+                )
+            )
+            if sized.exit_status != 0:
+                continue
+            size = int((sized.stdout or "0").strip() or 0)
+            if size > _MAX_PATH_TRAJECTORY_BYTES:
+                logger.info(
+                    "Task %s: %s is %d bytes, too large to animate — skipping",
+                    task_id, name, size,
+                )
+                continue
+            read = await hpc_connection.run_on_owner(
+                lambda path=path: hpc_connection.conn.run(f"cat {path}", check=False)
+            )
+            content = read.stdout or ""
+            if read.exit_status != 0 or content.count("\n") < 4:
+                continue
+            from catgo.routers import view_state
+
+            view_state.push_trajectory(view_state.last_active_panel_id, content, name)
+            logger.info("Task %s: pushed %s to the viewer (%d bytes)", task_id, name, size)
+            return
+        except Exception:
+            logger.debug("Task %s: could not publish %s", task_id, name, exc_info=True)
+    return
 
 
 async def _read_neb_ts_structure(hpc_connection: Any, work_dir: str) -> Optional[str]:
