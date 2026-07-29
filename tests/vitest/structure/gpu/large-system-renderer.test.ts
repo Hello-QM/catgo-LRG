@@ -6,6 +6,7 @@ import {
   GIZMO_NEG_AXIS_HEX,
   GIZMO_WGSL,
 } from '$lib/structure/gpu/large-system-renderer'
+import { srgb_channel_to_linear } from '$lib/structure/rendering/background'
 import { axis_colors, neg_axis_colors } from '$lib/colors'
 import type { TypedBondInput } from '$lib/structure/workers/bond-worker-runtime'
 
@@ -85,6 +86,7 @@ const make_mock_device = (
   // submits/writes count EVERY queue command so the device-loss tests can
   // assert the renderer submits NOTHING after `lost` resolves.
   const counters = { bind_group: 0, submits: 0, writes: 0 }
+  const clear_values: { r: number; g: number; b: number; a: number }[] = []
   // Controllable device-loss promise, mirroring GPUDevice.lost. Resolving it
   // drives the renderer's one-per-lease loss subscription.
   let resolve_lost: (info: { reason: string }) => void = () => {}
@@ -93,6 +95,7 @@ const make_mock_device = (
   })
   return {
     counters,
+    clear_values,
     lost,
     resolve_lost,
     limits: { maxStorageBufferBindingSize: 1 << 27 },
@@ -133,13 +136,21 @@ const make_mock_device = (
       dispatchWorkgroups: () => {},
       end: () => {},
     }),
-    beginRenderPass: () => ({
-      setPipeline: () => {},
-      setBindGroup: () => {},
-      draw: () => {},
-      drawIndirect: () => {},
-      end: () => {},
-    }),
+    beginRenderPass: (desc?: {
+      colorAttachments?: {
+        clearValue?: { r: number; g: number; b: number; a: number }
+      }[]
+    }) => {
+      const clear = desc?.colorAttachments?.[0]?.clearValue
+      if (clear) clear_values.push({ ...clear })
+      return {
+        setPipeline: () => {},
+        setBindGroup: () => {},
+        draw: () => {},
+        drawIndirect: () => {},
+        end: () => {},
+      }
+    },
     copyBufferToBuffer: () => {},
     copyTextureToBuffer: () => {},
     finish: () => ({}),
@@ -229,6 +240,32 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
   })
   afterAll(() => {
     vi.unstubAllGlobals()
+  })
+
+  it(`encodes a linear background exactly once into the render-pass clear value`, () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const display_mid = 128 / 255
+    const linear_mid = srgb_channel_to_linear(display_mid)
+
+    renderer.set_background([linear_mid, linear_mid, linear_mid])
+    renderer.render()
+
+    expect(device.clear_values).toHaveLength(1)
+    const clear = device.clear_values[0]
+    expect(clear.r).toBeCloseTo(display_mid, 6)
+    expect(clear.g).toBeCloseTo(display_mid, 6)
+    expect(clear.b).toBeCloseTo(display_mid, 6)
+    expect(clear.a).toBe(1)
+    // Missing clear-value encoding would leave the much darker linear value;
+    // a second encoding would be brighter than display_mid. The exact display
+    // assertion above therefore locks both failure modes.
+    expect(clear.r).not.toBeCloseTo(linear_mid, 3)
+
+    renderer.destroy()
   })
 
   it(`supercell changes only replica state`, async () => {

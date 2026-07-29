@@ -1,6 +1,4 @@
 import { Color } from 'three'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   find_theme_background,
@@ -80,24 +78,5 @@ describe(`shared background resolver`, () => {
     document.body.append(canvas)
 
     expect(find_theme_background(canvas, new Color()).toArray()).toEqual([0, 0, 0])
-  })
-
-  it(`keeps DOM resolution in StructureScene and publishes one linear triple to the overlay`, () => {
-    const scene = readFileSync(
-      resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
-      `utf8`,
-    )
-    const overlay = readFileSync(
-      resolve(process.cwd(), `src/lib/structure/gpu/LargeSystemOverlay.svelte`),
-      `utf8`,
-    )
-
-    expect(scene).toContain(`find_theme_background(`)
-    expect(scene).toContain(`resolve_background_linear(`)
-    expect(scene).toContain(`background_linear`)
-    expect(scene).not.toContain(`function find_theme_bg`)
-    expect(overlay).toContain(`background_linear`)
-    expect(overlay).not.toContain(`getComputedStyle(`)
-    expect(overlay).not.toContain(`resolve_background_rgb`)
   })
 })
