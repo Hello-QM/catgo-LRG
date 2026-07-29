@@ -23,7 +23,42 @@ import type {
 // packet upload paths can be asserted byte-for-byte without a GPU.
 
 type Write = { label: string; bytes: Uint8Array }
-type Pass = { label: string; draws: [number, number][]; indirect: number }
+type RenderPipelineDescriptor = {
+  label?: string
+  vertex?: { constants?: Record<string, number | boolean> }
+  fragment?: {
+    targets?: {
+      blend?: {
+        color: { srcFactor: string; dstFactor: string; operation: string }
+        alpha: { srcFactor: string; dstFactor: string; operation: string }
+      }
+    }[]
+  }
+  depthStencil?: {
+    depthWriteEnabled?: boolean
+    depthCompare?: string
+  }
+  multisample?: {
+    count?: number
+    alphaToCoverageEnabled?: boolean
+  }
+}
+type RenderCommand =
+  | {
+      kind: `draw`
+      pipeline?: string
+      vertex_count: number
+      instance_count: number
+      first_vertex: number
+      first_instance: number
+    }
+  | { kind: `drawIndirect`; pipeline?: string }
+type Pass = {
+  label: string
+  draws: [number, number][]
+  indirect: number
+  commands: RenderCommand[]
+}
 type RecordedLayout = {
   label?: string
   entries: readonly {
@@ -69,6 +104,7 @@ const make_recording_device = (opts?: {
   const shader_sources: Record<string, string> = {}
   const bind_group_layouts: RecordedLayout[] = []
   const bind_groups: RecordedBindGroup[] = []
+  const render_pipelines: RenderPipelineDescriptor[] = []
   const device = {
     limits: { maxStorageBufferBindingSize: 1 << 27 },
     createBuffer: (desc: { size: number; label?: string }) => {
@@ -115,7 +151,10 @@ const make_recording_device = (opts?: {
       return {}
     },
     createPipelineLayout: () => ({}),
-    createRenderPipeline: () => ({}),
+    createRenderPipeline: (desc: RenderPipelineDescriptor) => {
+      render_pipelines.push(desc)
+      return { label: desc.label }
+    },
     createComputePipeline: () => ({ getBindGroupLayout: () => ({}) }),
     createBindGroup: (desc: RecordedBindGroup) => {
       bind_groups.push(desc)
@@ -132,16 +171,38 @@ const make_recording_device = (opts?: {
         }
       },
       beginRenderPass: (desc?: { label?: string }) => {
-        const pass: Pass = { label: desc?.label ?? `frame`, draws: [], indirect: 0 }
+        const pass: Pass = {
+          label: desc?.label ?? `frame`,
+          draws: [],
+          indirect: 0,
+          commands: [],
+        }
         passes.push(pass)
+        let pipeline: string | undefined
         return {
-          setPipeline: () => {},
+          setPipeline: (next: { label?: string }) => {
+            pipeline = next.label
+          },
           setBindGroup: () => {},
-          draw: (verts: number, instances = 1) => {
+          draw: (
+            verts: number,
+            instances = 1,
+            first_vertex = 0,
+            first_instance = 0,
+          ) => {
             pass.draws.push([verts, instances])
+            pass.commands.push({
+              kind: `draw`,
+              pipeline,
+              vertex_count: verts,
+              instance_count: instances,
+              first_vertex,
+              first_instance,
+            })
           },
           drawIndirect: () => {
             pass.indirect += 1
+            pass.commands.push({ kind: `drawIndirect`, pipeline })
           },
           end: () => {},
         }
@@ -179,6 +240,7 @@ const make_recording_device = (opts?: {
     shader_sources,
     bind_group_layouts,
     bind_groups,
+    render_pipelines,
     clear,
   }
 }
@@ -349,6 +411,186 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       periodic_bond_opacity: 0.35,
     })
     expect(writes_to(rec.writes, `large-system-bond-render-uniform`)).toHaveLength(0)
+
+    renderer.destroy()
+  })
+
+  it(`stores clamped ghost opacity only in the spare supercell lane`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const before = renderer.get_diagnostics()
+    rec.clear()
+
+    renderer.set_ghost_opacity(0.35)
+    expect(rec.writes.map(({ label }) => label)).toEqual([
+      `large-system-supercell`,
+    ])
+    let rows = new Float32Array(rec.writes[0].bytes.buffer, 16, 12)
+    expect(rows[3]).toBe(0) // lat0.w remains the boundary policy
+    expect(rows[7]).toBeCloseTo(0.35) // lat1.w is the spare ghost-opacity lane
+    expect(renderer.get_diagnostics().ownership).toBe(before.ownership)
+    expect(renderer.debug_bond_state().dispatches).toEqual(
+      before.bonds.dispatches,
+    )
+
+    rec.clear()
+    renderer.set_ghost_opacity(0.35)
+    renderer.set_ghost_opacity(Number.NaN)
+    expect(rec.writes).toHaveLength(0)
+
+    renderer.set_ghost_opacity(9)
+    rows = new Float32Array(rec.writes[0].bytes.buffer, 16, 12)
+    expect(rows[7]).toBe(1)
+
+    rec.clear()
+    renderer.set_ghost_opacity(-4)
+    rows = new Float32Array(rec.writes[0].bytes.buffer, 16, 12)
+    expect(rows[7]).toBe(0)
+
+    rec.clear()
+    renderer.set_shading({
+      light_dir: [0, 0, 1],
+      is_ortho: false,
+      ambient: 0.61,
+      directional: 2.2,
+      spec_strength: 1,
+      roughness: 0.2,
+      metalness: 0,
+      render_style: 0,
+      outline: 0,
+      bond_outline: 0,
+      depth_cueing: 0,
+      depth_near: 0,
+      depth_far: 10,
+      depth_bg: [0, 0, 0],
+      toon_shadow_threshold: 0.3,
+      toon_highlight_threshold: 0.97,
+      toon_shadow_brightness: 0.5,
+    })
+    expect(writes_to(rec.writes, `large-system-shading`)[0]?.bytes.byteLength).toBe(96)
+
+    renderer.destroy()
+  })
+
+  it(`draws sparse ghosts and ghost-complete bonds through translucent passes`, () => {
+    const graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 0]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    renderer.set_packet({
+      topology: make_topology(graph),
+      frame: make_frame(),
+      replicas: make_replicas({ boundary_policy: `ghost-images` }),
+    }, EMPTY_IMAGES)
+    renderer.set_ghost_opacity(0.25)
+    renderer.set_bond_style({ periodic_bond_opacity: 0.25 })
+    renderer.render()
+
+    const atom_ghost = rec.render_pipelines.find(
+      ({ label }) => label === `large-system-impostor-ghost-pipeline`,
+    )
+    expect(atom_ghost?.fragment?.targets?.[0]?.blend).toEqual({
+      color: {
+        srcFactor: `src-alpha`,
+        dstFactor: `one-minus-src-alpha`,
+        operation: `add`,
+      },
+      alpha: {
+        srcFactor: `one`,
+        dstFactor: `one-minus-src-alpha`,
+        operation: `add`,
+      },
+    })
+    expect(atom_ghost?.depthStencil).toMatchObject({
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    })
+    expect(atom_ghost?.multisample).toEqual({
+      count: 4,
+      alphaToCoverageEnabled: false,
+    })
+
+    const bond_ghost = rec.render_pipelines.find(
+      ({ label }) => label === `large-system-bond-render-ghost-pipeline`,
+    )
+    expect(bond_ghost?.fragment?.targets?.[0]?.blend).toEqual(
+      atom_ghost?.fragment?.targets?.[0]?.blend,
+    )
+    expect(bond_ghost?.depthStencil).toMatchObject({
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    })
+    expect(bond_ghost?.multisample).toEqual({
+      count: 4,
+      alphaToCoverageEnabled: false,
+    })
+    expect(bond_ghost?.vertex?.constants).toMatchObject({ ghost_pass: 1 })
+    expect(
+      rec.render_pipelines.find(
+        ({ label }) => label === `large-system-bond-render-pipeline`,
+      )?.vertex?.constants,
+    ).toMatchObject({ ghost_pass: 0 })
+
+    const atom_shader = rec.shader_sources[`large-system-impostor`]
+    expect(atom_shader).toContain(
+      `out.color = vec4<f32>(rgb, coverage * in.opacity);`,
+    )
+    const bond_shader = rec.shader_sources[`large-system-bond-render`]
+    expect(bond_shader).toContain(`override ghost_pass : u32 = 0u;`)
+    expect(bond_shader).toContain(
+      `let wrong_pass = (ghost_pass != 0u) != ghost_complete;`,
+    )
+    expect(bond_shader).toContain(
+      `out.opacity = select(clamp(bond.style1.x, 0.0, 1.0), 1.0, inside);`,
+    )
+
+    const frame = rec.passes.find(({ label }) => label === `frame`)
+    expect(frame?.commands).toEqual([
+      {
+        kind: `draw`,
+        pipeline: `large-system-impostor-pipeline`,
+        vertex_count: 4,
+        instance_count: N,
+        first_vertex: 0,
+        first_instance: 0,
+      },
+      {
+        kind: `drawIndirect`,
+        pipeline: `large-system-bond-render-pipeline`,
+      },
+      {
+        kind: `draw`,
+        pipeline: `large-system-impostor-ghost-pipeline`,
+        vertex_count: 4,
+        instance_count: 1,
+        first_vertex: 0,
+        first_instance: N,
+      },
+      {
+        kind: `drawIndirect`,
+        pipeline: `large-system-bond-render-ghost-pipeline`,
+      },
+      {
+        kind: `draw`,
+        pipeline: `large-system-gizmo-pipeline`,
+        vertex_count: 4,
+        instance_count: 1,
+        first_vertex: 0,
+        first_instance: 0,
+      },
+    ])
+    expect(frame?.indirect).toBe(2)
 
     renderer.destroy()
   })
@@ -684,7 +926,15 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
 
     renderer.render()
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N + 1])
+    expect(frame_pass?.draws[0]).toEqual([4, N])
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-ghost-pipeline`,
+      vertex_count: 4,
+      instance_count: 1,
+      first_vertex: 0,
+      first_instance: N,
+    })
     expect(renderer.get_diagnostics().ghost_count).toBe(1)
 
     renderer.destroy()
@@ -942,6 +1192,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.render()
     let frame_pass = rec.passes.find((p) => p.label === `frame`)
     expect(frame_pass?.draws[0]).toEqual([4, N * 2]) // hide never draws ghosts
+    expect(frame_pass?.indirect).toBe(1)
     expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
 
     rec.clear()
@@ -960,8 +1211,16 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(policy_rows[3]).toBe(2)
     renderer.render()
     frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N * 2 + 1])
-    expect(frame_pass?.indirect).toBe(1)
+    expect(frame_pass?.draws[0]).toEqual([4, N * 2])
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-ghost-pipeline`,
+      vertex_count: 4,
+      instance_count: 1,
+      first_vertex: 0,
+      first_instance: N * 2,
+    })
+    expect(frame_pass?.indirect).toBe(2)
     expect(rec.compute_passes).toContain(`large-system-bond-indirect`)
     expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
 
@@ -1016,7 +1275,15 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     ])
     expect(renderer.get_diagnostics().ghost_count).toBe(2)
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N * 4 + 2])
+    expect(frame_pass?.draws[0]).toEqual([4, N * 4])
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-ghost-pipeline`,
+      vertex_count: 4,
+      instance_count: 2,
+      first_vertex: 0,
+      first_instance: N * 4,
+    })
 
     renderer.destroy()
   })

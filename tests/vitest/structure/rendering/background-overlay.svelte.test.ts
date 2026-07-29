@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => {
     set_camera_full: vi.fn(),
     set_cell: vi.fn(),
     set_gizmo_layout: vi.fn(),
+    set_ghost_opacity: vi.fn(),
     set_packet: vi.fn(),
     set_selection: vi.fn(),
     set_shading: vi.fn(() => false),

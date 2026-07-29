@@ -146,7 +146,7 @@ export type LargeSystemBondStyle = {
   incomplete_edge_length_scale: number
   /** Collapse incomplete boundary edges when no real/ghost partner is drawn. */
   hide_incomplete_bonds: boolean
-  /** Opacity of incomplete periodic half-edges (full/ghost-complete edges stay opaque). */
+  /** Opacity of incomplete periodic half-edges and ghost-complete boundary edges. */
   periodic_bond_opacity: number
 }
 
@@ -599,8 +599,9 @@ struct Camera {
 };
 
 // GPU supercell uniform (Phase 1). dims = [nx,ny,nz] tiling counts; base_count =
-// atoms in the BASE cell. lat0/lat1/lat2 are the base lattice rows a,b,c (xyz in
-// .xyz, w pad) — the per-cell offset is ix·a + iy·b + iz·c. Default dims (1,1,1)
+// atoms in the BASE cell. lat0/lat1/lat2 are the base lattice rows a,b,c in
+// .xyz; lat0.w carries boundary policy and lat1.w sparse ghost opacity. The
+// per-cell offset is ix·a + iy·b + iz·c. Default dims (1,1,1)
 // + base_count = the instance count ⇒ atom = inst, zero offset ⇒ identical draw.
 struct Supercell {
   dims : vec4<u32>,    // x=nx, y=ny, z=nz, w=base_count
@@ -650,6 +651,7 @@ struct VsOut {
   @location(3) vpos : vec3<f32>,    // view-space position of this quad corner
   @location(4) @interpolate(flat) sel : u32, // 1 = this atom is selected
   @location(5) quad : vec2<f32>,    // billboard corner in [-1,1]
+  @location(6) @interpolate(flat) opacity : f32,
 };
 
 struct FsOut {
@@ -690,6 +692,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let real_count = base_count * nx * ny * nz;
   var atom : u32;
   var offset : vec3<f32>;
+  var opacity = 1.0;
   if (inst < real_count) {
     atom = inst % base_count;
     let cell = inst / base_count;
@@ -712,6 +715,9 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     offset = jx * supercell.lat0.xyz
            + jy * supercell.lat1.xyz
            + jz * supercell.lat2.xyz;
+    // lat1.w is the spare Supercell lane owned by visual ghost opacity.
+    // Home replicas stay opaque; only sparse image instances consume it.
+    opacity = clamp(supercell.lat1.w, 0.0, 1.0);
   }
 
   let center = vec3<f32>(
@@ -748,6 +754,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.vpos = vpos;
   out.sel = selected[atom];
   out.quad = c;
+  out.opacity = opacity;
   return out;
 }
 
@@ -909,9 +916,10 @@ fn fs_main(in : VsOut) -> FsOut {
 
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
-  // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
-  // the color target stays opaque.
-  out.color = vec4<f32>(rgb, coverage);
+  // The opaque home pipeline sees opacity=1 and consumes coverage through
+  // alpha-to-coverage. Sparse ghosts run through a separate blended pipeline,
+  // where coverage×opacity supplies true translucency with depth writes off.
+  out.color = vec4<f32>(rgb, coverage * in.opacity);
   return out;
 }
 ` + LINEAR_TO_SRGB_WGSL
@@ -1145,6 +1153,11 @@ fn build_args() {
  *  as the sphere impostor, so bonds share the depth buffer and occlude / are
  *  occluded consistently with atoms. Degenerate (zero-length) halves discard cleanly. */
 const BOND_RENDER_WGSL = `
+// The same shader module backs two render pipelines. The opaque main pass draws
+// every edge except sparse-ghost completions; the translucent ghost pass draws
+// only those completions.
+override ghost_pass : u32 = 0u;
+
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
@@ -1210,7 +1223,7 @@ struct VsOut {
   // stub coincident with an intra-cell bond at a shared atom loses the depth tie
   // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
   @location(6) is_stub : f32,
-  // Incomplete periodic half-edge opacity. Full and ghost-complete edges use 1.
+  // Incomplete/ghost-complete periodic opacity. In-cell edges use 1.
   @location(7) opacity : f32,
 };
 
@@ -1321,7 +1334,11 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let boundary_policy = u32(round(supercell.lat0.w));
   let ghost_complete = (!inside) && boundary_policy == 2u;
   let style_hide_outside = (!inside) && bond.style0.w > 0.5 && !ghost_complete;
-  let hide_outside = (!inside) && (boundary_policy == 1u || style_hide_outside);
+  // Pipeline partition: the opaque pass excludes ghost completions, while the
+  // blended pass excludes every ordinary in-cell/stub edge.
+  let wrong_pass = (ghost_pass != 0u) != ghost_complete;
+  let hide_outside = wrong_pass
+                  || ((!inside) && (boundary_policy == 1u || style_hide_outside));
 
   // Render as ONE full cylinder when the partner is a real in-range atom OR a
   // sparse ghost. half 0 spans A→partnerB; half 1 collapses. Stub policy keeps
@@ -1453,7 +1470,9 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.vpos = vpos;
   // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
   out.is_stub = select(1.0, 0.0, is_intra);
-  out.opacity = select(clamp(bond.style1.x, 0.0, 1.0), 1.0, is_full);
+  // In-cell full cylinders are opaque. Both incomplete stubs and full
+  // ghost-complete boundary cylinders use the viewer's image opacity.
+  out.opacity = select(clamp(bond.style1.x, 0.0, 1.0), 1.0, inside);
   return out;
 }
 
@@ -1788,6 +1807,11 @@ export type LargeSystemRenderer = {
    *  ownership or invalidating the scientific bond graph. Repeated equal style
    *  values are a no-op. */
   set_bond_style(style: Partial<LargeSystemBondStyle>): void
+  /** Mirror the viewer's sparse image-atom opacity. The value is finite-clamped
+   *  to [0,1] and packed into the spare supercell `lat1.w` lane. This is a
+   *  visual-only 64-byte uniform upload: it never changes packet ownership or
+   *  invalidates topology / bond detection. */
+  set_ghost_opacity(opacity: number): void
   /** Provide the per-element-pair bond_distance_rules POST-FILTER inputs (matches
    *  src/lib/structure/scene/visibility.ts). `elem_ids` is the per-atom element id
    *  (N entries) and `rules` is the packed rule buffer (4 floats per rule:
@@ -2019,6 +2043,9 @@ export function create_large_system_renderer(
   let colors_buffer: GPUBuffer | null = null
   let atom_capacity = 0 // instances the current buffers can hold
   let atom_count = 0 // instances to draw this frame
+  // Sparse image atoms mirror the viewer's image opacity. Kept in the spare
+  // Supercell lat1.w lane so no new buffer/binding is needed.
+  let ghost_atom_opacity = 1
   // Initialise the supercell uniform to identity (dims 1,1,1 / zero lattice) so
   // the binding is valid before any set_supercell/set_atoms — ncells 1, zero
   // offset ⇒ the draw is identical to the non-supercell path. Must run AFTER
@@ -2325,9 +2352,12 @@ export function create_large_system_renderer(
     ],
   })
 
+  const impostor_pipeline_layout = device.createPipelineLayout({
+    bindGroupLayouts: [bind_group_layout],
+  })
   const pipeline = device.createRenderPipeline({
     label: `large-system-impostor-pipeline`,
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bind_group_layout] }),
+    layout: impostor_pipeline_layout,
     vertex: { module: shader, entryPoint: `vs_main` },
     fragment: { module: shader, entryPoint: `fs_main`, targets: [{ format }] },
     // Camera-facing billboards must never be back-face culled — winding flips
@@ -2343,6 +2373,40 @@ export function create_large_system_renderer(
     // sphere edge — defined by ray-miss discard — gets antialiased. The color
     // target stays opaque (no blend); alpha is consumed ONLY as coverage.
     multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
+  })
+  const ghost_pipeline = device.createRenderPipeline({
+    label: `large-system-impostor-ghost-pipeline`,
+    layout: impostor_pipeline_layout,
+    vertex: { module: shader, entryPoint: `vs_main` },
+    fragment: {
+      module: shader,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    },
+    // True alpha blending owns the fractional coverage here. A2C would turn
+    // opacity into stochastic sample coverage and still fail to composite the
+    // ghost color correctly.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
   })
 
   // ── Atom PICK pipeline (id-buffer) ───────────────────────────────────────
@@ -2516,10 +2580,17 @@ export function create_large_system_renderer(
       { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
   })
+  const bond_render_pipeline_layout = device.createPipelineLayout({
+    bindGroupLayouts: [bond_render_bgl],
+  })
   const bond_render_pipeline = device.createRenderPipeline({
     label: `large-system-bond-render-pipeline`,
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bond_render_bgl] }),
-    vertex: { module: bond_render_module, entryPoint: `vs_main` },
+    layout: bond_render_pipeline_layout,
+    vertex: {
+      module: bond_render_module,
+      entryPoint: `vs_main`,
+      constants: { ghost_pass: 0 },
+    },
     fragment: { module: bond_render_module, entryPoint: `fs_main`, targets: [{ format }] },
     // Impostor cylinder is a screen-aligned capsule-bounding billboard (6-vert
     // triangle-STRIP hull, matching BOND_VERTS_PER_CYLINDER); the fragment shader
@@ -2535,6 +2606,41 @@ export function create_large_system_renderer(
     // silhouette (body + caps), defined by ray-miss discard, outputs fractional
     // coverage as alpha so the curved/grazing bond edges are smoothly AA'd.
     multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
+  })
+  const bond_render_ghost_pipeline = device.createRenderPipeline({
+    label: `large-system-bond-render-ghost-pipeline`,
+    layout: bond_render_pipeline_layout,
+    vertex: {
+      module: bond_render_module,
+      entryPoint: `vs_main`,
+      constants: { ghost_pass: 1 },
+    },
+    fragment: {
+      module: bond_render_module,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    },
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
   })
 
   // Cell-box render: 12 edges as a thin line-list. Binds camera + cell uniform.
@@ -3389,7 +3495,9 @@ export function create_large_system_renderer(
 
   /** Pack + upload the bond render uniform: lattice rows plus edge style. */
   /** Upload the GPU supercell uniform: dims (nx,ny,nz,base_count) as u32 + base
-   *  lattice rows a,b,c as 3×vec4<f32>. base_count = the current atom_count (the
+   *  lattice rows a,b,c as 3×vec4<f32>. `lat0.w` carries boundary policy and
+   *  the otherwise-spare `lat1.w` carries sparse ghost opacity. base_count =
+   *  the current atom_count (the
    *  BASE cell's atom count, since the CPU stays base-cell when GPU-supercell is
    *  active). Stored as ROWS a/b/c (matching pack_lattice's row convention) — the
    *  vertex offset reads supercell.lat{0,1,2}.xyz directly as a/b/c. Re-called by
@@ -3406,10 +3514,10 @@ export function create_large_system_renderer(
     // decoded as inst % base_count). 0 atoms ⇒ no draw, value is irrelevant.
     u32[3] = Math.max(0, atom_count)
     const L = supercell_lattice
-    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. The lat0.w pad
-    // slot carries the complete boundary policy (stub=0, hide=1,
-    // ghost-images=2); atom/pick impostors read only .xyz, so it never perturbs
-    // replica positions.
+    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. lat0.w carries
+    // complete boundary policy (stub=0, hide=1, ghost-images=2); lat1.w carries
+    // sparse image opacity. Position decode reads only .xyz, so neither visual
+    // lane perturbs replica positions.
     const ghost_graph_ready = active_bond_count === 0 || active_cpu_graph !== null
     const policy_code = boundary_policy === `hide`
       ? 1
@@ -3417,7 +3525,7 @@ export function create_large_system_renderer(
       ? 2
       : 0
     f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = policy_code
-    f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = 0
+    f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = ghost_atom_opacity
     f32[8] = L[6]; f32[9] = L[7]; f32[10] = L[8]; f32[11] = 0
     device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
   }
@@ -3775,6 +3883,15 @@ export function create_large_system_renderer(
       }
       bond_style = next
       upload_bond_render_uniform()
+    },
+    set_ghost_opacity(opacity: number): void {
+      if (destroyed || device_lost || !Number.isFinite(opacity)) return
+      const next = Math.max(0, Math.min(1, opacity))
+      if (next === ghost_atom_opacity) return
+      ghost_atom_opacity = next
+      // Visual-only: preserve packet/legacy ownership and every graph dirty
+      // flag. Reusing the 64-byte Supercell uniform is the sole GPU mutation.
+      upload_supercell_uniform()
     },
     set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
       if (destroyed || device_lost) return
@@ -4331,9 +4448,9 @@ export function create_large_system_renderer(
         // GPU supercell: atom_count × ncells instances (ncells = nx·ny·nz). The
         // vertex decodes inst → atom (inst % base_count) + cell offset. ncells 1
         // ⇒ atom_count instances, identical to the non-supercell draw. Sparse
-        // ghost instances ('ghost-images' packet policy) append past the
-        // replica range — 0 outside that policy, so nothing else changes.
-        pass.draw(4, atom_count * Math.max(1, supercell_ncells) + ghost_draw_count())
+        // ghosts are deliberately excluded: they draw later through a truly
+        // translucent pipeline with depth writes disabled.
+        pass.draw(4, atom_count * Math.max(1, supercell_ncells))
       }
       // Bonds: instanced procedural cylinders, instance count supplied by the
       // indirect buffer the compute wrote (this same submit, or last frame's).
@@ -4350,6 +4467,24 @@ export function create_large_system_renderer(
         pass.setPipeline(cell_pipeline)
         pass.setBindGroup(0, cell_bind_group)
         pass.draw(24) // 12 edges × 2 line endpoints
+      }
+      // Sparse image atoms append after the home replica range in the shared
+      // instance tables. Blend them after every opaque scene primitive, keeping
+      // the home atoms on the original depth-writing A2C pipeline.
+      const ghosts = ghost_draw_count()
+      if (atom_count > 0 && bind_group && ghosts > 0) {
+        const home_count = atom_count * Math.max(1, supercell_ncells)
+        pass.setPipeline(ghost_pipeline)
+        pass.setBindGroup(0, bind_group)
+        pass.draw(4, ghosts, 0, home_count)
+      }
+      // A second drawIndirect reuses the established graph/count buffer. The
+      // shader specialization collapses every edge except ghost-complete
+      // boundary cylinders; no second GPU graph or indirect buffer exists.
+      if (bonds_ready && ghosts > 0 && boundary_policy === `ghost-images`) {
+        pass.setPipeline(bond_render_ghost_pipeline)
+        pass.setBindGroup(0, bond_render_bg as GPUBindGroup)
+        pass.drawIndirect(indirect_buffer, 0)
       }
       // Axis-orientation gizmo: drawn LAST with depthCompare:`always` + no depth
       // write so the corner XYZ triad is ALWAYS visible (atoms/bonds never occlude

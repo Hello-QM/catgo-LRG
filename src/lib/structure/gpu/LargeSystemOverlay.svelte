@@ -347,6 +347,7 @@
   // click or an external selection change).
   let selection_sig = ``
   let bond_style_sig = ``
+  let last_ghost_opacity: number | null = null
 
   const IDENTITY_VIEW_TRANSFORM = resolve_view_transform(null, null)
   let current_visual_snapshot: ResolvedVisualState | null = null
@@ -374,6 +375,22 @@
       hide_incomplete_bonds,
       periodic_bond_opacity: image_atom_opacity,
     })
+    return true
+  }
+
+  /** Mirror sparse image-atom opacity independently from bond style. Both use
+   *  the same viewer control, but the renderer keeps atom opacity in the spare
+   *  Supercell lane and bond opacity in BondU. */
+  function sync_ghost_opacity(): boolean {
+    if (!renderer) return false
+    if (
+      last_ghost_opacity !== null &&
+      Object.is(last_ghost_opacity, image_atom_opacity)
+    ) {
+      return false
+    }
+    last_ghost_opacity = image_atom_opacity
+    renderer.set_ghost_opacity(image_atom_opacity)
     return true
   }
 
@@ -949,6 +966,10 @@
       }
     }
 
+    // Image atoms have an independent translucent draw, backed by the spare
+    // Supercell lane. This visual-only sync never claims legacy ownership.
+    if (sync_ghost_opacity()) dirty = true
+
     // Visual bond style is independent of topology/detection and is packed into
     // one shared render uniform. Updating it must not claim legacy ownership.
     if (sync_bond_style()) dirty = true
@@ -1043,6 +1064,8 @@
     cell_sig = ``
     // Fresh renderer ⇒ force visual bond settings into its uniform.
     bond_style_sig = ``
+    // Fresh renderer ⇒ seed the sparse ghost opacity lane on the first frame.
+    last_ghost_opacity = null
     // (Supercell dims + show_image_atoms travel in the packet — the cleared
     // last_pushed_packet above already forces their full re-upload.)
     // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the

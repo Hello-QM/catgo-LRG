@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     set_camera_full: vi.fn(),
     set_cell: vi.fn(),
     set_gizmo_layout: vi.fn(),
+    set_ghost_opacity: vi.fn(),
     set_packet: vi.fn(),
     set_selection: vi.fn(),
     set_shading: vi.fn(() => false),
@@ -400,6 +401,47 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(mocks.renderer.set_shading).toHaveBeenCalledWith(
       expect.objectContaining({ outline: 0, bond_outline: 0.65 }),
     )
+  })
+
+  it(`wakes once and syncs ghost atom and bond opacity after sleep`, async () => {
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0])
+    const props = $state({
+      enabled: true,
+      structure: make_structure(),
+      visual_state_source: make_visual_source(1, colors).source,
+      image_atom_opacity: 0.2,
+      show_bonds: `always` as const,
+      show_image_atoms: true,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+    expect(mocks.renderer.set_ghost_opacity).toHaveBeenCalledOnce()
+    expect(mocks.renderer.set_ghost_opacity).toHaveBeenLastCalledWith(0.2)
+    run_until_sleep()
+
+    mocks.renderer.set_ghost_opacity.mockClear()
+    mocks.renderer.set_bond_style.mockClear()
+    mocks.renderer.render.mockClear()
+    props.image_atom_opacity = 0.65
+    await settle()
+
+    const overlay_frames = [...raf_callbacks.values()].filter((callback) =>
+      callback.name === `frame`
+    )
+    expect(overlay_frames).toHaveLength(1)
+    run_overlay_frame()
+    expect(mocks.renderer.set_ghost_opacity).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_ghost_opacity).toHaveBeenCalledWith(0.65)
+    expect(mocks.renderer.set_bond_style).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_bond_style).toHaveBeenCalledWith(
+      expect.objectContaining({ periodic_bond_opacity: 0.65 }),
+    )
+    expect(mocks.renderer.render).toHaveBeenCalledTimes(1)
   })
 
   it(`keeps trajectory and rotation packet revisions strictly monotonic`, async () => {
