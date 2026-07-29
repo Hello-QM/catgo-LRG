@@ -2183,6 +2183,40 @@
       }
     })
 
+    // An analysis session (DOS / bands / COHP) the backend just created. The
+    // per-pane bridge in tool-handler.ts handles this when a viewer is mounted;
+    // this global listener covers the case that matters for an autonomous run —
+    // no structure pane open yet, so nothing is subscribed and the result would
+    // be dropped. Same shape as the trajectory branch above: inject if there is
+    // an External pane, otherwise toast with a one-click open.
+    es.addEventListener(`analysis`, (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        const kind = String(data.kind ?? ``)
+        if (!kind || !data.session?.session_id) return
+        const ts = tab_states[`default`]
+        const first = ts ? leaves(ts.root)[0] : null
+        const pane = first ? structurePane(first) : null
+        if (ts && pane) {
+          // A mounted External pane already has its own SSE subscription and
+          // adopts the session there — just make sure the user is looking at it.
+          open_external_tab()
+          return
+        }
+        show_toast({
+          message: t(`app.external_analysis_pushed`, { kind: kind.toUpperCase() }),
+          variant: `info`,
+          action: {
+            label: t(`app.open_external_viewer`),
+            onclick: () => tm.create_remote_tab(),
+          },
+          duration: 12000,
+        })
+      } catch (err) {
+        console.warn(`[CatGo] global SSE analysis error:`, err)
+      }
+    })
+
     es.onerror = (err) => console.debug(`[CatGo] global SSE issue (auto-reconnecting):`, err)
     return () => es.close()
   })

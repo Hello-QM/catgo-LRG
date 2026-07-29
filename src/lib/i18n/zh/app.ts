@@ -149,6 +149,7 @@ const app: Record<string, string> = {
   open_external_viewer: `打开外部查看器`,
   external_structure_pushed: `外部推送了 {formula}（{count} 个原子{s}）`,
   external_trajectory_pushed: `外部推送了轨迹：{name}（{count} 帧）`,
+  external_analysis_pushed: `外部推送了 {kind} 分析结果`,
   unnamed: `未命名`,
 
   // WorkflowView

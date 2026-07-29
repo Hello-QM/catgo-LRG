@@ -149,6 +149,7 @@ const app: Record<string, string> = {
   open_external_viewer: `Open External Viewer`,
   external_structure_pushed: `External pushed {formula} ({count} atom{s})`,
   external_trajectory_pushed: `External pushed trajectory: {name} ({count} frames)`,
+  external_analysis_pushed: `External pushed a {kind} analysis`,
   unnamed: `unnamed`,
 
   // WorkflowView

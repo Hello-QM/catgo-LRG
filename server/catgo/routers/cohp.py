@@ -26,6 +26,7 @@ from catgo.models.cohp import (
     ICOHPEntry as ICOHPEntryModel,
     ICOHPUploadResponse,
 )
+from catgo.routers import view_state
 
 router = APIRouter(prefix="/cohp", tags=["cohp"])
 
@@ -101,7 +102,7 @@ async def upload_cohpcar(file: UploadFile) -> COHPUploadResponse:
         if b.is_total and b.bond_index > 0:  # Skip "Average"
             total_bonds.append(info)
 
-    return COHPUploadResponse(
+    response = COHPUploadResponse(
         session_id=session_id,
         nspin=data.nspin,
         npoints=data.npoints,
@@ -112,6 +113,10 @@ async def upload_cohpcar(file: UploadFile) -> COHPUploadResponse:
         bonds=total_bonds,
         all_bonds=all_bonds_list,
     )
+    # COHP builds its response at two call sites (upload / from-remote); both
+    # announce so an agent-created session opens in the viewer.
+    view_state.announce_analysis("cohp", response)
+    return response
 
 
 @router.post("/from-remote")
@@ -167,7 +172,7 @@ async def cohp_from_remote(session_id: str, remote_path: str):
             if b.is_total and b.bond_index > 0:
                 total_bonds.append(info)
 
-        return COHPUploadResponse(
+        response = COHPUploadResponse(
             session_id=sid,
             nspin=data.nspin,
             npoints=data.npoints,
@@ -178,6 +183,8 @@ async def cohp_from_remote(session_id: str, remote_path: str):
             bonds=total_bonds,
             all_bonds=all_bonds_list,
         )
+        view_state.announce_analysis("cohp", response)
+        return response
     except HTTPException:
         raise
     except Exception as e:

@@ -662,7 +662,9 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     if endpoint.startswith("__direct__/"):
         return await _handle_direct_tool(name, arguments)
 
-    url = f"{API_BASE}{endpoint}"
+    # Tolerate a tool definition whose endpoint lost its leading slash: without
+    # this, "kmc/simulate" builds ".../apikmc/simulate" and every call 404s.
+    url = f"{API_BASE}/{endpoint.lstrip('/')}"
 
     # Auto-inject current viewer structure if tool requires it but caller didn't provide
     panel_id = arguments.pop("panel_id", "default")
@@ -686,20 +688,34 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
         async with httpx.AsyncClient(timeout=120.0) as client:
             if method == "GET":
                 resp = await client.get(url, params=arguments if arguments else None)
+            elif tool_def.get("params_in") == "query":
+                # A POST route whose FastAPI signature takes bare scalars reads
+                # them from the QUERY STRING, not the body (that is how the
+                # frontend calls /dos/from-directory). Sending JSON there is a
+                # guaranteed 422 — the tool looked wired up and never worked.
+                resp = await client.post(url, params=arguments)
             else:
                 resp = await client.post(url, json=arguments)
 
             if resp.status_code == 200:
                 data = resp.json()
 
-                # Auto-push modified structure back to viewer
+                # Auto-push a produced structure back to the viewer.
+                # The gate used to be `if needs_structure`, i.e. it only pushed
+                # when the tool CONSUMED a structure — so every pure builder
+                # (passivate, reticular/MOF, heterostructure build, nanotube,
+                # defect, strain) built its geometry and showed the user
+                # nothing. What decides is the RESPONSE shape, not the request.
                 result_struct = None
-                if needs_structure:
-                    if "structure" in data:
+                if isinstance(data, dict):
+                    if isinstance(data.get("structure"), dict):
                         result_struct = data["structure"]
-                    elif "slabs" in data and data["slabs"]:
-                        # Slab generation returns a list — push the first one
+                    elif data.get("slabs"):
+                        # slab generation returns a list — push the first one
                         result_struct = data["slabs"][0]
+                    elif data.get("structures"):
+                        # BuildResult{structures:[...]} — defect/doping/strain/…
+                        result_struct = data["structures"][0]
 
                 if result_struct:
                     push_warn = ""
@@ -718,11 +734,16 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                         push_warn = f"\n\u26a0\ufe0f Viewer push failed: {exc}"
                         logger.warning("Auto-push to viewer failed: %s", exc)
 
-                    # Return concise summary instead of huge structure dict
-                    summary = _summarize_structure_result(
-                        {**data, "structure": result_struct} if "structure" not in data else data
-                    )
-                    return [TextContent(type="text", text=summary + push_warn)]
+                    # Summarize only a structure-PRIMARY payload. A response that
+                    # merely carries geometry alongside its real product (a DOS
+                    # session's `session_id`, a job id) must come back whole, or
+                    # the agent loses the handle it needs for the next call.
+                    if "session_id" not in data:
+                        summary = _summarize_structure_result(
+                            {**data, "structure": result_struct} if "structure" not in data else data
+                        )
+                        return [TextContent(type="text", text=summary + push_warn)]
+                    return [TextContent(type="text", text=json.dumps(data, indent=2) + push_warn)]
 
                 return [TextContent(type="text", text=json.dumps(data, indent=2))]
             else:

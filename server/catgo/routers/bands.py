@@ -22,6 +22,7 @@ from catgo.models.bands import (
     BandSeries,
     BandUploadResponse,
 )
+from catgo.routers import view_state
 
 router = APIRouter(prefix="/bands", tags=["bands"])
 
@@ -256,7 +257,7 @@ def _create_band_session(vr, bs) -> BandUploadResponse:
     branches = _extract_branches(bs)
     struct_dict = _structure_to_pymatgen_dict(structure)
 
-    return BandUploadResponse(
+    response = BandUploadResponse(
         session_id=session_id,
         nbands=nbands,
         nkpts=nkpts,
@@ -271,6 +272,10 @@ def _create_band_session(vr, bs) -> BandUploadResponse:
         branches=branches,
         structure=struct_dict,
     )
+    # Single convergence point for every band session (upload / from-directory),
+    # so an agent-created session opens in the viewer. See announce_analysis.
+    view_state.announce_analysis("bands", response)
+    return response
 
 
 @router.post("/from-directory", response_model=BandUploadResponse)

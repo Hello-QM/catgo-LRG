@@ -34,6 +34,13 @@ export interface McpBridgeDeps {
   get_selected_sites: () => number[]
   get_wrapper: () => HTMLElement | undefined
   handle_command?: (action: string, arguments_: Record<string, unknown>) => unknown
+  /**
+   * Adopt an analysis session the backend just created (DOS / bands / COHP) and
+   * reveal its pane. Without this an agent could compute a spectrum that only
+   * ever existed as text in a tool response — the panes adopt a session solely
+   * on human file upload.
+   */
+  open_analysis?: (kind: string, session: Record<string, unknown>) => void
 }
 
 /** Decide whether a structure SSE push should auto-apply to the viewer.
@@ -279,6 +286,18 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     // replays don't re-toast.
     es.addEventListener(`structure`, on_struct_payload)
     es.addEventListener(`snapshot`, on_snapshot_payload)
+
+    es.addEventListener(`analysis`, (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        const kind = String(data.kind ?? ``)
+        const session = data.session
+        if (!kind || !session?.session_id) return
+        deps.open_analysis?.(kind, session)
+      } catch (err) {
+        console.warn(`[CatGo] SSE analysis parse error:`, err)
+      }
+    })
 
     es.addEventListener(`workflow`, (ev) => {
       try {

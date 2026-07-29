@@ -23,13 +23,27 @@
   load_i18n_module('common')
 
   let {
+    initial_session = null,
     cohp_state = $bindable(),
   }: {
+    initial_session?: COHPSessionInfo | null
     cohp_state: CohpViewState
   } = $props()
 
   // State
   let session = $state<COHPSessionInfo | null>(null)
+
+  // Adopt a session created outside this pane (file open, or an agent tool call
+  // announced over SSE). Mirrors DosAnalysisPane so all three electronic panes
+  // are reachable programmatically, not only by human upload.
+  $effect(() => {
+    if (initial_session && initial_session !== session) {
+      session = initial_session
+      selected_bond_indices = []
+      cohp_state.cohp_result = null
+      cohp_state.icohp_entries = null
+    }
+  })
 
   // Register/unregister analysis session for AI tool access
   $effect(() => {

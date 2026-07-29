@@ -132,6 +132,48 @@ def notify_workflow(panel_id: str, workflow_id: str) -> None:
     _notify(panel_id, "workflow", {"workflow_id": workflow_id})
 
 
+def notify_analysis(panel_id: str, kind: str, session: dict) -> None:
+    """Notify SSE subscribers that an analysis session is ready to display.
+
+    The gap this closes: an analysis session (DOS / bands / COHP / ...) created
+    by an agent tool call existed only server-side. The frontend pane adopts a
+    session only when a HUMAN uploads a file, so CatBot could compute a DOS and
+    had no way to show it — `catbot.md` documented this as "DOS/bands/COHP tools
+    require the user to first upload output files via the Analysis panel".
+
+    `session` is the producer's own upload-response payload (already exactly the
+    shape the pane's `initial_session` prop expects), so nothing is re-derived
+    here — the pane adopts what the parser actually produced.
+    """
+    _notify(panel_id, "analysis", {"kind": kind, "session": session})
+
+
+def announce_analysis(kind: str, session: Any, panel_id: str = "") -> None:
+    """Publish a freshly created analysis session to the panel the user is on.
+
+    Called by the result PRODUCERS (the dos/bands/cohp session factories), which
+    is the one place every route into a session converges: file upload, remote
+    directory load, and agent tool call all go through them. Producers carry no
+    tab context — a stdio MCP tool call and an HPC callback both arrive without
+    an `X-CatGo-Tab-Id` header — so this falls back to `last_active_panel_id`,
+    exactly like the structure push does.
+
+    Never raises: a display side-effect must not fail the computation that
+    produced the data.
+    """
+    try:
+        payload = session
+        if hasattr(payload, "model_dump"):
+            payload = payload.model_dump()
+        elif hasattr(payload, "dict"):
+            payload = payload.dict()
+        if not isinstance(payload, dict) or not payload.get("session_id"):
+            return
+        notify_analysis(resolve_panel_id(panel_id or last_active_panel_id), kind, payload)
+    except Exception:  # pragma: no cover - display must never break compute
+        logger.debug("announce_analysis(%s) failed", kind, exc_info=True)
+
+
 def notify_trajectory(panel_id: str, content: str, filename: str) -> None:
     """Notify SSE subscribers of a multi-frame trajectory upload.
 

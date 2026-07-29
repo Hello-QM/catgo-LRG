@@ -6,7 +6,7 @@
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
   import { download } from '$lib/io/fetch'
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
-  import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
+  import type { BandSessionInfo, COHPSessionInfo, DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import ExportDpiControl from '$lib/electronic/ExportDpiControl.svelte'
   import { freq_data_to_xyz } from '$lib/electronic/freq-structure'
   import { API_BASE, STATIC_ONLY } from '$lib/api/config'
@@ -1516,6 +1516,11 @@
 
   // DOS analysis state
   let dos_session = $state<DOSSessionInfo | null>(null)
+  // Sessions announced by the backend (agent tool call or remote load) — handed
+  // to the panes as `initial_session` so a spectrum CatBot computed shows up
+  // without the human uploading the file it already parsed.
+  let band_session = $state<BandSessionInfo | null>(null)
+  let cohp_session = $state<COHPSessionInfo | null>(null)
   let dos_state: DosViewState = $state({
     dos_result: null,
     dband_result: null,
@@ -2494,7 +2499,41 @@
       get_wrapper: () => wrapper,
       handle_command: (action, args) =>
         handle_viewer_command ? handle_viewer_command(action, args) : handle_structure_command(action, args),
+      open_analysis: (kind, session) => adopt_analysis_session(kind, session),
     }
+  }
+
+  /**
+   * Reveal an analysis session the backend just created. Same four steps the
+   * human file-open path already performs (`file-handlers.ts::handle_h5_upload`):
+   * bind the session, load its structure, open the Analysis pane, select the tab.
+   *
+   * Idempotent on session_id — the announce also fires for a session the user
+   * uploaded in this very pane, and re-adopting it there would reset the
+   * groups/selection they just made.
+   */
+  function adopt_analysis_session(kind: string, session: Record<string, unknown>) {
+    const sid = String(session?.session_id ?? ``)
+    if (!sid) return
+    if (kind === `dos`) {
+      if (dos_session?.session_id === sid) return
+      dos_session = session as unknown as DOSSessionInfo
+    } else if (kind === `bands`) {
+      if (band_session?.session_id === sid) return
+      band_session = session as unknown as BandSessionInfo
+    } else if (kind === `cohp`) {
+      if (cohp_session?.session_id === sid) return
+      cohp_session = session as unknown as COHPSessionInfo
+    } else {
+      return // unknown kind: do not silently open an unrelated pane
+    }
+    // DOS/bands carry the parsed geometry; show it so the spectrum and the 3D
+    // structure describe the same calculation.
+    const struct = session?.structure as typeof structure | undefined
+    if (struct) { center_camera_trigger++; structure = struct }
+    electronic_sub_tab = kind as typeof electronic_sub_tab
+    analysis.analysis_pane_open = true
+    analysis.active_analysis_tab = `electronic`
   }
 
   // MCP bridge — screenshot loop + state push (50ms throttle, 5s heartbeat) + SSE subscription.
@@ -4008,10 +4047,11 @@
                   bind:dos_state
                 />
               {:else if electronic_sub_tab === `cohp`}
-                <CohpAnalysisPane bind:cohp_state />
+                <CohpAnalysisPane initial_session={cohp_session} bind:cohp_state />
               {:else if electronic_sub_tab === `bands`}
                 <BandAnalysisPane
                   on_structure_loaded={(s) => { center_camera_trigger++; structure = s }}
+                  initial_session={band_session}
                   bind:band_state
                 />
               {:else if electronic_sub_tab === `charge`}

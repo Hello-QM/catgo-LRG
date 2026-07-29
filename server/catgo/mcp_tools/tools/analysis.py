@@ -77,6 +77,9 @@ TOOLS: list[dict] = [
         "description": "Load DOS data from a remote directory (HPC via SSH). "
         "Looks for vaspout.h5 or vasprun.xml in the specified path.",
         "endpoint": "/dos/from-directory",
+        # POST route with bare scalar params -> FastAPI reads them from the
+        # query string; sending a JSON body 422s (see server.py dispatch).
+        "params_in": "query",
         "method": "POST",
         "inputSchema": {
             "type": "object",
@@ -138,6 +141,9 @@ TOOLS: list[dict] = [
         "description": "Load band structure data from a remote directory (HPC via SSH). "
         "Looks for vasprun.xml in the specified path.",
         "endpoint": "/bands/from-directory",
+        # POST route with bare scalar params -> FastAPI reads them from the
+        # query string; sending a JSON body 422s (see server.py dispatch).
+        "params_in": "query",
         "method": "POST",
         "inputSchema": {
             "type": "object",

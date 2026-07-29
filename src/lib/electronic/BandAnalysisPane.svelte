@@ -25,14 +25,28 @@
 
   let {
     on_structure_loaded = (_s: PymatgenStructure) => {},
+    initial_session = null,
     band_state = $bindable(),
   }: {
     on_structure_loaded?: (s: PymatgenStructure) => void
+    initial_session?: BandSessionInfo | null
     band_state: BandViewState
   } = $props()
 
   // State
   let session = $state<BandSessionInfo | null>(null)
+
+  // Adopt a session created outside this pane (file open, or an agent tool call
+  // announced over SSE). Mirrors DosAnalysisPane so all three electronic panes
+  // are reachable programmatically, not only by human upload.
+  $effect(() => {
+    if (initial_session && initial_session !== session) {
+      session = initial_session
+      proj_groups = []
+      band_state.band_data = null
+      band_state.projections = null
+    }
+  })
 
   // Register/unregister analysis session for AI tool access
   $effect(() => {

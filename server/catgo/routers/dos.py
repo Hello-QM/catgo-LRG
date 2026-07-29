@@ -32,6 +32,7 @@ from catgo.models.dos import (
     PDOSSeries,
     TotalDOSRequest,
 )
+from catgo.routers import view_state
 
 router = APIRouter(prefix="/dos", tags=["dos"])
 
@@ -131,7 +132,7 @@ def _create_session(data, source: str = "h5") -> DOSUploadResponse:
     structure = _vasp_data_to_pymatgen(data)
 
     # Ensure all values are native Python types (not numpy) for JSON serialization
-    return DOSUploadResponse(
+    response = DOSUploadResponse(
         session_id=session_id,
         nions=int(data.nions),
         nkpts=int(data.nkpts),
@@ -144,6 +145,12 @@ def _create_session(data, source: str = "h5") -> DOSUploadResponse:
         efermi=float(data.efermi),
         structure=structure,
     )
+    # Every route into a DOS session converges here (upload / from-remote /
+    # from-directory), so one announce covers the agent path too: a session an
+    # agent created now opens in the viewer instead of dying as text in a tool
+    # response. Non-fatal by construction — see announce_analysis.
+    view_state.announce_analysis("dos", response)
+    return response
 
 
 @router.post("/upload", response_model=DOSUploadResponse)
