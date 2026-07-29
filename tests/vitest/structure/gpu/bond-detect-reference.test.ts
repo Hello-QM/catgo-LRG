@@ -5,7 +5,7 @@ import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
 import { build_atom_radii } from '$lib/structure/gpu/radius-lut'
 import type { PymatgenStructure } from '$lib/structure'
 
-const OPTS: RefBondOptions = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+const OPTS: RefBondOptions = { scale: 1.2, max_bond_dist: 5.0, min_bond_dist: 0.4 }
 
 describe(`detect_bonds_reference`, () => {
   it(`finds a single bond between two close atoms (non-periodic)`, () => {
@@ -16,10 +16,18 @@ describe(`detect_bonds_reference`, () => {
     expect(bonds[0]).toMatchObject({ a: 0, b: 1, jimage: [0, 0, 0] })
   })
 
-  it(`rejects atoms beyond radius sum + tolerance`, () => {
-    const pos = new Float32Array([0, 0, 0, 2.5, 0, 0])
+  it(`rejects atoms beyond the scaled covalent-radii sum`, () => {
+    const pos = new Float32Array([0, 0, 0, 2.0, 0, 0])
     const radii = new Float32Array([0.76, 0.76])
     expect(detect_bonds_reference(pos, new Float32Array(9), radii, OPTS)).toHaveLength(0)
+  })
+
+  it(`uses multiplicative scale rather than a fixed absolute tolerance`, () => {
+    const pos = new Float32Array([0, 0, 0, 3.5, 0, 0])
+    const radii = new Float32Array([1.48, 1.48])
+    // Rust keeps this contact: 3.5 Å < 1.2 × (1.48 + 1.48) = 3.552 Å.
+    // The retired fixed-pad rule would incorrectly reject it: 2.96 + 0.45 = 3.41 Å.
+    expect(detect_bonds_reference(pos, new Float32Array(9), radii, OPTS)).toHaveLength(1)
   })
 
   it(`rejects beyond max_bond_dist even if within radius sum`, () => {
@@ -34,7 +42,11 @@ describe(`detect_bonds_reference`, () => {
     const pos = new Float32Array([0.2, 0, 0, 4.9, 0, 0])
     const radii = new Float32Array([0.76, 0.76])
     const lat = new Float32Array([5, 0, 0, 0, 5, 0, 0, 0, 5])
-    const bonds = detect_bonds_reference(pos, lat, radii, OPTS)
+    const bonds = detect_bonds_reference(pos, lat, radii, {
+      ...OPTS,
+      max_bond_dist: 3,
+      min_bond_dist: 0.1,
+    })
     expect(bonds).toHaveLength(1)
     // Convention: jimage applied to b (b + jimage·L) reaches the min image of a.
     // b at 4.9, a at 0.2: dx = b-a = 4.7; shifting b by -a (na=-1 -> -5) gives
@@ -44,7 +56,7 @@ describe(`detect_bonds_reference`, () => {
     expect(bonds[0].dist).toBeCloseTo(0.3)
   })
 
-  it(`drops coincident atoms (below min_dist)`, () => {
+  it(`drops coincident atoms (below min_bond_dist)`, () => {
     const pos = new Float32Array([0, 0, 0, 0.01, 0, 0])
     const radii = new Float32Array([0.76, 0.76])
     expect(detect_bonds_reference(pos, new Float32Array(9), radii, OPTS)).toHaveLength(0)
@@ -55,7 +67,7 @@ describe(`detect_bonds_reference`, () => {
     // 1.0 Å fallback never triggers (which would diverge from the CPU path).
     const struct = make_test_structure()
 
-    const cpu = compute_bonds_sync(struct, `atom_radii`, { max_bond_dist: 3, tolerance: 0.45 })
+    const cpu = compute_bonds_sync(struct, `atom_radii`, { max_bond_dist: 3, scale: 1.15 })
     // compute_bonds_sync returns null when Rust WASM is not initialized in the
     // vitest env. Skip the comparison but keep the test in place.
     if (cpu == null) return
@@ -64,13 +76,8 @@ describe(`detect_bonds_reference`, () => {
       pack_positions(struct.sites),
       pack_lattice(struct.lattice),
       build_atom_radii(struct.sites),
-      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      { scale: 1.15, max_bond_dist: 3, min_bond_dist: 0.4 },
     )
-
-    // NOTE: the lower bound (min_dist) is NOT parity-checked here. The JS side
-    // passes min_dist: 0.1 while compute_bonds_sync uses Rust's default (0.4),
-    // and this fixture has no pair landing in the (0.1, 0.4) gap, so the
-    // divergence is invisible to this cross-check.
     const key = (a: number, b: number) => `${Math.min(a, b)}-${Math.max(a, b)}`
     const cpu_set = new Set(cpu.map((b) => key(b.site_idx_1, b.site_idx_2)))
     const ref_set = new Set(ref.map((b) => key(b.a, b.b)))

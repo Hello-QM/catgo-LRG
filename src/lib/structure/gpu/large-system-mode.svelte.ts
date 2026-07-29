@@ -37,19 +37,21 @@ export function create_large_system_mode(deps: {
   }
 }
 
-const DEFAULT_MIN_DIST = 0.1
-const DEFAULT_TOLERANCE = 0.45
-const DEFAULT_MAX_BOND_DIST = 3.0
+const DEFAULT_SCALE = 1.2
+const DEFAULT_MIN_BOND_DIST = 0.4
+const DEFAULT_MAX_BOND_DIST = 5.0
 
-/** Map the app's bond options (the same tolerance / max_bond_dist the CPU path
- *  uses, driven by the existing UI sliders) into the GPU compute options. This
- *  is what makes "custom bond distance" live-tunable on the GPU path: the
- *  StructureScene loop re-dispatches compute with these whenever a slider
- *  changes. */
-export function to_compute_options(opts: Record<string, number>): { tolerance: number; max_bond_dist: number; min_dist: number } {
+/** Map the app's atom_radii options into the exact Rust AtomRadiiOptions shape.
+ * `min_dist` remains a read-only compatibility alias for older persisted state;
+ * all downstream GPU/worker paths receive the canonical field names. */
+export function to_compute_options(opts: Record<string, number>): {
+  scale: number
+  max_bond_dist: number
+  min_bond_dist: number
+} {
   return {
-    tolerance: opts.tolerance ?? DEFAULT_TOLERANCE,
+    scale: opts.scale ?? DEFAULT_SCALE,
     max_bond_dist: opts.max_bond_dist ?? DEFAULT_MAX_BOND_DIST,
-    min_dist: opts.min_dist ?? DEFAULT_MIN_DIST,
+    min_bond_dist: opts.min_bond_dist ?? opts.min_dist ?? DEFAULT_MIN_BOND_DIST,
   }
 }

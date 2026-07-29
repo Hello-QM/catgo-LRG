@@ -85,13 +85,73 @@ const SUPERCELL_BYTES = 64
  *  (triangle-strip ⇒ this many verts). */
 const BOND_VERTS_PER_CYLINDER = 6
 
-/** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
- *  bond render shader as part of its uniform so it can be retuned without a
- *  shader edit. */
-const BOND_RADIUS = 0.16
-
 /** Neutral bond color (linear rgb). Half-A/half-B coloring is a later milestone. */
 const BOND_COLOR: [number, number, number] = [0.7, 0.7, 0.7]
+
+/** Bond-render uniform: 3 padded lattice rows + 2 style/color vec4s. */
+export const BOND_RENDER_BYTES = 80
+
+export type LargeSystemBondStyle = {
+  /** Cylinder radius in Å; fed by the viewer's bond_thickness setting. */
+  radius: number
+  /** Shorten incomplete periodic half-edges instead of ending at the midpoint. */
+  incomplete_edge_mode: boolean
+  /** Fraction of the historical midpoint half-edge length, clamped to [0.05, 1]. */
+  incomplete_edge_length_scale: number
+  /** Collapse incomplete boundary edges when no real/ghost partner is drawn. */
+  hide_incomplete_bonds: boolean
+  /** Opacity of incomplete periodic half-edges (full/ghost-complete edges stay opaque). */
+  periodic_bond_opacity: number
+}
+
+const DEFAULT_BOND_STYLE: LargeSystemBondStyle = {
+  radius: 0.07,
+  incomplete_edge_mode: false,
+  incomplete_edge_length_scale: 1,
+  hide_incomplete_bonds: false,
+  periodic_bond_opacity: 1,
+}
+
+/** Normalize DOM/settings inputs once at the renderer boundary. */
+export function normalize_bond_style(
+  style: Partial<LargeSystemBondStyle> = {},
+): LargeSystemBondStyle {
+  const radius = Number.isFinite(style.radius) && (style.radius as number) > 0
+    ? style.radius as number
+    : DEFAULT_BOND_STYLE.radius
+  const raw_scale = Number.isFinite(style.incomplete_edge_length_scale)
+    ? style.incomplete_edge_length_scale as number
+    : DEFAULT_BOND_STYLE.incomplete_edge_length_scale
+  const raw_opacity = Number.isFinite(style.periodic_bond_opacity)
+    ? style.periodic_bond_opacity as number
+    : DEFAULT_BOND_STYLE.periodic_bond_opacity
+  return {
+    radius,
+    incomplete_edge_mode: style.incomplete_edge_mode === true,
+    incomplete_edge_length_scale: Math.max(0.05, Math.min(1, raw_scale)),
+    hide_incomplete_bonds: style.hide_incomplete_bonds === true,
+    periodic_bond_opacity: Math.max(0, Math.min(1, raw_opacity)),
+  }
+}
+
+/** Pure std140-compatible packer shared by production uploads and tests. */
+export function pack_bond_render_uniform(
+  lattice: Float32Array,
+  style: LargeSystemBondStyle,
+  color: readonly [number, number, number] = BOND_COLOR,
+): Float32Array {
+  const u = new Float32Array(BOND_RENDER_BYTES / 4)
+  u[0] = lattice[0]; u[1] = lattice[1]; u[2] = lattice[2]; u[3] = 0
+  u[4] = lattice[3]; u[5] = lattice[4]; u[6] = lattice[5]; u[7] = 0
+  u[8] = lattice[6]; u[9] = lattice[7]; u[10] = lattice[8]; u[11] = 0
+  u[12] = style.radius
+  u[13] = style.incomplete_edge_mode ? 1 : 0
+  u[14] = style.incomplete_edge_length_scale
+  u[15] = style.hide_incomplete_bonds ? 1 : 0
+  u[16] = style.periodic_bond_opacity
+  u[17] = color[0]; u[18] = color[1]; u[19] = color[2]
+  return u
+}
 
 /** Default clear color when no background is threaded in: a distinct dark
  *  background (near-black, faint blue tint) so flipping the toggle visibly
@@ -1046,12 +1106,13 @@ struct Camera {
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Bond uniform: lattice columns a,b,c (transposed, vec3+pad each) + radius.
+// Bond uniform: lattice rows a,b,c (vec3+pad each), edge style, opacity + color.
 struct BondU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
-  radius_color : vec4<f32>, // x=radius, yzw=color
+  style0 : vec4<f32>, // radius, incomplete mode, length scale, hide incomplete
+  style1 : vec4<f32>, // incomplete opacity, color rgb
 };
 
 // GPU supercell uniform (Phase 2). Same layout as the atom impostor's Supercell:
@@ -1100,6 +1161,8 @@ struct VsOut {
   // stub coincident with an intra-cell bond at a shared atom loses the depth tie
   // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
   @location(5) is_stub : f32,
+  // Incomplete periodic half-edge opacity. Full and ghost-complete edges use 1.
+  @location(6) opacity : f32,
 };
 
 struct FsOut {
@@ -1185,8 +1248,9 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   //                     where the sparse ghost instance is drawn
   // This applies for ANY visual-supercell dims — no ncells==1 special case.
   let boundary_policy = u32(round(supercell.lat0.w));
-  let hide_outside = (!inside) && boundary_policy == 1u;
   let ghost_complete = (!inside) && boundary_policy == 2u;
+  let style_hide_outside = (!inside) && bond.style0.w > 0.5 && !ghost_complete;
+  let hide_outside = (!inside) && (boundary_policy == 1u || style_hide_outside);
 
   // Render as ONE full cylinder when the partner is a real in-range atom OR a
   // sparse ghost. half 0 spans A→partnerB; half 1 collapses. Stub policy keeps
@@ -1196,17 +1260,24 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
   // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
   // two short stubs of the single-cell cross-cell path, shifted by cell_offset.
+  let stub_scale = select(
+    1.0,
+    clamp(bond.style0.z, 0.05, 1.0),
+    bond.style0.y > 0.5,
+  );
   let cross_start = select(B, A, half == 0u);
-  let cross_mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
+  let cross_end_a = A + (partnerB - A) * (0.5 * stub_scale);
+  let cross_end_b = B + (partnerA - B) * (0.5 * stub_scale);
+  let cross_end = select(cross_end_b, cross_end_a, half == 0u);
   let start = select(cross_start, A, is_full);
-  let end = select(cross_mid, B_real, is_full);
+  let end = select(cross_end, B_real, is_full);
 
   // Keep the downstream variable name the rest of vs_main uses (is_intra) so the
   // degenerate-half collapse + is_stub flag below are untouched: a full cylinder
   // behaves exactly like an intra-cell bond (half 1 redundant, no depth bias).
   let is_intra = is_full;
 
-  let r = bond.radius_color.x;
+  let r = bond.style0.x;
 
   // Endpoints in VIEW space (eye at origin). The impostor ray-trace + depth all
   // happen in this space.
@@ -1277,9 +1348,10 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     out_deg.v0 = v0;
     out_deg.v1 = v1;
     out_deg.radius = r;
-    out_deg.color = bond.radius_color.yzw;
+    out_deg.color = bond.style1.yzw;
     out_deg.vpos = vpos;
     out_deg.is_stub = 0.0; // degenerate (discarded) — value irrelevant
+    out_deg.opacity = 0.0;
     return out_deg;
   }
 
@@ -1292,10 +1364,11 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.v0 = v0;
   out.v1 = v1;
   out.radius = r;
-  out.color = bond.radius_color.yzw;
+  out.color = bond.style1.yzw;
   out.vpos = vpos;
   // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
   out.is_stub = select(1.0, 0.0, is_intra);
+  out.opacity = select(clamp(bond.style1.x, 0.0, 1.0), 1.0, is_full);
   return out;
 }
 
@@ -1487,7 +1560,9 @@ fn fs_main(in : VsOut) -> FsOut {
     rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
   }
 
-  out.color = vec4<f32>(rgb, cov);
+  let alpha = cov * in.opacity;
+  if (alpha <= 0.0) { discard; }
+  out.color = vec4<f32>(rgb, alpha);
   return out;
 }
 ` + LINEAR_TO_SRGB_WGSL
@@ -1602,9 +1677,13 @@ export type LargeSystemRenderer = {
   set_bond_data(
     covalent_radii: Float32Array,
     lattice: Float32Array,
-    options: { tolerance: number; max_bond_dist: number; min_dist: number },
+    options: { scale: number; max_bond_dist: number; min_bond_dist: number },
     periodic: boolean,
   ): void
+  /** Mirror the viewer's bond visual settings without changing packet/legacy
+   *  ownership or invalidating the scientific bond graph. Repeated equal style
+   *  values are a no-op. */
+  set_bond_style(style: Partial<LargeSystemBondStyle>): void
   /** Provide the per-element-pair bond_distance_rules POST-FILTER inputs (matches
    *  src/lib/structure/scene/visibility.ts). `elem_ids` is the per-atom element id
    *  (N entries) and `rules` is the packed rule buffer (4 floats per rule:
@@ -1977,10 +2056,10 @@ export function create_large_system_renderer(
     size: PARAMS_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // Bond render uniform: lattice columns (transposed, 3×vec4) + (radius,color).
+  // Bond render uniform: lattice rows (3×vec4) + edge style/opacity/color.
   const bond_render_uniform = device.createBuffer({
     label: `large-system-bond-render-uniform`,
-    size: 64, // 4 × vec4
+    size: BOND_RENDER_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Cell-box render uniform: lattice rows a,b,c (3×vec4) + color (vec4).
@@ -2027,7 +2106,8 @@ export function create_large_system_renderer(
   // the packet frame lattice used to shift periodic bond endpoints.
   let bond_detector_lattice = new Float32Array(9)
   let bond_render_lattice = new Float32Array(9)
-  let bond_options = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  let bond_style = normalize_bond_style()
+  let bond_options = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
   let bond_periodic = false
   let bond_n = 0 // atom count the detection should range over
   // ── Dirty-kind split (design §8.2 items 4-6). `graph_dirty`: the base bond
@@ -3283,15 +3363,14 @@ export function create_large_system_renderer(
   }
 
   function upload_bond_render_uniform(): void {
-    const u = new Float32Array(16)
-    const L = bond_render_lattice
-    // Same transpose pack_params uses: column k = lattice row k.
-    u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
-    u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
-    u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = BOND_RADIUS
-    u[13] = BOND_COLOR[0]; u[14] = BOND_COLOR[1]; u[15] = BOND_COLOR[2]
-    device.queue.writeBuffer(bond_render_uniform, 0, u.buffer, u.byteOffset, 64)
+    const u = pack_bond_render_uniform(bond_render_lattice, bond_style)
+    device.queue.writeBuffer(
+      bond_render_uniform,
+      0,
+      u.buffer,
+      u.byteOffset,
+      BOND_RENDER_BYTES,
+    )
   }
 
   let destroyed = false
@@ -3596,7 +3675,7 @@ export function create_large_system_renderer(
     set_bond_data(
       covalent_radii: Float32Array,
       lattice: Float32Array,
-      options: { tolerance: number; max_bond_dist: number; min_dist: number },
+      options: { scale: number; max_bond_dist: number; min_bond_dist: number },
       periodic: boolean,
     ): void {
       if (destroyed || device_lost) return
@@ -3640,6 +3719,21 @@ export function create_large_system_renderer(
       // lattice untouched; the compute Params below still use detector_lattice.
       if (ownership === `legacy`) upload_bond_render_uniform()
       mark_bond_dirty(classify_bond_dirty(`options`))
+    },
+    set_bond_style(style: Partial<LargeSystemBondStyle>): void {
+      if (destroyed || device_lost) return
+      const next = normalize_bond_style(style)
+      if (
+        next.radius === bond_style.radius &&
+        next.incomplete_edge_mode === bond_style.incomplete_edge_mode &&
+        next.incomplete_edge_length_scale === bond_style.incomplete_edge_length_scale &&
+        next.hide_incomplete_bonds === bond_style.hide_incomplete_bonds &&
+        next.periodic_bond_opacity === bond_style.periodic_bond_opacity
+      ) {
+        return
+      }
+      bond_style = next
+      upload_bond_render_uniform()
     },
     set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
       if (destroyed || device_lost) return
@@ -4105,9 +4199,9 @@ export function create_large_system_renderer(
           device.queue.writeBuffer(
             bond_params_buffer, 0,
             pack_params(bond_n, candidate_pairs_capacity, {
-              tolerance: bond_options.tolerance,
+              scale: bond_options.scale,
               max_bond_dist: bond_options.max_bond_dist,
-              min_dist: bond_options.min_dist,
+              min_bond_dist: bond_options.min_bond_dist,
               positions: new Float32Array(0), // unused by pack_params
               radii: new Float32Array(0), // unused by pack_params
               lattice: bond_detector_lattice,

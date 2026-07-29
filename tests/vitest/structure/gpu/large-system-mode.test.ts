@@ -47,14 +47,20 @@ describe(`create_large_system_mode`, () => {
 })
 
 describe(`to_compute_options`, () => {
-  it(`maps bond options to compute params (custom bond distance)`, () => {
-    expect(to_compute_options({ max_bond_dist: 2.6, tolerance: 0.3 }))
-      .toEqual({ tolerance: 0.3, max_bond_dist: 2.6, min_dist: 0.1 })
+  it(`maps atom_radii options to compute params`, () => {
+    expect(to_compute_options({ max_bond_dist: 2.6, scale: 1.1 }))
+      .toEqual({ scale: 1.1, max_bond_dist: 2.6, min_bond_dist: 0.4 })
   })
-  it(`fills defaults when options are missing`, () => {
-    expect(to_compute_options({})).toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 })
+  it(`fills Rust AtomRadiiOptions defaults when options are missing`, () => {
+    expect(to_compute_options({}))
+      .toEqual({ scale: 1.2, max_bond_dist: 5.0, min_bond_dist: 0.4 })
   })
-  it(`honors a custom min_dist when provided`, () => {
-    expect(to_compute_options({ min_dist: 0.2 })).toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.2 })
+  it(`honors a custom min_bond_dist when provided`, () => {
+    expect(to_compute_options({ min_bond_dist: 0.2 }))
+      .toEqual({ scale: 1.2, max_bond_dist: 5.0, min_bond_dist: 0.2 })
+  })
+  it(`accepts legacy min_dist as an alias only when min_bond_dist is absent`, () => {
+    expect(to_compute_options({ min_dist: 0.25 }))
+      .toEqual({ scale: 1.2, max_bond_dist: 5.0, min_bond_dist: 0.25 })
   })
 })

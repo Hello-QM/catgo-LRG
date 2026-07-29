@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AnyStructure } from '$lib'
-import { create_large_system_renderer } from '$lib/structure/gpu/large-system-renderer'
+import {
+  BOND_RENDER_BYTES,
+  create_large_system_renderer,
+} from '$lib/structure/gpu/large-system-renderer'
 import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
 import type {
   BaseBondGraph,
@@ -270,6 +273,50 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     vi.unstubAllGlobals()
   })
 
+  it(`uploads normalized bond style once without invalidating graph ownership`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const before = renderer.get_diagnostics()
+    rec.clear()
+
+    renderer.set_bond_style({
+      radius: 0.09,
+      incomplete_edge_mode: true,
+      incomplete_edge_length_scale: 0.15,
+      hide_incomplete_bonds: true,
+      periodic_bond_opacity: 0.35,
+    })
+
+    const writes = writes_to(rec.writes, `large-system-bond-render-uniform`)
+    expect(writes).toHaveLength(1)
+    expect(writes[0].bytes.byteLength).toBe(BOND_RENDER_BYTES)
+    const style_words = new Float32Array(writes[0].bytes.buffer).slice(12)
+    const expected_style_words = [
+      0.09, 1, 0.15, 1,
+      0.35, 0.7, 0.7, 0.7,
+    ]
+    expected_style_words.forEach(
+      (value, idx) => expect(style_words[idx]).toBeCloseTo(value),
+    )
+    expect(renderer.get_diagnostics().ownership).toBe(before.ownership)
+    expect(renderer.debug_bond_state().dispatches).toEqual(before.bonds.dispatches)
+
+    rec.clear()
+    renderer.set_bond_style({
+      radius: 0.09,
+      incomplete_edge_mode: true,
+      incomplete_edge_length_scale: 0.15,
+      hide_incomplete_bonds: true,
+      periodic_bond_opacity: 0.35,
+    })
+    expect(writes_to(rec.writes, `large-system-bond-render-uniform`)).toHaveLength(0)
+
+    renderer.destroy()
+  })
+
   it(`replica-only packet change updates indirect counts without a bond dispatch`, () => {
     const bond_graph: BaseBondGraph = {
       version: 1,
@@ -503,6 +550,19 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
     expect(scene_source).not.toContain(`get_displayed_frame_positions`)
+    expect(structure_source).toContain(`scale: scene_props.bond_scale`)
+    expect(structure_source).toContain(`bond_thickness={scene_props.bond_thickness}`)
+    expect(structure_source).toContain(
+      `incomplete_periodic_edge_mode={scene_props.incomplete_periodic_edge_mode}`,
+    )
+    expect(structure_source).toContain(
+      `incomplete_edge_length_scale={scene_props.incomplete_edge_length_scale}`,
+    )
+    expect(structure_source).toContain(
+      `hide_incomplete_bonds={scene_props.hide_incomplete_bonds}`,
+    )
+    expect(structure_source).toContain(`{image_atom_opacity}`)
+    expect(overlay_source).toContain(`renderer.set_bond_style({`)
 
     // Behavioral lock for the inputs Structure must pass: even if the WebGL
     // displayed structure has appended images, the packet owner/topology is
@@ -658,7 +718,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       new Float32Array([9, 0, 0, 0, 9, 0, 0, 0, 9]),
-      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
       true,
     )
     renderer.set_packet(packet, EMPTY_IMAGES) // SAME object + versions
@@ -757,7 +817,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       make_frame().lattice,
-      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
       true,
     )
 
@@ -805,7 +865,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.set_bond_data(
       new Float32Array(N).fill(0.76),
       make_frame().lattice,
-      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      { scale: 1.2, max_bond_dist: 5, min_bond_dist: 0.4 },
       true,
     )
     renderer.render()

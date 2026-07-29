@@ -4814,8 +4814,16 @@
             same_size_atoms={scene_props.same_size_atoms}
             {element_radius_overrides}
             {site_radius_overrides}
-            bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            bonding_options={{
+              ...((scene_props.bonding_options ?? {}) as Record<string, number>),
+              scale: scene_props.bond_scale,
+            }}
             {bond_distance_rules}
+            bond_thickness={scene_props.bond_thickness}
+            incomplete_periodic_edge_mode={scene_props.incomplete_periodic_edge_mode}
+            incomplete_edge_length_scale={scene_props.incomplete_edge_length_scale}
+            hide_incomplete_bonds={scene_props.hide_incomplete_bonds}
+            {image_atom_opacity}
             show_bonds={scene_props.show_bonds}
             {background_color}
             {background_opacity}

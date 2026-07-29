@@ -11,7 +11,7 @@
   import { encode_bond_rules, type BondDistanceRuleLike } from '$lib/structure/gpu/bond-rules'
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
   import { should_show_bonds } from '$lib/structure/scene'
-  import type { ShowBonds } from '$lib/settings'
+  import { DEFAULTS, type ShowBonds } from '$lib/settings'
   import type { PymatgenLattice } from '$lib/structure'
   import {
     create_large_system_renderer,
@@ -36,6 +36,11 @@
     site_radius_overrides = undefined,
     bonding_options = undefined,
     bond_distance_rules = undefined,
+    bond_thickness = DEFAULTS.structure.bond_thickness,
+    incomplete_periodic_edge_mode = DEFAULTS.structure.incomplete_periodic_edge_mode,
+    incomplete_edge_length_scale = DEFAULTS.structure.incomplete_edge_length_scale,
+    hide_incomplete_bonds = DEFAULTS.structure.hide_incomplete_bonds,
+    image_atom_opacity = 1,
     show_bonds = `crystals`,
     background_color = undefined,
     background_opacity = 0.1,
@@ -69,9 +74,8 @@
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> | undefined
     /** Per-site radius overrides, mirrors the WebGL path. */
     site_radius_overrides?: Map<number, number> | undefined
-    /** App bond options (tolerance / max_bond_dist / …) driving GPU bond
-     *  detection. Same Record the CPU path reads (scene_props.bonding_options);
-     *  mapped via to_compute_options. */
+    /** App atom_radii options (scale / min_bond_dist / max_bond_dist) driving GPU
+     *  bond detection. Same values the Rust/WASM path receives. */
     bonding_options?: Record<string, number> | undefined
     /** Per-element-pair distance rules (the SAME `bond_distance_rules` the WebGL
      *  path reads). The overlay applies them as a POST-FILTER on the GPU-detected
@@ -83,6 +87,14 @@
     bond_distance_rules?:
       | { element_1: string; element_2: string; min_dist: number; max_dist: number }[]
       | undefined
+    /** Viewer bond radius and incomplete-periodic-edge controls. These affect
+     *  only the render uniform; they never invalidate the scientific graph. */
+    bond_thickness?: number
+    incomplete_periodic_edge_mode?: boolean
+    incomplete_edge_length_scale?: number
+    hide_incomplete_bonds?: boolean
+    /** The WebGL path also uses image opacity for incomplete periodic stubs. */
+    image_atom_opacity?: number
     /** Viewer's bond-visibility setting (`never`/`always`/`crystals`/`molecules`),
      *  mirroring the WebGL path's `scene_props.show_bonds`. The overlay feeds this
      *  through the SAME `should_show_bonds(show_bonds, lattice)` predicate the
@@ -220,7 +232,7 @@
   let bond_lattice: Float32Array = new Float32Array(9)
   let bond_periodic = false
   let bond_options_sig = ``
-  let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  let bond_compute_opts = { scale: 0, max_bond_dist: 0, min_bond_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
 
@@ -331,6 +343,29 @@
   // re-uploaded only when selected_sites actually changes (whether from an overlay
   // click or an external selection change).
   let selection_sig = ``
+  let bond_style_sig = ``
+
+  /** Push visual-only bond controls without touching packet ownership/compute. */
+  function sync_bond_style(): boolean {
+    if (!renderer) return false
+    const sig = [
+      bond_thickness,
+      incomplete_periodic_edge_mode,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds,
+      image_atom_opacity,
+    ].join(`|`)
+    if (sig === bond_style_sig) return false
+    bond_style_sig = sig
+    renderer.set_bond_style({
+      radius: bond_thickness,
+      incomplete_edge_mode: incomplete_periodic_edge_mode,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds,
+      periodic_bond_opacity: image_atom_opacity,
+    })
+    return true
+  }
 
   /** Mirror the app's `selected_sites` into the renderer's GPU highlight buffer
    *  when it changed. Returns true if it re-pushed (caller marks a redraw). */
@@ -856,6 +891,10 @@
       }
     }
 
+    // Visual bond style is independent of topology/detection and is packed into
+    // one shared render uniform. Updating it must not claim legacy ownership.
+    if (sync_bond_style()) dirty = true
+
     // Cell box: push the lattice + show + color to the renderer when any of them
     // changed. Runs after the bond rebuild above so bond_lattice (the cell's
     // lattice source) is current for this frame — including variable-cell
@@ -938,6 +977,8 @@
     last_bg = null
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
+    // Fresh renderer ⇒ force visual bond settings into its uniform.
+    bond_style_sig = ``
     // (Supercell dims + show_image_atoms travel in the packet — the cleared
     // last_pushed_packet above already forces their full re-upload.)
     // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the
@@ -1109,6 +1150,22 @@
     // props only revive the staged getter bridge so the next frame consumes its
     // newly published linear triple. Task 4 replaces this with a revision.
     void [background_color, background_opacity]
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Bond-style wake trigger. The frame compares a cheap signature and uploads
+    // the render uniform only when a visual setting actually changed.
+    void [
+      bond_thickness,
+      incomplete_periodic_edge_mode,
+      incomplete_edge_length_scale,
+      hide_incomplete_bonds,
+      image_atom_opacity,
+    ]
     if (renderer) {
       needs_render = true
       wake()
