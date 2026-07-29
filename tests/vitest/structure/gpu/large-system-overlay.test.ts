@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { resolve as resolve_path } from 'node:path'
 import { createSubscriber } from 'svelte/reactivity'
 import { flushSync, mount, tick, unmount } from 'svelte'
+import { PerspectiveCamera } from 'three'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
@@ -283,6 +284,48 @@ describe(`LargeSystemOverlay revision-bearing visual source`, () => {
     expect(visual.resolve).toHaveBeenCalledTimes(1)
     expect(mocks.renderer.set_shading).toHaveBeenCalledWith(moved_camera.shading)
   })
+
+  it(`wakes once for a programmatic camera revision and stays asleep for the same revision`, async () => {
+    const camera = new PerspectiveCamera(50, 1, 0.1, 100)
+    camera.position.set(0, 0, 10)
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld(true)
+    const visual = make_source(1, make_state(0))
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props: {
+        enabled: true,
+        camera,
+        visual_state_source: visual.source,
+      },
+    })
+    mounted.push(component)
+    await settle_mount()
+    drain_overlay_to_sleep()
+
+    visual.resolve.mockClear()
+    mocks.renderer.set_camera_full.mockClear()
+    mocks.renderer.set_shading.mockClear()
+    mocks.renderer.render.mockClear()
+
+    camera.position.set(1, 0, 10)
+    camera.updateMatrixWorld(true)
+    const moved_camera = make_state(0, { depth_near: 3, depth_far: 12 })
+    visual.publish(2, moved_camera)
+    flushSync()
+
+    expect(pending_overlay_frames()).toHaveLength(1)
+    run_overlay_frame()
+    expect(visual.resolve).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_camera_full).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_shading).toHaveBeenCalledWith(moved_camera.shading)
+    expect(mocks.renderer.render).toHaveBeenCalledTimes(1)
+
+    drain_overlay_to_sleep()
+    visual.publish(2, moved_camera)
+    flushSync()
+    expect(pending_overlay_frames()).toHaveLength(0)
+  })
 })
 
 describe(`visual source ownership and wiring`, () => {
@@ -309,6 +352,18 @@ describe(`visual source ownership and wiring`, () => {
     expect(scene).toContain(`resolve: () => snapshot`)
     expect(scene).toContain(`apply_webgl_background(r, snapshot, __scratch_bg)`)
     expect(scene).toContain(`visual_state={resolved_visual_state}`)
+    expect(scene).toContain(`camera_revision = $bindable(0)`)
+    expect(scene).toContain(`function note_camera_change()`)
+    expect(scene).toContain(`camera_revision += 1`)
+    expect(scene).toMatch(
+      /function finish_camera_change[\s\S]*?note_camera_change\(\)/,
+    )
+    expect(scene).toMatch(
+      /function handle_trackball_change[\s\S]*?note_camera_change\(\)/,
+    )
+    expect(scene).toMatch(
+      /void \[[\s\S]*?camera_revision,[\s\S]*?\][\s\S]*?const snapshot/,
+    )
     expect(scene).toContain(`theme_revision,`)
     const theme_sync = scene.indexOf(
       `sync_clear_color()\n        // Publish only after`,
@@ -323,6 +378,11 @@ describe(`visual source ownership and wiring`, () => {
     expect(structure).toContain(
       `visual_state_source={scene_visual_state_source}`,
     )
+    expect(structure).toContain(`let scene_camera_revision = $state(0)`)
+    expect(structure).toContain(
+      `bind:camera_revision={scene_camera_revision}`,
+    )
+    expect(structure.match(/scene_camera_revision \+= 1/g)).toHaveLength(3)
     expect(overlay).not.toContain(`getComputedStyle`)
     expect(overlay).not.toContain(`background_opacity`)
     expect(overlay).not.toContain(`get_shading`)

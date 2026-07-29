@@ -794,10 +794,14 @@
     // Without the parent binding, this default keeps StructureScene self-
     // contained for any test harness that mounts it directly.
     atom_manager = $bindable<AtomManager>(new AtomManager()),
-    // Single revision-bearing source for both visual adapters. The snapshot
-    // resolver remains live for camera-dependent depth planes; the explicit
-    // revision makes semantic changes visible to a sleeping WebGPU overlay.
+    // Single revision-bearing source for both visual adapters. Each revision
+    // captures one immutable snapshot; camera-dependent depth planes publish a
+    // new revision through the explicit camera bridge.
     visual_state_source = $bindable<VisualStateSource | null>(null),
+    // Camera matrices are mutable Three objects, so their internal changes are
+    // invisible to Svelte. The owner binds this explicit revision and every
+    // camera mutation path bumps it.
+    camera_revision = $bindable(0),
     deleted_bond_keys = new Set<string>(),
 
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
@@ -1111,6 +1115,8 @@
     atom_manager?: AtomManager
     /** Single revision-bearing visual source shared by WebGL2 and WebGPU. */
     visual_state_source?: VisualStateSource | null
+    /** Explicit revision for mutable camera/controls changes. */
+    camera_revision?: number
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -1535,12 +1541,17 @@
     current_camera_target = vector_to_vec3(orbit_controls.target)
   }
 
+  function note_camera_change() {
+    camera_revision += 1
+  }
+
   function finish_camera_change(next_target?: Vec3 | null) {
     if (next_target) current_camera_target = copy_vec3(next_target)
     else sync_current_camera_target_from_controls()
     snapshot_view()
     clear_trackball_rotation_inertia()
     sync_trackball_reset_refs()
+    note_camera_change()
     mark_dirty()
   }
 
@@ -1648,6 +1659,7 @@
     snapshot_view()
     sync_trackball_reset_refs()
     capture_trackball_view_state()
+    note_camera_change()
   }
 
   // Expose the stable rotation pivot for external reset/gesture handlers.
@@ -5423,9 +5435,9 @@
     }
   }
 
-  // One monotonic semantic revision owns shading, background, atom colors, and
-  // the view transform. Camera movement stays out of this effect: interaction
-  // wakes re-resolve the same source for live camera-dependent depth planes.
+  // One monotonic semantic revision owns shading, background, atom colors, the
+  // view transform, and mutable camera matrices. Camera paths bump the explicit
+  // camera_revision because Three's internal matrix writes are not reactive.
   let visual_revision = 0
   let resolved_visual_state = $state.raw<ResolvedVisualState | null>(null)
   $effect(() => {
@@ -5452,6 +5464,7 @@
       rotation_target?.[0],
       rotation_target?.[1],
       rotation_target?.[2],
+      camera_revision,
     ]
     visual_revision += 1
     const snapshot = resolve_current_visual_state()

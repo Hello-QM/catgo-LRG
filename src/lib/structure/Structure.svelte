@@ -267,6 +267,7 @@
   // StructureScene is the single visual-state publisher. Its visible revision
   // wakes the WebGPU overlay even after the overlay frame loop has suspended.
   let scene_visual_state_source = $state<VisualStateSource | null>(null)
+  let scene_camera_revision = $state(0)
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -297,6 +298,7 @@
   // Gesture API: bridges gestures to the structure viewer
   const gesture_api: StructureGestureAPI = {
     rotate(axis, angle) {
+      if (angle === 0) return
       if (orbit_controls && camera) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
@@ -354,8 +356,10 @@
         else r[2] += angle
         scene_props.rotation = r
       }
+      scene_camera_revision += 1
     },
     zoom(delta) {
+      if (delta === 0) return
       if (orbit_controls) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
@@ -366,9 +370,11 @@
 
         const ctrl = orbit_controls as any
         if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+        scene_camera_revision += 1
       }
     },
     pan(dx, dy) {
+      if (dx === 0 && dy === 0) return
       if (orbit_controls) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
@@ -423,6 +429,7 @@
         if (ctrl._target0) ctrl._target0.copy(target)
         if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
         if (ctrl._up0) ctrl._up0.copy(cam.up)
+        scene_camera_revision += 1
       }
     },
     atom_at(sx, sy) {
@@ -4746,6 +4753,7 @@
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
             bind:visual_state_source={scene_visual_state_source}
+            bind:camera_revision={scene_camera_revision}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
