@@ -502,6 +502,24 @@ def list_analysis_sessions():
     return {"sessions": out, "count": len(out)}
 
 
+@router.post("/analysis/push")
+def push_analysis(data: dict[str, Any]):
+    """Publish an analysis session to the viewer.
+
+    In-process producers call `view_state.announce_analysis` directly; the stdio
+    MCP server is a separate process and needs this face (same reason
+    `/result/push` exists).
+    """
+    kind = str(data.get("kind", "")).strip()
+    session = data.get("session")
+    if not kind or not isinstance(session, dict) or not session.get("session_id"):
+        raise HTTPException(
+            status_code=400, detail="kind and session (object with session_id) are required"
+        )
+    view_state.announce_analysis(kind, session, panel_id=str(data.get("panel_id", "")))
+    return {"ok": True}
+
+
 @router.post("/result/push")
 def push_result(data: dict[str, Any]):
     """Publish a computed result to the viewer.

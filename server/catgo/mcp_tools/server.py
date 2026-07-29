@@ -483,6 +483,55 @@ async def _announce_direct_result(tool_name: str, result: object) -> None:
         logger.debug("result push for %s failed: %s", tool_name, exc)
 
 
+# The `output_type` contract this server advertises (see the catgo_create_tool
+# description above): `structure` says "auto-pushed to 3D viewer", and the plot
+# / spectrum types exist so a result can be RENDERED. Neither happened — every
+# registry tool and every plugin reader except a bare `structure` reader had its
+# payload json.dumps'd into the transcript. One router, honoured at both sites.
+_ANALYSIS_OUTPUT_KINDS = {
+    "electronic_dos": "dos",
+    "electronic_bands": "bands",
+    "cohp": "cohp",
+}
+
+
+async def _publish_tool_output(output_type: str, data: object) -> None:
+    """Route a tool payload to the surface its declared output_type promises.
+
+    Best-effort over HTTP (this is the stdio server): a viewer that is not
+    running must never fail the tool that produced the data.
+    """
+    if not isinstance(data, dict) or not output_type:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if output_type == "structure":
+                struct = data.get("structure") if "structure" in data else data
+                if isinstance(struct, dict) and struct:
+                    await client.post(
+                        f"{API_BASE}/view/structure/push",
+                        params={"intent": "load"},
+                        json={"structure": struct},
+                    )
+                return
+            kind = _ANALYSIS_OUTPUT_KINDS.get(output_type)
+            if kind and data.get("session_id"):
+                # a reader that produced a real session: adopt it in the pane
+                await client.post(
+                    f"{API_BASE}/view/analysis/push",
+                    json={"kind": kind, "session": data},
+                )
+                return
+            # everything else that is renderable at all — plots, tables, images,
+            # per-atom properties, and spectra with no session behind them
+            await client.post(
+                f"{API_BASE}/view/result/push",
+                json={"kind": output_type, "payload": data},
+            )
+    except Exception as exc:
+        logger.debug("publishing %s output failed: %s", output_type, exc)
+
+
 async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextContent]:
     """Handle tools that call Python modules directly instead of REST endpoints."""
     try:
@@ -686,6 +735,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 result = await execute_tool(entry, arguments, injected_structure=auto_structure)
                 if result.error:
                     return [TextContent(type="text", text=f"Error: {result.error}")]
+                await _publish_tool_output(entry.output_type, result.data)
                 return [TextContent(type="text", text=json.dumps(result.data))]
 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]

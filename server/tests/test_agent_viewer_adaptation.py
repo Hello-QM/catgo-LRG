@@ -98,5 +98,90 @@ def test_result_push_rejects_a_payload_the_viewer_could_not_render(client):
     assert ok.status_code == 200 and ok.json()["ok"] is True
 
 
+# ---- the output_type contract the server advertises must be honoured --------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_type,payload,expect_path,expect_kind", [
+    ("structure", {"sites": [{"label": "Pt"}]}, "/view/structure/push", None),
+    ("electronic_dos", {"session_id": "d-1", "efermi": 0.0}, "/view/analysis/push", "dos"),
+    ("cohp", {"session_id": "c-1"}, "/view/analysis/push", "cohp"),
+    ("bar_plot", {"series": [{"label": "a", "values": [1.0]}]}, "/view/result/push", "bar_plot"),
+    ("table", {"columns": ["a"], "rows": [[1]]}, "/view/result/push", "table"),
+    ("atom_property", {"property_name": "q", "values": [0.1]}, "/view/result/push", "atom_property"),
+])
+async def test_a_declared_output_type_reaches_its_surface(
+    output_type, payload, expect_path, expect_kind, monkeypatch
+):
+    # `structure: ... (auto-pushed to 3D viewer)` is advertised in the server's
+    # own tool description; the plot/spectrum types exist so a result can be
+    # RENDERED. Every registry tool and non-structure plugin reader dropped its
+    # payload into the transcript instead.
+    mcp_server = importlib.import_module("catgo.mcp_tools.server")
+    calls = []
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def post(self, url, params=None, json=None):
+            calls.append((url, json))
+            class _R:
+                status_code = 200
+                text = "{}"
+                def json(self_inner): return {}
+            return _R()
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: _Client())
+    await mcp_server._publish_tool_output(output_type, payload)
+
+    assert calls, f"{output_type} published nothing"
+    url, body = calls[0]
+    assert expect_path in url, (output_type, url)
+    if expect_kind:
+        assert body["kind"] == expect_kind
+
+
+@pytest.mark.asyncio
+async def test_a_spectrum_with_no_session_falls_back_to_the_results_surface(monkeypatch):
+    # A reader can emit DOS arrays without minting a backend session; those
+    # cannot be adopted by the pane, but they must not vanish either.
+    mcp_server = importlib.import_module("catgo.mcp_tools.server")
+    calls = []
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def post(self, url, params=None, json=None):
+            calls.append(url)
+            class _R:
+                status_code = 200
+            return _R()
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: _Client())
+    await mcp_server._publish_tool_output("electronic_dos", {"energies": [0.0, 1.0]})
+
+    assert calls and "/view/result/push" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_publishing_never_fails_the_tool_that_produced_the_data(monkeypatch):
+    mcp_server = importlib.import_module("catgo.mcp_tools.server")
+
+    def _explode(*a, **k):
+        raise RuntimeError("backend down")
+
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", _explode)
+    await mcp_server._publish_tool_output("table", {"columns": [], "rows": []})  # no raise
+
+
+def test_analysis_push_rejects_a_session_the_pane_could_not_adopt(client):
+    assert client.post("/api/view/analysis/push", json={"kind": "dos"}).status_code == 400
+    assert client.post(
+        "/api/view/analysis/push", json={"kind": "dos", "session": {}}
+    ).status_code == 400
+    ok = client.post(
+        "/api/view/analysis/push", json={"kind": "dos", "session": {"session_id": "d-9"}}
+    )
+    assert ok.status_code == 200 and ok.json()["ok"] is True
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

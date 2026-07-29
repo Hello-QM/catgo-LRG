@@ -126,7 +126,10 @@ async def _handle_plugin_reader(reader_id: str, arguments: dict) -> list[TextCon
         options = arguments.get("options", {})
         result = await reader.read(file_paths, options)
 
-        # If output is a structure, push to viewer
+        # Show the result. A structure keeps its two-leg push (the second leg is
+        # what makes an already-mounted pane apply it); every OTHER declared
+        # output type used to be dropped into the transcript as text — a DOS
+        # reader's spectrum was as invisible as if the plugin had not run.
         if reader.output_type == "structure" and isinstance(result, dict) and "structure" in result:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -134,6 +137,10 @@ async def _handle_plugin_reader(reader_id: str, arguments: dict) -> list[TextCon
                     await client.post(f"{API_BASE}/view/structure/pending-update", params={"intent": "load"}, json={"structure": result["structure"]})
             except Exception as exc:
                 logger.warning(f"Failed to push reader result to viewer: {exc}")
+        else:
+            from catgo.mcp_tools.server import _publish_tool_output
+
+            await _publish_tool_output(reader.output_type, result)
 
         return [TextContent(type="text", text=json.dumps(
             {"reader_id": reader_id, "output_type": reader.output_type, "success": True, "data": result},
