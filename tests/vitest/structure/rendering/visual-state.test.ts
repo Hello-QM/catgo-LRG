@@ -23,6 +23,7 @@ const shading = (): ResolvedVisualShading => ({
   metalness: 0,
   render_style: 2,
   outline: 0.2,
+  bond_outline: 0.1,
   depth_cueing: 0.4,
   depth_near: 1,
   depth_far: 9,
@@ -90,6 +91,17 @@ describe(`shared visual state`, () => {
     const a = shading()
     expect(same_visual_shading(a, { ...a, light_dir: [...a.light_dir] })).toBe(true)
     expect(same_visual_shading(a, { ...a, depth_bg: [0.02, 0.01, 0.01] })).toBe(false)
+  })
+
+  it(`treats atom and bond outline strengths as independent semantics`, () => {
+    const a = shading()
+    expect(same_visual_shading(a, { ...a, outline: 0.3 })).toBe(false)
+    expect(same_visual_shading(a, { ...a, bond_outline: 0.3 })).toBe(false)
+    expect(same_visual_shading(a, {
+      ...a,
+      light_dir: [...a.light_dir],
+      depth_bg: [...a.depth_bg],
+    })).toBe(true)
   })
 
   it(`keeps legacy MatCap fallback and halo radius on explicit shared adapters`, () => {

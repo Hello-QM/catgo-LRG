@@ -87,6 +87,7 @@ function make_visual_source(
   atom_colors_linear: Float32Array | null,
   rotation: [number, number, number] = [0, 0, 0],
   target: [number, number, number] = [0, 0, 0],
+  bond_outline = 0,
 ) {
   const background_linear: [number, number, number] = [0, 0, 0]
   const resolve = vi.fn(() => ({
@@ -100,6 +101,7 @@ function make_visual_source(
       metalness: 0,
       render_style: 0 as const,
       outline: 0,
+      bond_outline,
       depth_cueing: 0,
       depth_near: 0,
       depth_far: 1,
@@ -360,6 +362,44 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(rotated.frame.positions[0]).toBeCloseTo(0, 5)
     expect(rotated.frame.positions[1]).toBeCloseTo(1, 5)
     expect(rotated.frame.positions[2]).toBeCloseTo(0, 5)
+  })
+
+  it(`wakes a suspended RAF loop exactly once for a bond-outline-only revision`, async () => {
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0])
+    const props = $state({
+      enabled: true,
+      structure: make_structure(),
+      visual_state_source: make_visual_source(1, colors).source,
+      show_bonds: `never` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+    run_until_sleep()
+
+    mocks.renderer.set_shading.mockClear()
+    props.visual_state_source = make_visual_source(
+      2,
+      colors,
+      [0, 0, 0],
+      [0, 0, 0],
+      0.65,
+    ).source
+    await settle()
+
+    const overlay_frames = [...raf_callbacks.values()].filter((callback) =>
+      callback.name === `frame`
+    )
+    expect(overlay_frames).toHaveLength(1)
+    run_overlay_frame()
+    expect(mocks.renderer.set_shading).toHaveBeenCalledTimes(1)
+    expect(mocks.renderer.set_shading).toHaveBeenCalledWith(
+      expect.objectContaining({ outline: 0, bond_outline: 0.65 }),
+    )
   })
 
   it(`keeps trajectory and rotation packet revisions strictly monotonic`, async () => {

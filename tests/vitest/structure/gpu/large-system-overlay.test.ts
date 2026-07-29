@@ -73,6 +73,7 @@ function make_state(
       metalness: 0,
       render_style,
       outline: 0,
+      bond_outline: 0,
       depth_cueing: 1,
       depth_near: 2,
       depth_far: 8,

@@ -401,6 +401,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
       metalness: 0.88,
       render_style: 2,
       outline: 0.99,
+      bond_outline: 0.57,
       depth_cueing: 0.12,
       depth_near: 3.25,
       depth_far: 47.5,
@@ -427,7 +428,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
       0.11, -0.22, 0.33, 1,
       0.44, 1.55, 0.66, 0.77,
       0.88, 2, 0.99, 0.12,
-      3.25, 47.5, 0, 0,
+      3.25, 47.5, 0.57, 0,
       0.14, 0.25, 0.36, 0,
       0.31, 0.82, 0.43, 0,
     ]
@@ -475,6 +476,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
       metalness: 0.88,
       render_style: 2,
       outline: 0.99,
+      bond_outline: 0.57,
       depth_cueing: 0.12,
       depth_near: 3.25,
       depth_far: 47.5,
@@ -502,6 +504,7 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
       shading_writes[1].bytes.byteLength / 4,
     )
     expect(payload[0]).toBeCloseTo(0.51)
+    expect(payload[14]).toBeCloseTo(0.57)
     expect(payload[18]).toBeCloseTo(0.71)
 
     expect(renderer.set_shading({

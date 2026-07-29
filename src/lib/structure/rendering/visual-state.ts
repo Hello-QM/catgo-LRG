@@ -20,7 +20,10 @@ export type ResolvedVisualShading = {
   roughness: number
   metalness: number
   render_style: BackendRenderStyle
+  /** Atom-only silhouette outline strength. */
   outline: number
+  /** Bond-only silhouette outline strength. */
+  bond_outline: number
   depth_cueing: number
   depth_near: number
   depth_far: number
@@ -108,6 +111,7 @@ export function same_visual_shading(
     a.metalness === b.metalness &&
     a.render_style === b.render_style &&
     a.outline === b.outline &&
+    a.bond_outline === b.bond_outline &&
     a.depth_cueing === b.depth_cueing &&
     a.depth_near === b.depth_near &&
     a.depth_far === b.depth_far &&

@@ -241,7 +241,7 @@ function linear_to_srgb(c: number): number {
  *    0: light_dir.xyz (view-space headlamp) | w = 1 when the camera is orthographic
  *    1: ambient | directional | spec_strength | roughness
  *    2: metalness | render_style (0 glossy, 1 matte, 2 toon) | outline | depth_cueing
- *    3: depth_near | depth_far | pad | pad
+ *    3: depth_near | depth_far | bond_outline | pad
  *    4: depth_cue_bg.rgb (LINEAR — the shader encodes it) | pad
  *    5: toon shadow_threshold | highlight_threshold | shadow_brightness | pad */
 const SHADING_FLOATS = 24
@@ -258,6 +258,7 @@ const DEFAULT_SHADING: ResolvedVisualShading = {
   ...style_pbr(`glossy`),
   render_style: 0,
   outline: 0,
+  bond_outline: 0,
   depth_cueing: 0,
   depth_near: 0,
   depth_far: 10,
@@ -289,9 +290,10 @@ function pack_shading_uniform(state: ResolvedVisualShading): Float32Array {
   f[9] = state.render_style
   f[10] = state.outline
   f[11] = state.depth_cueing
-  // vec4 3: depth near/far (+ 2 zero-initialized padding floats)
+  // vec4 3: depth near/far, bond-only outline (+ 1 zero-initialized pad)
   f[12] = state.depth_near
   f[13] = state.depth_far
+  f[14] = state.bond_outline
   // vec4 4: depth-cue background, LINEAR rgb (+ zero padding)
   f[16] = state.depth_bg[0]
   f[17] = state.depth_bg[1]
@@ -635,7 +637,7 @@ struct Shading {
   light_dir : vec4<f32>,  // xyz = view-space headlamp, w = 1 when orthographic
   params0   : vec4<f32>,  // ambient, directional, spec_strength, roughness
   params1   : vec4<f32>,  // metalness, render_style, outline, depth_cueing
-  depth_cue : vec4<f32>,  // near, far, pad, pad
+  depth_cue : vec4<f32>,  // near, far, bond_outline, pad
   depth_bg  : vec4<f32>,  // LINEAR rgb fade target + pad
   toon      : vec4<f32>,  // shadow_thr, highlight_thr, shadow_brightness, pad
 };
@@ -1562,7 +1564,8 @@ fn fs_main(in : VsOut) -> FsOut {
   let light_dir = normalize(shading.light_dir.xyz);
   let view_dir = normalize(-hit_p);
   let diffuse = max(dot(hit_n, light_dir), 0.0);
-  let rim_factor = smoothstep(0.0, 0.25, max(dot(hit_n, view_dir), 0.0));
+  let NdotV = max(dot(hit_n, view_dir), 0.0);
+  let rim_factor = smoothstep(0.0, 0.25, NdotV);
   let lighting = max(0.7 * 0.3 + (0.7 * 0.7 + 0.3 * diffuse) * rim_factor, 0.2);
   let half_dir = normalize(light_dir + view_dir);
   let specular = pow(max(dot(hit_n, half_dir), 0.0), 60.0);
@@ -1601,6 +1604,13 @@ fn fs_main(in : VsOut) -> FsOut {
     let span = max(shading.depth_cue.y - shading.depth_cue.x, 0.01);
     let fade = clamp((depth_z - shading.depth_cue.x) / span, 0.0, 1.0) * shading.params1.w;
     rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
+  }
+
+  // Bond outline is independent of the atom outline in shading.params1.z.
+  // Match BondManagerInstances' wider silhouette band and gain.
+  if (shading.depth_cue.z > 0.0) {
+    let silhouette = smoothstep(0.0, 0.6, 1.0 - NdotV);
+    rgb = mix(rgb, vec3<f32>(0.0), silhouette * shading.depth_cue.z * 0.85);
   }
 
   let alpha = cov * in.opacity;

@@ -85,6 +85,7 @@ describe(`LargeSystemOverlay shared visual snapshot`, () => {
         metalness: 0,
         render_style: 0 as const,
         outline: 0,
+        bond_outline: 0,
         depth_cueing: 1,
         depth_near: 2,
         depth_far: 8,
