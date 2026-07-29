@@ -1149,12 +1149,12 @@
     // revision prevents an equal source/state republication from creating a
     // wake cycle, while a source that arrives after session start wakes once.
     const source = visual_state_source
-    const revision = source?.revision
     if (!source) {
       observed_visual_revision = null
       has_observed_visual_source = false
       return
     }
+    const revision = source.revision
     if (
       has_observed_visual_source &&
       revision === observed_visual_revision
