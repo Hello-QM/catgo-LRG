@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import weakref
 import uuid
 from collections import Counter, deque
 from typing import Any
@@ -54,14 +55,30 @@ pending_workflow_id: str = ""
 # them rather than blocking the writer.
 
 panel_subscribers: dict[str, list[asyncio.Queue]] = {}
+# Which event loop each subscriber queue belongs to. A queue is only ever safe
+# to touch from its own loop; writers can now arrive from another thread.
+queue_loops: "weakref.WeakKeyDictionary[asyncio.Queue, asyncio.AbstractEventLoop]" = (
+    weakref.WeakKeyDictionary()
+)
 pending_commands: dict[str, asyncio.Future] = {}
 
 
 def subscribe(panel_id: str) -> asyncio.Queue:
-    """Register a new SSE subscriber. Returns its queue."""
+    """Register a new SSE subscriber. Returns its queue.
+
+    Remembers the loop the queue was created on. Writers now include the
+    workflow engine, which runs in its OWN thread with its OWN event loop
+    (`engine/lifecycle.py`), and `asyncio.Queue.put_nowait` from a foreign
+    thread touches a Future belonging to this loop — not thread-safe. See
+    `_notify`.
+    """
     if panel_id not in panel_subscribers:
         panel_subscribers[panel_id] = []
     q: asyncio.Queue = asyncio.Queue(maxsize=32)
+    try:
+        queue_loops[q] = asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no loop (tests call this synchronously) — plain put_nowait is fine
     panel_subscribers[panel_id].append(q)
     return q
 
@@ -105,15 +122,44 @@ def _notify(panel_id: str, event: str, data: dict) -> None:
     # covered by _subscriber_keys, so both listeners now see it.
     panel_id = resolve_panel_id(panel_id)
     msg = {"event": event, "data": data}
+    try:
+        here = asyncio.get_running_loop()
+    except RuntimeError:
+        here = None
     for key in _subscriber_keys(panel_id):
         for q in list(panel_subscribers.get(key, [])):
-            try:
-                q.put_nowait(msg)
-            except asyncio.QueueFull:
-                logger.warning(
-                    "SSE subscriber queue full for panel '%s' (event=%s) — dropping",
-                    key, event,
-                )
+            _deliver(q, msg, key, event, here)
+
+
+def _deliver(q, msg, key, event, here):
+    """Put one event on one subscriber's queue, from whichever thread we are on.
+
+    The workflow engine runs in its own thread with its own event loop
+    (`engine/lifecycle.py`), so a node result reaches this function from a
+    thread that does NOT own the queue. `put_nowait` there wakes a waiter by
+    completing a Future on the foreign loop, which asyncio does not allow: the
+    SSE consumer can miss the wakeup entirely. Hand the put to the owning loop
+    instead — the queue is bounded, so the drop-on-full behaviour is preserved
+    on both paths.
+    """
+    owner = queue_loops.get(q)
+    if owner is not None and owner is not here and not owner.is_closed():
+        try:
+            owner.call_soon_threadsafe(_put_or_drop, q, msg, key, event)
+        except RuntimeError:
+            logger.debug("SSE loop for panel '%s' is gone (event=%s)", key, event)
+        return
+    _put_or_drop(q, msg, key, event)
+
+
+def _put_or_drop(q, msg, key, event):
+    try:
+        q.put_nowait(msg)
+    except asyncio.QueueFull:
+        logger.warning(
+            "SSE subscriber queue full for panel '%s' (event=%s) — dropping",
+            key, event,
+        )
 
 
 def notify_structure(
