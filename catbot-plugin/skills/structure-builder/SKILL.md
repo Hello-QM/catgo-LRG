@@ -23,8 +23,20 @@ description: >
 - Organic molecules: use `catgo_fetch_molecule`, not OPTIMADE
 
 ### From Current Viewer
-Call `catgo_structure_info` to inspect the loaded structure. All structure-modifying tools
-auto-fetch the current viewer structure — no need to pass structure dicts.
+Call `catgo_structure_info` to inspect the loaded structure. A tool whose input is named
+`structure` auto-fetches the current viewer structure — no need to pass a structure dict.
+
+Tools that take **two** geometries name them explicitly and cannot be auto-filled (there is
+no way to know which operand the viewer holds): `catgo_passivate` (`slab`, `bulk`),
+`catgo_hetero_search` / `catgo_hetero_build` (`substrate`, `film`),
+`catgo_hetero_search_lateral` / `catgo_hetero_build_lateral` (`slab_A`, `slab_B`),
+`catgo_merge` (`base`, `incoming`). Fetch with `catgo_structure_info` and pass them yourself.
+
+### The result is on screen
+Whatever a builder returns is pushed into the 3D viewer as it runs — slabs, defects, doping,
+substitution, intercalation, adsorbate placement, passivation, heterostructures, nanotubes,
+moiré cells, reticular frameworks, optimized geometries. Report what changed in one sentence;
+do not re-describe coordinates the user is looking at, and do not claim it cannot be shown.
 
 ## Atom-Level Operations
 

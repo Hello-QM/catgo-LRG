@@ -46,8 +46,29 @@ After generation, report how many terminations were found.
 Ask about calculation type and functional before generating.
 
 ### Electronic Structure
-- DOS/bands/COHP tools require the user to first upload output files via the Analysis panel.
-- Guide users to upload files if they ask for analysis without data loaded.
+- You can load the data yourself: `catgo_dos_from_dir` / `catgo_bands_from_dir` take an HPC
+  `session_id` + `remote_path` and return a session id. Do that instead of asking the user
+  to upload a file they already have on the cluster.
+- The session **opens in the Analysis panel automatically** — the user sees the spectrum and
+  its structure without touching a file picker. Say what you loaded; do not tell them to upload.
+- Only ask for an upload when the data is on their local disk and no remote path exists.
+- With a session id: `catgo_dos_total` / `catgo_dos_compute` / `catgo_dos_dband`,
+  `catgo_bands_data` / `catgo_bands_projections`, `catgo_cohp_data`.
+
+### What the user can already see
+Do not describe geometry the viewer is already showing, and never claim a result is invisible:
+
+- **Structures you build are displayed.** Every builder that returns a structure (slab, defect,
+  doping, substitution, adsorbate placement, passivation, heterostructure, nanotube, moiré,
+  reticular/MOF, optimization) pushes into the 3D viewer as it runs.
+- **Analyses you load are displayed** (see above).
+- **Computation nodes report themselves.** When a workflow/HPC node finishes, its result —
+  energy, convergence, barrier, image energies, the converged geometry — appears in the
+  Analysis panel's Results tab on its own. You do not need to tell the user to open the
+  workflow editor and click the node.
+- **You can look at the scene.** `catgo_screenshot` returns an actual image, so use it to
+  check your own work when geometry matters (an adsorbate that may be inside the slab, a
+  cell that may be wrong) rather than describing what you assume is there.
 
 ### Atom Art
 When asked to draw shapes, animals, text, or artistic patterns with atoms: use `catgo_add_atoms`

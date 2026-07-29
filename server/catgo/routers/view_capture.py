@@ -6,8 +6,10 @@ to push current structure and selection state.
 """
 
 import asyncio
+import importlib
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from typing import Annotated, Any, Optional
@@ -459,6 +461,45 @@ def get_pending_structure_update(
 # ---------------------------------------------------------------------------
 # Workflow navigation signal (MCP tools → frontend)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/analysis-sessions")
+def list_analysis_sessions():
+    """List the analysis sessions currently loaded, newest first.
+
+    Closes the reverse direction of agent↔viewer collaboration: the agent can
+    create sessions and they now display, but a session the USER loaded was
+    invisible to it — the frontend's session registry is write-only and the
+    agent had no way to learn an id it did not mint itself. Reads the routers'
+    own registries, so it reports what the server can actually still serve, not
+    what some UI once showed.
+    """
+    out: list[dict[str, Any]] = []
+    registries = (
+        ("dos", "catgo.routers.dos", "_sessions"),
+        ("bands", "catgo.routers.bands", "_sessions"),
+        ("cohp", "catgo.routers.cohp", "_sessions"),
+        ("icohp", "catgo.routers.cohp", "_icohp_sessions"),
+    )
+    for kind, module_name, attr in registries:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # a router that failed to import has no sessions
+            continue
+        for session_id, entry in dict(getattr(module, attr, {}) or {}).items():
+            # dos/bands hold a dataclass with .timestamp; cohp holds (data, ts)
+            ts = getattr(entry, "timestamp", None)
+            if ts is None and isinstance(entry, tuple) and len(entry) >= 2:
+                ts = entry[-1]
+            item = {"kind": kind, "session_id": session_id}
+            if isinstance(ts, (int, float)):
+                item["age_seconds"] = round(max(0.0, time.time() - ts), 1)
+            source = getattr(entry, "source", None)
+            if source:
+                item["source"] = source
+            out.append(item)
+    out.sort(key=lambda s: s.get("age_seconds", float("inf")))
+    return {"sessions": out, "count": len(out)}
 
 
 @router.post("/result/push")

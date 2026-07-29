@@ -3,6 +3,18 @@
 __all__ = ["TOOLS"]
 
 TOOLS: list[dict] = [
+    {
+        "name": "catgo_analysis_sessions",
+        "description": (
+            "List the DOS / bands / COHP sessions currently loaded in CatGo, newest first. "
+            "Use this before asking the user to upload anything: a session THEY loaded is "
+            "otherwise invisible to you, and its session_id is what every dos_/bands_/cohp_ "
+            "tool needs. Returns kind, session_id, age_seconds and (for DOS) its source."
+        ),
+        "endpoint": "/view/analysis-sessions",
+        "method": "GET",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     # ─── DOS Analysis ───
     {
         "name": "catgo_dos_compute",

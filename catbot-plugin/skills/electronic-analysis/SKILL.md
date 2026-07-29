@@ -17,8 +17,18 @@ description: >
 | `catgo_dos_dband` | D-band center, width, filling (catalysis) |
 | `catgo_dos_from_dir` | Load DOS from remote HPC directory |
 
+### Getting a session
+`catgo_dos_from_dir(session_id=<hpc session>, remote_path=<dir>)` — points at the run
+directory on the cluster (it looks for `vaspout.h5` / `vasprun.xml`) and returns a DOS
+session id. Prefer this over asking for an upload: the data is already on the cluster,
+and the loaded session **opens in the Analysis panel by itself**, together with the
+structure it was computed on. Same for `catgo_bands_from_dir`.
+
+Report what you loaded and what the spectrum shows. Do not tell the user to upload a
+file, and do not say the result cannot be displayed — it already is.
+
 ### PDOS Workflow
-1. Get `session_id` from file upload or `catgo_dos_from_dir`
+1. Get `session_id` from `catgo_dos_from_dir` (or from a file the user uploaded)
 2. Define atom groups: `{"groups": [{"atoms": [0,1,2], "channels": "d", "label": "Surface Pt d"}]}`
 3. Call `catgo_dos_compute` with session_id and groups
 
