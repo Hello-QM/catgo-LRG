@@ -174,6 +174,28 @@ def announce_analysis(kind: str, session: Any, panel_id: str = "") -> None:
         logger.debug("announce_analysis(%s) failed", kind, exc_info=True)
 
 
+def notify_result(panel_id: str, kind: str, payload: dict) -> None:
+    """Notify SSE subscribers that a computation NODE produced a result.
+
+    Until now a finished workflow/HPC node wrote its outputs to the database and
+    stopped there: the only way to see them was for a human to open the workflow
+    editor and click the node. For an agent running a campaign unattended that
+    means nothing it computes is ever shown.
+    """
+    _notify(panel_id, "result", {"kind": kind, **payload})
+
+
+def announce_result(kind: str, payload: dict, panel_id: str = "") -> None:
+    """Publish a node result to the panel the user is on. Never raises — a
+    display side-effect must not fail the run that produced the data."""
+    try:
+        if not isinstance(payload, dict):
+            return
+        notify_result(resolve_panel_id(panel_id or last_active_panel_id), kind, payload)
+    except Exception:  # pragma: no cover - display must never break compute
+        logger.debug("announce_result(%s) failed", kind, exc_info=True)
+
+
 def notify_trajectory(panel_id: str, content: str, filename: str) -> None:
     """Notify SSE subscribers of a multi-frame trajectory upload.
 

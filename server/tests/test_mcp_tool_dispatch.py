@@ -178,5 +178,39 @@ async def test_a_response_with_no_geometry_pushes_nothing(fake_http):
     assert not [c for c in client.calls if "/view/structure/push" in c[1]]
 
 
+@pytest.mark.asyncio
+async def test_a_screenshot_comes_back_as_an_image(fake_http):
+    # Returned as JSON text the base64 is an unreadable wall — an agent could
+    # never look at the scene it had just edited.
+    fake_http({"image": "data:image/png;base64,AAAB", "width": 800, "height": 600})
+
+    out = await mcp_server.handle_call_tool("catgo_screenshot", {})
+
+    kinds = [c.type for c in out]
+    assert "image" in kinds, kinds
+    img = next(c for c in out if c.type == "image")
+    assert img.data == "AAAB" and img.mimeType == "image/png"
+    assert any("800x600" in c.text for c in out if c.type == "text")
+
+
+@pytest.mark.asyncio
+async def test_a_direct_catalysis_result_is_published_to_the_viewer(fake_http):
+    # generate_volcano_data returns exactly VolcanoPlot's props; before this the
+    # numbers were returned as text and the finished component stayed unmounted.
+    client = fake_http({"ok": True})
+
+    await mcp_server.handle_call_tool("catgo_catalysis_volcano", {
+        "catalyst_results": [{"name": "Pt", "dG_OH": 0.8, "overpotential": 0.4}],
+        "reaction": "OER",
+    })
+
+    pushes = [c for c in client.calls if "/view/result/push" in c[1]]
+    assert pushes, client.calls
+    body = pushes[0][2]["json"]
+    assert body["kind"] == "volcano"
+    assert body["payload"]["tool"] == "catgo_catalysis_volcano"
+    assert body["payload"]["points"][0]["name"] == "Pt"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

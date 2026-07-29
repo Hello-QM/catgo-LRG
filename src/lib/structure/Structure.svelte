@@ -183,6 +183,7 @@
   import type { SliceResult, AtomSliceInfo } from '$lib/cube/slice'
   import { in_plane_basis, rodrigues_rotate, normalize as vec3_normalize } from '$lib/cube/slice'
   import { parse_any_structure, pubchem_to_pymatgen } from './parse'
+  import VolcanoPlot from '$lib/workflow/VolcanoPlot.svelte'
   import { PeriodicTable } from '$lib/periodic-table'
   import { element_data } from '$lib/element'
   import { parse_structure_file } from './parse'
@@ -2500,8 +2501,53 @@
       handle_command: (action, args) =>
         handle_viewer_command ? handle_viewer_command(action, args) : handle_structure_command(action, args),
       open_analysis: (kind, session) => adopt_analysis_session(kind, session),
+      on_node_result: (payload) => adopt_node_result(payload),
+      on_trajectory: (content, filename) => adopt_pushed_trajectory(content, filename),
     }
   }
+
+  /**
+   * Adopt a trajectory pushed to THIS pane (NEB path, MD run, IRC). The backend
+   * has emitted the event since trajectories existed, but only the global
+   * `default` listener consumed it, so a push addressed to `tab:leaf` was
+   * silently dropped. Feeds the same two sinks the drag-drop path uses: the
+   * viewer's structure and the MD-analysis trajectory buffer.
+   */
+  function adopt_pushed_trajectory(content: string, filename: string) {
+    try {
+      const parsed = parse_any_structure(content, filename || `pushed.xyz`)
+      if (parsed) { center_camera_trigger++; structure = parsed as typeof structure }
+      imported_traj_b64 = content_to_base64(content)
+      imported_traj_format = filename.split(`.`).pop()?.toLowerCase() || `xyz`
+    } catch (err) {
+      console.warn(`[CatGo] pushed trajectory parse failed:`, err)
+    }
+  }
+
+  /**
+   * A compute node finished. Show whatever it produced: load the converged
+   * geometry if the collector stored one, and surface the numbers as a toast so
+   * an unattended run is legible without opening the workflow editor.
+   */
+  function adopt_node_result(payload: Record<string, unknown>) {
+    const text = payload?.structure_text
+    const struct = payload?.structure
+    if (typeof text === `string` && text.trim()) {
+      try {
+        const parsed = parse_any_structure(text, String(payload.structure_filename ?? `result.xyz`))
+        if (parsed) { center_camera_trigger++; structure = parsed as typeof structure }
+      } catch (err) {
+        console.warn(`[CatGo] node result structure parse failed:`, err)
+      }
+    } else if (struct && typeof struct === `object`) {
+      center_camera_trigger++
+      structure = struct as typeof structure
+    }
+    node_result = payload
+  }
+
+  // Latest finished-node result, rendered in the Analysis pane's Results tab.
+  let node_result = $state<Record<string, unknown> | null>(null)
 
   /**
    * Reveal an analysis session the backend just created. Same four steps the
@@ -3980,7 +4026,49 @@
             on_toggle_pinned={xrd.toggle_pinned_visibility}
             on_structure_import={(s) => { center_camera_trigger++; structure = s }}
           >
-            {#if analysis.active_analysis_tab ===`md`}
+            {#if analysis.active_analysis_tab === `results`}
+              <section class="node-results-section">
+                {#if !node_result}
+                  <p class="sym-hint">{t(`structure.node_results_empty`)}</p>
+                {:else}
+                  <h5 class="sym-heading">
+                    {t(`structure.node_results_from`)} <code>{node_result.task_id}</code>
+                  </h5>
+                  {#if node_result.error}
+                    <p class="node-result-error">{node_result.error}</p>
+                  {/if}
+                  <dl class="node-result-values">
+                    {#each [`energy`, `final_energy`, `converged`, `band_gap`, `barrier`, `max_force`, `n_images`, `task_type`, `software`] as key}
+                      {#if node_result[key] !== undefined}
+                        <dt>{key}</dt><dd>{node_result[key]}</dd>
+                      {/if}
+                    {/each}
+                  </dl>
+                  {#if node_result.kind === `volcano` && Array.isArray(node_result.points)}
+                    <!-- VolcanoPlot shipped finished and imported by nothing;
+                         generate_volcano_data already returns exactly its props -->
+                    <VolcanoPlot
+                      points={node_result.points as { name: string; x: number; y: number }[]}
+                      ideal_line={(node_result.ideal_line ?? null) as { x: number[]; y: number[] } | null}
+                      width={320}
+                      height={240}
+                    />
+                  {/if}
+                  {#each [`image_energies`, `energies`, `frequencies`] as series}
+                    {#if Array.isArray(node_result[series])}
+                      <p class="node-result-series">
+                        <strong>{series}</strong>
+                        ({(node_result[series] as number[]).length}):
+                        {(node_result[series] as number[]).map((v) => v.toFixed(3)).join(`, `)}
+                      </p>
+                    {/if}
+                  {/each}
+                  {#if Array.isArray(node_result.outputs)}
+                    <p class="node-result-keys">{(node_result.outputs as string[]).join(` · `)}</p>
+                  {/if}
+                {/if}
+              </section>
+            {:else if analysis.active_analysis_tab ===`md`}
               <MdAnalysisPane
                 trajectory_b64={imported_traj_b64}
                 trajectory_format={imported_traj_format}
@@ -7028,6 +7116,27 @@
     font-size: 0.85em;
     color: var(--text-color-muted, rgba(255, 255, 255, 0.6));
     margin: 8px 0;
+  }
+  .node-result-error {
+    font-size: 0.85em;
+    color: var(--error-color, #ef4444);
+    margin: 6px 0;
+  }
+  .node-result-values {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    font-size: 0.85em;
+    margin: 6px 0;
+  }
+  .node-result-values dt { color: var(--text-color-muted, rgba(255, 255, 255, 0.6)); }
+  .node-result-values dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .node-result-series,
+  .node-result-keys {
+    font-size: 0.8em;
+    color: var(--text-color-muted, rgba(255, 255, 255, 0.6));
+    margin: 6px 0;
+    word-break: break-word;
   }
   .sym-error {
     font-size: 0.85em;

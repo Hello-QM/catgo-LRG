@@ -14,9 +14,13 @@
   // Lazy-load structure translations
   load_i18n_module('structure')
 
-  export type AnalysisTab = 'electronic' | 'md' | 'phase' | 'structure_analysis' | 'spectrum' | 'vibration' | string
+  export type AnalysisTab = 'results' | 'electronic' | 'md' | 'phase' | 'structure_analysis' | 'spectrum' | 'vibration' | string
 
   const static_tab_defs: { id: AnalysisTab; label: () => string }[] = [
+    // `results` = what a finished compute node produced. Before this tab the
+    // only way to see a node's outputs was to open the workflow editor and
+    // click the node, which an unattended agent run never does.
+    { id: 'results', label: () => t('structure.node_results') },
     { id: 'electronic', label: () => t('structure.electronic') },
     { id: 'md', label: () => t('structure.md') },
     { id: 'phase', label: () => t('structure.phase') },

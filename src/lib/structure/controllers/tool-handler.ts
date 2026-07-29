@@ -41,6 +41,19 @@ export interface McpBridgeDeps {
    * on human file upload.
    */
   open_analysis?: (kind: string, session: Record<string, unknown>) => void
+  /**
+   * A compute node finished and produced something. Until this existed a
+   * finished workflow/HPC node wrote its outputs to the database and stopped —
+   * seeing them needed a human to open the editor and click the node.
+   */
+  on_node_result?: (payload: Record<string, unknown>) => void
+  /**
+   * A multi-frame trajectory (NEB path, MD run, IRC) pushed to THIS pane. The
+   * backend has emitted this event since trajectories existed, but only the
+   * global `default` listener consumed it — a push addressed to `tab:leaf`
+   * went into a queue nobody read.
+   */
+  on_trajectory?: (content: string, filename: string) => void
 }
 
 /** Decide whether a structure SSE push should auto-apply to the viewer.
@@ -296,6 +309,26 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
         deps.open_analysis?.(kind, session)
       } catch (err) {
         console.warn(`[CatGo] SSE analysis parse error:`, err)
+      }
+    })
+
+    es.addEventListener(`trajectory`, (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        if (!data?.content) return
+        deps.on_trajectory?.(String(data.content), String(data.filename ?? ``))
+      } catch (err) {
+        console.warn(`[CatGo] SSE trajectory parse error:`, err)
+      }
+    })
+
+    es.addEventListener(`result`, (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        if (!data?.task_id) return
+        deps.on_node_result?.(data)
+      } catch (err) {
+        console.warn(`[CatGo] SSE result parse error:`, err)
       }
     })
 

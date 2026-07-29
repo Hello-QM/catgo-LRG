@@ -461,6 +461,22 @@ def get_pending_structure_update(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/result/push")
+def push_result(data: dict[str, Any]):
+    """Publish a computed result to the viewer.
+
+    The in-process engine calls `view_state.announce_result` directly. The stdio
+    MCP server is a SEPARATE process and cannot touch that module state, so it
+    needs this HTTP face — same reason `_push_structure_to_viewer` exists.
+    """
+    kind = str(data.get("kind", "")).strip()
+    payload = data.get("payload")
+    if not kind or not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="kind and payload (object) are required")
+    view_state.announce_result(kind, payload, panel_id=str(data.get("panel_id", "")))
+    return {"ok": True}
+
+
 @router.post("/workflow/pending-navigate")
 def set_pending_workflow_navigate(data: dict[str, Any]):
     """MCP tools push a workflow ID here; frontend picks it up via pending-update poll.

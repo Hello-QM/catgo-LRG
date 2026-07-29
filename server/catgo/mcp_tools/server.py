@@ -30,7 +30,7 @@ import sys
 import httpx
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import ImageContent, TextContent, Tool
 
 # Ensure server/ is on sys.path so plugin_loader and mcp_tools are importable
 _server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -448,22 +448,55 @@ async def _handle_special_tool(name: str, endpoint: str, arguments: dict) -> lis
 # Direct-dispatch tools (catalysis, presets — no REST endpoint)
 # ---------------------------------------------------------------------------
 
+# result kinds a direct-dispatch catalysis tool produces, and which the viewer's
+# Results tab knows how to draw. A tool absent from this map still returns its
+# JSON to the agent — it just has no picture yet.
+_DIRECT_RESULT_KINDS = {
+    "catgo_catalysis_volcano": "volcano",
+    "catgo_catalysis_oer": "overpotential",
+    "catgo_catalysis_energy_diagram": "energy_diagram",
+    "catgo_catalysis_free_energy": "free_energy",
+}
+
+
+async def _announce_direct_result(tool_name: str, result: object) -> None:
+    """Show a computed catalysis result instead of returning only text.
+
+    Best-effort: this process is the stdio MCP server, so it reaches the viewer
+    over HTTP; a backend that is down must never fail the calculation.
+    """
+    kind = _DIRECT_RESULT_KINDS.get(tool_name)
+    if not kind or not isinstance(result, dict):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{API_BASE}/view/result/push",
+                json={"kind": kind, "payload": {"tool": tool_name, **result}},
+            )
+    except Exception as exc:
+        logger.debug("result push for %s failed: %s", tool_name, exc)
+
+
 async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextContent]:
     """Handle tools that call Python modules directly instead of REST endpoints."""
     try:
         if tool_name == "catgo_catalysis_oer":
             from workflow.catalysis.oer import compute_oer_overpotential
             result = compute_oer_overpotential(**arguments)
+            await _announce_direct_result(tool_name, result)
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif tool_name == "catgo_catalysis_free_energy":
             from workflow.catalysis.free_energy import gibbs_free_energy
             result = gibbs_free_energy(**arguments)
+            await _announce_direct_result(tool_name, result)
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif tool_name == "catgo_catalysis_volcano":
             from workflow.catalysis.volcano import generate_volcano_data
             result = generate_volcano_data(**arguments)
+            await _announce_direct_result(tool_name, result)
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif tool_name == "catgo_cn_coupling_network":
@@ -481,6 +514,7 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
                 return [TextContent(type="text", text="Error: at least one pathway is required")]
             config = arguments.get("config")
             result = generate_energy_diagram(pathways=pathways, config=config)
+            await _announce_direct_result(tool_name, result)
             return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
 
         elif tool_name == "catgo_vasp_presets":
@@ -744,6 +778,22 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                         )
                         return [TextContent(type="text", text=summary + push_warn)]
                     return [TextContent(type="text", text=json.dumps(data, indent=2) + push_warn)]
+
+                # A screenshot must come back as an IMAGE. Returned as JSON text
+                # the base64 is just an unreadable wall the model cannot look at,
+                # so an agent could never check the scene it had just edited.
+                if isinstance(data, dict) and data.get("image"):
+                    return [
+                        ImageContent(
+                            type="image",
+                            data=str(data["image"]).split(",", 1)[-1],
+                            mimeType=str(data.get("mime_type") or "image/png"),
+                        ),
+                        TextContent(
+                            type="text",
+                            text=f"viewer screenshot {data.get('width')}x{data.get('height')}",
+                        ),
+                    ]
 
                 return [TextContent(type="text", text=json.dumps(data, indent=2))]
             else:

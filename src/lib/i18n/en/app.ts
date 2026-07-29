@@ -150,6 +150,8 @@ const app: Record<string, string> = {
   external_structure_pushed: `External pushed {formula} ({count} atom{s})`,
   external_trajectory_pushed: `External pushed trajectory: {name} ({count} frames)`,
   external_analysis_pushed: `External pushed a {kind} analysis`,
+  external_node_result: `Compute node {task} reported a result`,
+  external_node_failed: `Compute node {task} reported an error`,
   unnamed: `unnamed`,
 
   // WorkflowView

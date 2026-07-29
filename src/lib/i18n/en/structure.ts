@@ -1161,6 +1161,9 @@ const structure: Record<string, string> = {
   // Analysis Pane
   analysis: `Analysis`,
   electronic: `Electronic`,
+  node_results: `Results`,
+  node_results_empty: `No compute node has reported a result in this session yet.`,
+  node_results_from: `from node`,
   md: `MD`,
   phase: `Phase`,
   spectrum: `Spectrum`,

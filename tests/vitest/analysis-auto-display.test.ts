@@ -106,4 +106,27 @@ describe(`analysis auto-display over SSE`, () => {
     handle.cleanup()
     expect(es.closed).toBe(true)
   })
+  it(`hands a finished compute node's result to the pane`, async () => {
+    const seen: Record<string, unknown>[] = []
+    const { es, handle } = await bridge({ on_node_result: (p) => { seen.push(p) } })
+
+    es.emit(`result`, { kind: `node`, task_id: `t-1`, energy: -876.5, converged: true })
+    es.emit(`result`, { kind: `node`, energy: -1 })   // no task_id -> not a result
+
+    expect(seen).toEqual([{ kind: `node`, task_id: `t-1`, energy: -876.5, converged: true }])
+    handle.cleanup()
+  })
+
+  it(`delivers a trajectory pushed to THIS pane, not only to the default one`, async () => {
+    const seen: [string, string][] = []
+    const { es, handle } = await bridge({ on_trajectory: (c, f) => { seen.push([c, f]) } })
+
+    es.emit(`trajectory`, { content: `2\nframe\nH 0 0 0\nH 0 0 1\n`, filename: `neb.xyz` })
+    es.emit(`trajectory`, { filename: `empty.xyz` })  // no content -> ignored
+
+    expect(seen.length).toBe(1)
+    expect(seen[0][1]).toBe(`neb.xyz`)
+    handle.cleanup()
+  })
+
 })

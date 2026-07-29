@@ -1128,6 +1128,9 @@ const structure: Record<string, string> = {
   // Analysis Pane
   analysis: `分析`,
   electronic: `电子结构`,
+  node_results: `节点结果`,
+  node_results_empty: `本次会话还没有计算节点回报结果。`,
+  node_results_from: `来自节点`,
   md: `分子动力学`,
   phase: `相图`,
   spectrum: `谱学`,

@@ -2217,6 +2217,32 @@
       }
     })
 
+    // A compute node finished. The per-pane bridge shows the detail; this
+    // global listener is what makes an unattended run visible at all when no
+    // pane is mounted — otherwise the node's outputs only ever reach SQLite.
+    es.addEventListener(`result`, (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        if (!data?.task_id) return
+        const ts = tab_states[`default`]
+        const pane = ts ? structurePane(leaves(ts.root)[0]) : null
+        if (ts && pane) return // a mounted pane adopts it over its own stream
+        show_toast({
+          message: data.error
+            ? t(`app.external_node_failed`, { task: String(data.task_id) })
+            : t(`app.external_node_result`, { task: String(data.task_id) }),
+          variant: data.error ? `error` : `info`,
+          action: {
+            label: t(`app.open_external_viewer`),
+            onclick: () => tm.create_remote_tab(),
+          },
+          duration: 12000,
+        })
+      } catch (err) {
+        console.warn(`[CatGo] global SSE result error:`, err)
+      }
+    })
+
     es.onerror = (err) => console.debug(`[CatGo] global SSE issue (auto-reconnecting):`, err)
     return () => es.close()
   })

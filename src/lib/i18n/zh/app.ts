@@ -150,6 +150,8 @@ const app: Record<string, string> = {
   external_structure_pushed: `外部推送了 {formula}（{count} 个原子{s}）`,
   external_trajectory_pushed: `外部推送了轨迹：{name}（{count} 帧）`,
   external_analysis_pushed: `外部推送了 {kind} 分析结果`,
+  external_node_result: `计算节点 {task} 回报了结果`,
+  external_node_failed: `计算节点 {task} 回报了错误`,
   unnamed: `未命名`,
 
   // WorkflowView

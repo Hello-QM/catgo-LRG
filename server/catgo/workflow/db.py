@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from catgo.workflow.viewer_publish import announce_node_result
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -376,6 +378,10 @@ class WorkflowDB:
             )
             conn.commit()
             conn.close()
+        # Every finished compute node lands here — result_handler, collector,
+        # scanner and control_flow all funnel through this one method — so this
+        # is the single place that can tell the viewer a node produced something.
+        announce_node_result(task_id, workflow_id, fields)
 
     def get_result(self, task_id: str) -> dict | None:
         conn = self._get_conn()

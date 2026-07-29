@@ -515,7 +515,10 @@ async def _analyze_md(
 
     async with httpx.AsyncClient(timeout=120) as client:
         if "rdf" in requested:
-            rdf_resp = await client.post(f"{api_base}/md/rdf/compute", json={
+            # route lives under the md_distances router prefix; the old path
+            # 404'd, the key was dropped, and the node still reported
+            # "completed" with nothing in it
+            rdf_resp = await client.post(f"{api_base}/md/distances/rdf", json={
                 "trajectory_b64": traj_b64,
                 "format": traj_format,
                 "n_bins": params.get("n_bins", 100),
@@ -524,7 +527,7 @@ async def _analyze_md(
                 result["rdf"] = rdf_resp.json()
 
         if "rmsd" in requested:
-            rmsd_resp = await client.post(f"{api_base}/md/rmsd/compute", json={
+            rmsd_resp = await client.post(f"{api_base}/md/rmsd/rmsd", json={
                 "trajectory_b64": traj_b64,
                 "format": traj_format,
             })
