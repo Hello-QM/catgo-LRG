@@ -2148,6 +2148,7 @@
       pane.source_filename = filename || null
       pane.raw_traj_b64 = btoa(unescape(encodeURIComponent(raw)))
       pane.raw_traj_format = (filename.toLowerCase().split(`.`).pop() || ``)
+      pane.autoplay_on_load = true
       clear_modified_if_sole_pane(modified, ts.root, `default`, first.id)
       update_tab_label(`default`)
       return true
@@ -2624,6 +2625,7 @@
           {:else if pane.is_trajectory_mode && pane.trajectory}
             <Trajectory
               trajectory={pane.trajectory as any}
+              auto_play={pane.autoplay_on_load ?? false}
               {viewer_id}
               tab_id={tab.id}
               leaf_id={leaf.id}

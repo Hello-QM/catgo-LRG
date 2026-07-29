@@ -96,6 +96,14 @@ def has_subscribers(panel_id: str) -> bool:
 
 
 def _notify(panel_id: str, event: str, data: dict) -> None:
+    # Resolve here, once, for EVERY emitter. `_subscriber_keys` only maps
+    # resolved -> raw, so an event addressed to a bare tab id reached the tab's
+    # global listener but never the pane's own subscriber (registered under
+    # `tab:leaf`) — `/view/structure/pending-update` and the workflow-navigate
+    # endpoint both emitted raw ids while queueing under the resolved one.
+    # Resolving an already-resolved id is a no-op, and the raw key is still
+    # covered by _subscriber_keys, so both listeners now see it.
+    panel_id = resolve_panel_id(panel_id)
     msg = {"event": event, "data": data}
     for key in _subscriber_keys(panel_id):
         for q in list(panel_subscribers.get(key, [])):

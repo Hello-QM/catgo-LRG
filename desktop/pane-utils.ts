@@ -26,6 +26,10 @@ export interface PaneState {
   initial_structure_ref: AnyStructure | null
   raw_traj_b64: string
   raw_traj_format: string
+  /** Animate on mount. Set only for a trajectory the BACKEND pushed (an
+   *  agent's NEB path / MD run): a user opening a file expects it paused,
+   *  but a pushed one sits frozen on frame 1 and reads as a still image. */
+  autoplay_on_load?: boolean
   initial_panel?: `hpc` | `chat` | `terminal`
   open_plugin_hub?: number
   /** Remote file origin for "push structure back" feature */

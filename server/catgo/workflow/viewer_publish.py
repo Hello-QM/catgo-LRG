@@ -77,6 +77,19 @@ def build_payload(task_id: str, workflow_id: str, fields: dict) -> dict | None:
             ):
                 payload[key] = seq
 
+        # Bader charges: the analysis node stores ACF.dat rows, and the viewer
+        # already colours atoms by charge — the two ends existed and nothing
+        # carried the numbers between them. Flatten to the per-atom list the
+        # viewer's own charge path takes, in ACF index order.
+        rows = outputs.get("charges")
+        if isinstance(rows, list) and rows:
+            flat = [
+                r.get("charge") for r in rows
+                if isinstance(r, dict) and isinstance(r.get("charge"), (int, float))
+            ]
+            if len(flat) == len(rows):
+                payload["charges"] = flat
+
     geometry = fields.get("structure_json")
     parsed_geometry = _as_obj(geometry)
     if isinstance(parsed_geometry, dict) and parsed_geometry:

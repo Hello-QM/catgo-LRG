@@ -2543,6 +2543,14 @@
       center_camera_trigger++
       structure = struct as typeof structure
     }
+    // Bader charges from the node: colour the atoms exactly as dropping an
+    // ACF.dat does. Count mismatch means the charges belong to a different
+    // geometry — leave the structure alone rather than mislabel it.
+    const charges = payload?.charges
+    if (Array.isArray(charges) && structure && charges.length === structure.sites.length) {
+      structure = apply_charges(structure, charges as number[]) as typeof structure
+      atom_color_config = { ...atom_color_config, mode: `charge`, scale_type: `continuous` }
+    }
     node_result = payload
   }
 

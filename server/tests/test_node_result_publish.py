@@ -115,5 +115,36 @@ def test_store_result_publishes_from_the_one_method_every_collector_uses(tmp_pat
     assert db.get_result("task-9") is not None
 
 
+def test_bader_charges_are_forwarded_as_the_viewer_consumes_them():
+    # The analysis node stores ACF.dat rows and the viewer already colours atoms
+    # by charge; nothing carried the numbers between the two ends.
+    p = build_payload("bader-1", "wf1", {"outputs_json": json.dumps({"charges": [
+        {"index": 1, "charge": 6.21}, {"index": 2, "charge": 7.04},
+    ], "n_atoms": 2})})
+    assert p["charges"] == [6.21, 7.04]
+
+
+def test_a_partial_charge_table_is_not_forwarded():
+    # A row missing its charge would silently shift every later atom's value.
+    p = build_payload("bader-2", "wf1", {"outputs_json": json.dumps({"charges": [
+        {"index": 1, "charge": 6.21}, {"index": 2},
+    ]})})
+    assert "charges" not in p
+
+
+def test_an_event_addressed_to_a_bare_tab_id_reaches_the_pane_subscriber():
+    # _subscriber_keys only maps resolved -> raw, so an emitter that passed the
+    # RAW id reached the tab's global listener and never the pane's own
+    # subscriber. Resolution now happens once, inside _notify, for every emitter.
+    view_state.mark_active("default:leaf-1")
+    pane_q = view_state.subscribe("default:leaf-1")
+    tab_q = view_state.subscribe("default")
+
+    view_state.notify_structure("default", {"sites": []})
+
+    assert [e["event"] for e in _drain(pane_q)] == ["structure"]
+    assert [e["event"] for e in _drain(tab_q)] == ["structure"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
