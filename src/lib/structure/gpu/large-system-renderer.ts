@@ -47,6 +47,7 @@ import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
+import { BOND_MIDPOINT_SPLIT } from '$lib/structure/rendering/bond-colors'
 import {
   same_visual_shading,
   style_pbr,
@@ -1342,8 +1343,9 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let start = select(cross_start, A, is_full);
   let end = select(cross_end, B_real, is_full);
 
-  // Full cylinders blend smoothly A→B over their complete axis. True boundary
-  // stubs keep each half monochrome: half 0 is A/A and half 1 is B/B.
+  // Full cylinders carry A→B endpoint colors; the fragment shader applies the
+  // same hard midpoint split as WebGL's two monochrome half-bond instances.
+  // True boundary stubs remain monochrome: half 0 is A/A and half 1 is B/B.
   let color_a = atom_color(a);
   let color_b = atom_color(b);
   var color_start = select(color_b, color_a, half == 0u);
@@ -1593,10 +1595,14 @@ fn fs_main(in : VsOut) -> FsOut {
     hit_n = normalize(p_ray - p_seg);
   }
 
-  // The analytic hit's normalized axis position drives the authoritative A→B
-  // endpoint gradient. Boundary stubs received identical start/end colors above.
+  // Match WebGL's two pure-color half-bond instances: A before the midpoint,
+  // B at and after it. Boundary stubs received identical start/end colors above.
   let axial = clamp(dot(hit_p - pa, axis) / clen, 0.0, 1.0);
-  let base_color = mix(in.color_start, in.color_end, axial);
+  let base_color = select(
+    in.color_end,
+    in.color_start,
+    axial < ${BOND_MIDPOINT_SPLIT},
+  );
 
   // WebGL BondManagerInstances studio lighting, kept literal so the two
   // backends share env, specular, Fresnel, rim/floor lift, exposure, tonemap,

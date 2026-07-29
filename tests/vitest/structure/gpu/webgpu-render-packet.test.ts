@@ -463,7 +463,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
-  it(`uses endpoint gradients and the WebGL bond studio-lighting contract`, () => {
+  it(`uses hard endpoint halves and the WebGL bond studio-lighting contract`, () => {
     const rec = make_recording_device()
     const renderer = create_large_system_renderer(
       rec.device as unknown as GPUDevice,
@@ -483,7 +483,16 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(shader).toContain(`if (is_full) {`)
     expect(shader).toContain(`color_start = color_a;`)
     expect(shader).toContain(`color_end = color_b;`)
-    expect(shader).toContain(`let base_color = mix(in.color_start, in.color_end, axial);`)
+    expect(shader).toContain(
+      `let base_color = select(
+    in.color_end,
+    in.color_start,
+    axial < 0.5,
+  );`,
+    )
+    expect(shader).not.toContain(
+      `mix(in.color_start, in.color_end, axial)`,
+    )
     expect(shader).not.toContain(`bond.style1.yzw`)
 
     expect(shader).toContain(`fn studio_env(n : vec3<f32>, key_dir : vec3<f32>)`)
