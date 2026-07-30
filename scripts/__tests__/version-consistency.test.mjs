@@ -86,6 +86,9 @@ const WORKFLOW_INVENTORY = {
   'tauri-test-build.yml': {
     classification: 'non-publisher',
   },
+  'server-python-tests.yml': {
+    classification: 'non-publisher',
+  },
   'test.yml': {
     classification: 'non-publisher',
   },

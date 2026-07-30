@@ -131,6 +131,7 @@ const workflowInventory = {
     '.github/workflows/deploy-cloudflare.yml',
     '.github/workflows/lint.yml',
     '.github/workflows/tauri-test-build.yml',
+    '.github/workflows/server-python-tests.yml',
     '.github/workflows/test.yml',
   ],
 }
