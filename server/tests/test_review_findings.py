@@ -138,7 +138,7 @@ def test_verification_state_is_per_session_not_global():
     a, b = "client-a", "client-b"
     for k in (a, b):
         enf._sessions.pop(k, None)
-    enf.postmark("catgo_analyze", {"action": "dos"}, ok=True, session_key=a)
+    enf.postmark("catgo_analyze", {"action": "rdf"}, ok=True, session_key=a)
     assert enf.precheck("catgo_workflow", {"action": "submit"}, session_key=a)[0] == enf.FORBIDDEN
     assert enf.precheck("catgo_workflow", {"action": "submit"}, session_key=b)[0] == enf.ALLOW
 
@@ -176,7 +176,7 @@ def test_low_level_mcp_sessions_get_distinct_stable_keys(monkeypatch):
     first = scc._verification_session_key()
     assert first.startswith("mcp:")
     assert scc._verification_session_key() == first
-    enf.postmark("catgo_analyze", {"action": "dos"}, session_key=first)
+    enf.postmark("catgo_analyze", {"action": "rdf"}, session_key=first)
     assert first in enf._sessions
     old_session = request.session
     request.session = Session()
@@ -630,7 +630,7 @@ def test_an_unrelated_postmark_cannot_retire_an_in_flight_numeric():
 def test_a_failed_gate_override_cannot_waive_an_in_flight_numeric():
     key = "t-inflight-override"
     enf._sessions.pop(key, None)
-    enf.postmark("catgo_analyze", {"action": "dos"}, ok=True, session_key=key)
+    enf.postmark("catgo_analyze", {"action": "rdf"}, ok=True, session_key=key)
     enf.mark_verified(
         True, failed_gates=["physical_range"], failed_taxa=["C1"], session_key=key,
     )
@@ -668,7 +668,7 @@ def test_shared_wrapper_blocks_during_dispatch_and_retires_after_failure():
         key = scc._verification_session_key()
         enf._sessions.pop(key, None)
         task = asyncio.create_task(
-            scc.run_with_verification("catgo_analyze", {"action": "dos"}, slow_numeric)
+            scc.run_with_verification("catgo_analyze", {"action": "rdf"}, slow_numeric)
         )
         await started.wait()
         blocked = enf.precheck(
@@ -681,6 +681,22 @@ def test_shared_wrapper_blocks_during_dispatch_and_retires_after_failure():
 
     blocked, state = asyncio.run(scenario())
     assert blocked[0] == enf.FORBIDDEN
+    assert state["in_flight"] == 0
+    assert state["unverified"] == 0
+
+
+def test_dos_guidance_does_not_arm_numeric_verification():
+    async def dispatch(name, arguments):
+        return await scc._handle_analyze(None, arguments)
+
+    key = scc._verification_session_key()
+    enf._sessions.pop(key, None)
+    result = asyncio.run(scc.run_with_verification(
+        "catgo_analyze", {"action": "dos"}, dispatch,
+    ))
+    assert "DOS needs an electronic-structure" in result[0].text
+    assert not enf._is_numeric("catgo_analyze", {"action": "dos"})
+    state = enf.state(key)
     assert state["in_flight"] == 0
     assert state["unverified"] == 0
 
@@ -745,7 +761,7 @@ def test_http_error_prose_does_not_create_a_pending_result(message):
     key = scc._verification_session_key()
     enf._sessions.pop(key, None)
     asyncio.run(scc.run_with_verification(
-        "catgo_analyze", {"action": "dos"}, dispatch,
+        "catgo_analyze", {"action": "rdf"}, dispatch,
     ))
     state = enf.state(key)
     assert state["in_flight"] == 0

@@ -77,10 +77,10 @@ _NUMERIC_PREFIXES = (
     "catgo_kmc", "catgo_md_", "catgo_optimize", "catgo_cn_coupling",
 )
 _NUMERIC_EXEMPT_PREFIXES = ("hub_",)  # plugin-hub admin actions produce no physics
-# actions of a numeric-family tool that emit geometry/inputs, not physics numbers —
+# actions of a numeric-family tool that emit geometry/inputs/guidance, not physics numbers —
 # arming these poisons the session with a result nothing can verify (site lists,
 # generated INCARs, and space groups have no gate and never will)
-_NUMERIC_EXEMPT_ACTIONS = {"adsorption_sites", "dft_input", "symmetry"}
+_NUMERIC_EXEMPT_ACTIONS = {"adsorption_sites", "dft_input", "dos", "symmetry"}
 
 MIN_JUSTIFICATION = 20  # chars; an override has to say something, not just "ok"
 # Sentinel "gate" for the case where NO gate could run (the result carries no
