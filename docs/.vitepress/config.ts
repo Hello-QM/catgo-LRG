@@ -348,7 +348,7 @@ export default defineConfig({
           ],
         },
         footer: {
-          message: `CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明 “This work used CatGo (https://catgo-ucsd.org).”并引用 CITATION.cff 中的首选文献；该请求不构成 AGPL 许可的附加条件。`,
+          message: `CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明 “This work used CatGo (https://app.catgo-ucsd.org).”并引用 CITATION.cff 中的首选文献；该请求不构成 AGPL 许可的附加条件。`,
           copyright: `Copyright 2024-present CatGo Contributors`,
         },
         docFooter: { prev: `上一页`, next: `下一页` },
@@ -742,7 +742,7 @@ export default defineConfig({
 
     // Footer
     footer: {
-      message: `CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work, please include “This work used CatGo (https://catgo-ucsd.org).” and the preferred citation in CITATION.cff. This request is not an additional condition of the AGPL license.`,
+      message: `CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work, please include “This work used CatGo (https://app.catgo-ucsd.org).” and the preferred citation in CITATION.cff. This request is not an additional condition of the AGPL license.`,
       copyright: `Copyright 2024-present CatGo Contributors`,
     },
 
