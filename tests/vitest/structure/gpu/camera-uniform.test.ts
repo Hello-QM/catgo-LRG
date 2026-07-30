@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PerspectiveCamera, Matrix4 } from 'three'
+import { Matrix4, OrthographicCamera, PerspectiveCamera } from 'three'
 import { pack_camera_uniform, pack_camera_full } from '$lib/structure/gpu/camera-uniform'
 
 describe(`pack_camera_uniform`, () => {
@@ -31,7 +31,7 @@ describe(`pack_camera_uniform`, () => {
 })
 
 describe(`pack_camera_full`, () => {
-  it(`packs view (16) + proj (16) + cam_pos (vec3 + pad) = 36 floats`, () => {
+  it(`packs perspective view + proj + cam_pos with a zero projection flag`, () => {
     const cam = new PerspectiveCamera(50, 1.5, 0.1, 1000)
     cam.position.set(1, 2, 3)
     cam.updateMatrixWorld(true)
@@ -46,7 +46,14 @@ describe(`pack_camera_full`, () => {
     expect(out[32]).toBeCloseTo(1)
     expect(out[33]).toBeCloseTo(2)
     expect(out[34]).toBeCloseTo(3)
-    expect(out[35]).toBe(0) // pad
+    expect(out[35]).toBe(0) // perspective
+  })
+
+  it(`marks an orthographic camera for analytic pick rays`, () => {
+    const cam = new OrthographicCamera(-5, 5, 5, -5, 0.1, 100)
+    cam.position.set(0, 0, 10)
+    cam.updateMatrixWorld(true)
+    expect(pack_camera_full(cam)[35]).toBe(1)
   })
 
   it(`view and proj blocks are distinct (not the multiplied product)`, () => {

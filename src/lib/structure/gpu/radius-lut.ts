@@ -1,6 +1,7 @@
 import type { ElementSymbol, Site } from '$lib/structure'
 import { atomic_radii } from '$lib/structure'
 import element_data from '$lib/element/data'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 
 const DEFAULT_RADIUS = 1.0 // Å, fallback for elements with no covalent radius
 
@@ -25,22 +26,30 @@ export function build_atom_radii(sites: readonly Site[]): Float32Array {
   return out
 }
 
-/** Per-atom DISPLAY radius (Å) for the impostor spheres, matching the WebGL
- *  ball-and-stick view's sizing as closely as practical. Mirrors the radius
- *  resolution in StructureScene.svelte:
+export type DisplayRadiusOptions = {
+  atom_radius?: number
+  same_size_atoms?: boolean
+  element_radius_overrides?: Partial<Record<ElementSymbol, number>>
+  site_radius_overrides?: Map<number, number> | {
+    get(k: number): number | undefined
+  }
+}
+
+/** Per-atom LOGICAL radius (Å), before the backend-neutral visual scale.
+ *  Mirrors the radius resolution in
+ *  StructureScene.svelte:
  *    site_override > same_size_atoms > occu-weighted (element_override | atomic_radii)
- *  all multiplied by the global atom_radius scale. `atomic_radii` here is the
- *  half-covalent-radius LUT exported from $lib/structure (covalent/2), the same
- *  base the WebGL path uses — distinct from build_atom_radii's full covalent
- *  radius used for bond cutoffs. */
-export function build_display_radii(
+ *  all multiplied by the global atom_radius scale. `atomic_radii` here
+ *  is the half-covalent-radius LUT exported from $lib/structure (covalent/2),
+ *  the same base the WebGL path uses — distinct from build_atom_radii's full
+ *  covalent radius used for bond cutoffs.
+ *
+ *  The shared RenderPacket consumed by WebGL replica drawing and picking keeps
+ *  these logical values; each WebGL adapter applies VISUAL_RADIUS_SCALE once.
+ */
+export function build_logical_radii(
   sites: readonly Site[],
-  opts: {
-    atom_radius?: number
-    same_size_atoms?: boolean
-    element_radius_overrides?: Partial<Record<ElementSymbol, number>>
-    site_radius_overrides?: Map<number, number> | { get(k: number): number | undefined }
-  } = {},
+  opts: DisplayRadiusOptions = {},
 ): Float32Array {
   const scale = opts.atom_radius ?? 1
   const same_size = opts.same_size_atoms ?? false
@@ -62,6 +71,21 @@ export function build_display_radii(
       }
       out[i] = base * scale
     }
+  }
+  return out
+}
+
+/** Per-atom DISPLAY radius (Å) for the WebGPU impostor spheres. The WebGPU
+ *  adapter uploads final radii directly, so apply VISUAL_RADIUS_SCALE to the
+ *  fully resolved logical result exactly once and uniformly for every branch.
+ */
+export function build_display_radii(
+  sites: readonly Site[],
+  opts: DisplayRadiusOptions = {},
+): Float32Array {
+  const out = build_logical_radii(sites, opts)
+  for (let idx = 0; idx < out.length; idx++) {
+    out[idx] *= VISUAL_RADIUS_SCALE
   }
   return out
 }

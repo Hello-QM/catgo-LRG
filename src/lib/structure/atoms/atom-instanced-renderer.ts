@@ -42,19 +42,10 @@
  */
 
 import * as THREE from 'three'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import type { AtomManager } from './atom-manager.svelte'
 
 const EMPTY = new Int32Array(0)
-
-/** Convert AtomManager's "logical" per-atom radius (matching
- *  `atom_data[i].radius` in StructureScene) to the GPU's per-instance
- *  billboard extent. Mirrors `AtomImpostors.svelte:403`
- *  (`visual_radius = atom.radius * 0.5`) so the new render path produces
- *  the same on-screen atom size as the legacy path. Without this scale,
- *  atoms render at exactly 2× their intended size.
- *  Exported so the WebGL2 replica impostor path (gpu/webgl2) renders atoms
- *  at the same on-screen size as this renderer. */
-export const VISUAL_RADIUS_SCALE = 0.5
 
 /** Per-atom cutting-plane modulation (mirrors `CuttingVisibility` in
  *  `AtomImpostors.svelte`). Opacity and saturation are independent multipliers

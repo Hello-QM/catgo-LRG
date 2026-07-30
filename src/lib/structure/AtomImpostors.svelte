@@ -11,6 +11,13 @@
     ShaderMaterial,
     Vector3,
   } from 'three'
+  import {
+    TOON_HIGHLIGHT_THRESHOLD,
+    TOON_SHADOW_BRIGHTNESS,
+    TOON_SHADOW_THRESHOLD,
+    VISUAL_RADIUS_SCALE,
+    render_style_to_legacy_impostor,
+  } from '$lib/structure/rendering/visual-state'
 
   // Types matching StructureScene's atom_data items
   interface AtomDataItem {
@@ -334,28 +341,17 @@
         uDepthFar: depth_cue_uniforms.uDepthFar,
         uDepthCueBgColor: depth_cue_uniforms.uDepthCueBgColor,
         uOutlineStrength: depth_cue_uniforms.uOutlineStrength,
-        uRenderStyle: { value: render_style_to_int(render_style) },
+        uRenderStyle: {
+          value: render_style_to_legacy_impostor(render_style),
+        },
         // Glossy specular highlight multiplier (slider-driven); kept live by $effect below.
         uSpecStrength: { value: highlight_strength },
         // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial defaults.
-        uShadowThreshold: { value: 0.3 },
-        uHighlightThreshold: { value: 0.97 },
-        uShadowBrightness: { value: 0.5 },
+        uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+        uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+        uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
       },
     })
-  }
-
-  // Map onto the three uRenderStyle shader branches (0 glossy, 1 matte, 2 toon).
-  // Metallic reuses the glossy branch; 2.5D-soft and 2D-flat reuse the matte
-  // branch — their distinct look comes from the per-style lighting profile.
-  function render_style_to_int(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
-  ): number {
-    if (style === `toon`) return 2
-    if (style === `matte` || style === `soft` || style === `flat`) return 1
-    // MatCap has no branch in this legacy impostor shader — fall back to glossy.
-    // The default path (AtomManagerInstances) implements the real matcap.
-    return 0
   }
 
   let opaque_material = create_material(false)
@@ -409,7 +405,7 @@
   // Render-style is a uniform int branch in the fragment shader — no recompile,
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
-    const v = render_style_to_int(render_style)
+    const v = render_style_to_legacy_impostor(render_style)
     opaque_material.uniforms.uRenderStyle.value = v
     transparent_material.uniforms.uRenderStyle.value = v
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
@@ -542,7 +538,7 @@
       const pos = realtime_position_overrides?.get(atom.site_idx) ?? atom.position
       const [cr, cg, cb] = get_linear_color(atom.color)
       const sat = get_effective_saturation(atom.site_idx)
-      const visual_radius = atom.radius * 0.5
+      const visual_radius = atom.radius * VISUAL_RADIUS_SCALE
 
       if (opacity >= 1) {
         new_map.set(atom.site_idx, { opaque: true, idx: oi })

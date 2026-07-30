@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.8] - 2026-07-30
+
+### Fixed
+
+- **Consistent periodic rendering in standard and large-system modes** — WebGL and WebGPU now share authoritative atom, bond, boundary, camera, and visual-state data, fixing missing or extra boundary atoms, dangling or transient long bonds, lattice-vector differences, and stale interaction updates.
+- **Materials Project, OPTIMADE, and PubChem search restored** — provider routing, current API fields, fallbacks, pagination, totals, and cache keys now behave consistently in the app and VS Code extension.
+- **VS Code bundled assets load reliably** — relative webview URLs keep packaged WASM and worker files on the extension resource path.
+
+## [1.4.7] - 2026-07-28
+
+### Fixed
+
+- **Windows desktop app closes normally again** — the guarded shutdown can destroy the Tauri window and clean up bundled backend processes after the user confirms Exit.
+- **VS Code structure generation consistently loads compatible WASM** — the extension rejects threaded `ferrox_bg` builds that import shared memory and selects the scalar build regardless of directory order.
+- **Multi-platform release finalization** — desktop, Android, iOS, VS Code sidecar, updater, and Cloudflare R2 release jobs now agree on draft visibility, artifact paths, signatures, provenance, and canonical metadata.
+
 ## [1.4.6] - 2026-07-25
 
 ### Added

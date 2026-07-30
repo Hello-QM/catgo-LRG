@@ -31,3 +31,42 @@ index 1234567..abcdefg 100644
 
  	if ( event.pointerType === 'touch' ) {
 
+diff --git a/src/renderers/WebGLRenderer.js b/src/renderers/WebGLRenderer.js
+index 0eb5a71..8c39c02 100644
+--- a/src/renderers/WebGLRenderer.js
++++ b/src/renderers/WebGLRenderer.js
+@@ -401,4 +401,4 @@
+-		} catch ( error ) {
+-
+-			error( 'WebGLRenderer: ' + error.message );
+-			throw error;
++		} catch ( e ) {
++
++			error( 'WebGLRenderer: ' + e.message );
++			throw e;
+diff --git a/build/three.module.js b/build/three.module.js
+index 86f7ebd..b53bda5 100644
+--- a/build/three.module.js
++++ b/build/three.module.js
+@@ -15490,4 +15490,4 @@
+-		} catch ( error ) {
+-
+-			error( 'WebGLRenderer: ' + error.message );
+-			throw error;
++		} catch ( e ) {
++
++			error( 'WebGLRenderer: ' + e.message );
++			throw e;
+diff --git a/build/three.cjs b/build/three.cjs
+index 4e029d7..cf82963 100644
+--- a/build/three.cjs
++++ b/build/three.cjs
+@@ -74435,4 +74435,4 @@
+-		} catch ( error ) {
+-
+-			error( 'WebGLRenderer: ' + error.message );
+-			throw error;
++		} catch ( e ) {
++
++			error( 'WebGLRenderer: ' + e.message );
++			throw e;

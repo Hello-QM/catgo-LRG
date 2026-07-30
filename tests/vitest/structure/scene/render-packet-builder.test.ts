@@ -70,6 +70,24 @@ describe(`create_render_packet_builder`, () => {
     expect(packet.topology.radii[0]).toBeCloseTo(0.75, 5)
   })
 
+  test(`true-supercell packet keeps base topology and unique physical ids`, () => {
+    const structure = make_structure(2)
+    const physical_site_map = Uint32Array.from([0, 1, 4, 5, 2, 3, 6, 7])
+    const builder = create_render_packet_builder()
+    const packet = builder.build({
+      structure,
+      dims: [2, 2, 1],
+      replica_semantics: `physical-distinct-sites`,
+      physical_site_map,
+    })
+
+    expect(packet.topology.atom_count).toBe(2)
+    expect(packet.frame.positions).toHaveLength(6)
+    expect(packet.replicas.semantics).toBe(`physical-distinct-sites`)
+    expect(packet.replicas.physical_site_map).toBe(physical_site_map)
+    expect(() => assert_render_packet(packet)).not.toThrow()
+  })
+
   test(`variable-cell frame uses frame lattice`, () => {
     const structure = make_structure(2, 10)
     const builder = create_render_packet_builder()

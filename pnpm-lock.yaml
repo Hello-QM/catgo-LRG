@@ -12,7 +12,7 @@ patchedDependencies:
     hash: 9a82114b2cce8ca4a05e4ef971eab411712e1f9e273f5557f3f7b79e981af1c6
     path: patches/@openai__codex-sdk@0.132.0-alpha.1.patch
   three@0.181.2:
-    hash: 135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60
+    hash: 13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a
     path: patches/three@0.181.2.patch
 
 importers:
@@ -78,10 +78,10 @@ importers:
         version: 2.9.0
       '@threlte/core':
         specifier: ^8.1.8
-        version: 8.3.1(svelte@5.48.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+        version: 8.3.1(svelte@5.48.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       '@threlte/extras':
         specifier: ^9.5.5
-        version: 9.7.1(@types/three@0.181.0)(svelte@5.48.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+        version: 9.7.1(@types/three@0.181.0)(svelte@5.48.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       '@types/d3-force':
         specifier: ^3.0.10
         version: 3.0.10
@@ -195,13 +195,13 @@ importers:
         version: 11.2.4(svelte@5.48.0)
       three:
         specifier: ^0.181.0
-        version: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+        version: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
       three-gpu-pathtracer:
         specifier: ^0.0.24
-        version: 0.0.24(three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)))(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))(xatlas-web@0.1.0)
+        version: 0.0.24(three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)))(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))(xatlas-web@0.1.0)
       three-mesh-bvh:
         specifier: ^0.9.7
-        version: 0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+        version: 0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
@@ -6664,33 +6664,33 @@ snapshots:
     dependencies:
       '@textlint/ast-node-types': 15.7.1
 
-  '@threejs-kit/instanced-sprite-mesh@2.5.1(@types/three@0.181.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))':
+  '@threejs-kit/instanced-sprite-mesh@2.5.1(@types/three@0.181.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))':
     dependencies:
       diet-sprite: 0.0.1
       earcut: 2.2.4
-      maath: 0.10.8(@types/three@0.181.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      three-instanced-uniforms-mesh: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      maath: 0.10.8(@types/three@0.181.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      three-instanced-uniforms-mesh: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
     transitivePeerDependencies:
       - '@types/three'
 
-  '@threlte/core@8.3.1(svelte@5.48.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))':
+  '@threlte/core@8.3.1(svelte@5.48.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))':
     dependencies:
       mitt: 3.0.1
       svelte: 5.48.0
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
-  '@threlte/extras@9.7.1(@types/three@0.181.0)(svelte@5.48.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))':
+  '@threlte/extras@9.7.1(@types/three@0.181.0)(svelte@5.48.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))':
     dependencies:
-      '@threejs-kit/instanced-sprite-mesh': 2.5.1(@types/three@0.181.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      camera-controls: 3.1.2(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      '@threejs-kit/instanced-sprite-mesh': 2.5.1(@types/three@0.181.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      camera-controls: 3.1.2(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       svelte: 5.48.0
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      three-mesh-bvh: 0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      three-perf: 1.0.11(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      three-viewport-gizmo: 2.2.0(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
-      troika-three-text: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      three-mesh-bvh: 0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      three-perf: 1.0.11(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      three-viewport-gizmo: 2.2.0(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
+      troika-three-text: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
     transitivePeerDependencies:
       - '@types/three'
 
@@ -7469,9 +7469,9 @@ snapshots:
 
   callsites@3.1.0: {}
 
-  camera-controls@3.1.2(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  camera-controls@3.1.2(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
   ccount@2.0.1: {}
 
@@ -8839,10 +8839,10 @@ snapshots:
 
   lz-string@1.5.0: {}
 
-  maath@0.10.8(@types/three@0.181.0)(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  maath@0.10.8(@types/three@0.181.0)(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
       '@types/three': 0.181.0
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
   magic-string@0.30.21:
     dependencies:
@@ -10370,32 +10370,32 @@ snapshots:
     dependencies:
       editions: 6.22.0
 
-  three-gpu-pathtracer@0.0.24(three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)))(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))(xatlas-web@0.1.0):
+  three-gpu-pathtracer@0.0.24(three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)))(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))(xatlas-web@0.1.0):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      three-mesh-bvh: 0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      three-mesh-bvh: 0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       xatlas-web: 0.1.0
 
-  three-instanced-uniforms-mesh@0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  three-instanced-uniforms-mesh@0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
 
-  three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  three-mesh-bvh@0.9.7(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
-  three-perf@1.0.11(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  three-perf@1.0.11(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      troika-three-text: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      troika-three-text: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       tweakpane: 3.1.10
 
-  three-viewport-gizmo@2.2.0(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  three-viewport-gizmo@2.2.0(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
-  three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60): {}
+  three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a): {}
 
   tinybench@2.9.0: {}
 
@@ -10434,17 +10434,17 @@ snapshots:
 
   trim-lines@3.0.1: {}
 
-  troika-three-text@0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  troika-three-text@0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
       bidi-js: 1.0.3
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
-      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60))
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
+      troika-three-utils: 0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a))
       troika-worker-utils: 0.52.0
       webgl-sdf-generator: 1.1.1
 
-  troika-three-utils@0.52.4(three@0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)):
+  troika-three-utils@0.52.4(three@0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)):
     dependencies:
-      three: 0.181.2(patch_hash=135875ae2386a6ee9ff9516832e12ff0e50270b82597b4a26a8a70e725b5ea60)
+      three: 0.181.2(patch_hash=13da579f6271c567602c6153b9166fc76e0ad0ea684c71e6264aa1c1de5cd68a)
 
   troika-worker-utils@0.52.0: {}
 

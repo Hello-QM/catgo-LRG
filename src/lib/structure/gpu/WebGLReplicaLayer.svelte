@@ -13,14 +13,19 @@
    */
   import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
+  import type { RenderStyle } from '$lib/settings'
   import { Vector2, Vector3 } from 'three'
   import { get_atom_matcap, type MatcapPreset } from '../atoms/matcap-texture'
   import {
-    type AtomRenderStyle,
-    render_style_to_int,
+    render_style_to_backend,
     style_pbr,
-  } from '../atoms/render-style'
-  import type { RenderPacket } from '../scene/render-packet'
+    type ResolvedVisualState,
+  } from '../rendering/visual-state'
+  import { apply_webgl_atom_uniforms } from '../rendering/visual-adapters'
+  import type {
+    ImageInstanceTable,
+    RenderPacket,
+  } from '../scene/render-packet'
   import { AtomReplicaRenderer } from './webgl2/atom-replica-renderer'
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
   import type { SharedPositionTexture } from './webgl2/shared-position-texture'
@@ -29,6 +34,10 @@
 
   interface Props {
     packet: RenderPacket
+    /** Exact ordinary-mode boundary spheres, already expanded to packet dims. */
+    boundary_atom_images?: ImageInstanceTable | null
+    /** Exact ordinary-mode image-anchor bond ownership, expanded to packet dims. */
+    boundary_decoration_images?: ImageInstanceTable | null
     gpu_positions_rgba?: Float32Array | null
     position_resource: SharedPositionTexture
     color_resource?: SharedAtomColorTexture
@@ -43,7 +52,7 @@
     /** View-space headlamp direction (kept live in both materials). */
     light_dir?: Vector3
     /** Appearance → Material style for the atom impostors (#533). */
-    render_style?: AtomRenderStyle
+    render_style?: RenderStyle
     matcap_preset?: string
     highlight_strength?: number
     /** Main bond-draw opacity (ignored by atom-only layers). */
@@ -52,10 +61,15 @@
     ghost_opacity?: number
     /** Fired only after every enabled packet-owned renderer is synchronized. */
     on_packet_synced?: (evidence: PacketSyncEvidence) => void
+    /** StructureScene-owned immutable visual snapshot. Null preserves the
+     * scalar-prop fallback for isolated component consumers. */
+    visual_state?: ResolvedVisualState | null
   }
 
   let {
     packet,
+    boundary_atom_images = null,
+    boundary_decoration_images = null,
     gpu_positions_rgba = null,
     position_resource,
     color_resource,
@@ -72,6 +86,7 @@
     opacity = 1,
     ghost_opacity = 1,
     on_packet_synced,
+    visual_state = null,
   }: Props = $props()
 
   const threlte = useThrelte()
@@ -135,14 +150,16 @@
   const viewport_scratch = new Vector2(1, 1)
   $effect(() => {
     const pkt = packet
+    const atom_images = boundary_atom_images
+    const decoration_images = boundary_decoration_images
     const rgba = gpu_positions_rgba
     const atoms = atom_renderer
     const bonds = bond_renderer
     untrack(() => {
       position_resource.update(pkt.frame, rgba)
-      atoms?.update(pkt)
+      atoms?.update(pkt, atom_images)
       if (bonds) {
-        bonds.update(pkt)
+        bonds.update(pkt, decoration_images)
         // Fragment ray-cast rebuilds the view ray per pixel from the inverse
         // projection + drawing-buffer size — refresh alongside every packet.
         threlte.renderer?.getDrawingBufferSize(viewport_scratch)
@@ -202,12 +219,23 @@
   $effect(() => {
     const atoms = atom_renderer
     const bonds = bond_renderer
+    const snapshot = visual_state
     const materials = [atoms?.material, bonds?.material]
-    for (const material of materials) {
-      if (!material) continue
-      material.uniforms.uLightDir.value.copy(light_dir)
-      material.uniforms.uAmbientIntensity.value = ambient_light
-      material.uniforms.uDirectionalIntensity.value = directional_light
+    if (snapshot) {
+      if (atoms) apply_webgl_atom_uniforms(atoms.material.uniforms, snapshot)
+      for (const material of materials) {
+        if (!material) continue
+        material.uniforms.uLightDir.value.set(...snapshot.shading.light_dir)
+        material.uniforms.uAmbientIntensity.value = snapshot.shading.ambient
+        material.uniforms.uDirectionalIntensity.value = snapshot.shading.directional
+      }
+    } else {
+      for (const material of materials) {
+        if (!material) continue
+        material.uniforms.uLightDir.value.copy(light_dir)
+        material.uniforms.uAmbientIntensity.value = ambient_light
+        material.uniforms.uDirectionalIntensity.value = directional_light
+      }
     }
     atoms?.set_ghost_opacity(ghost_opacity)
     bonds?.set_bond_radius(bond_radius)
@@ -224,15 +252,22 @@
   $effect(() => {
     const atoms = atom_renderer
     if (!atoms) return
-    const matcap = render_style === `matcap`
+    const snapshot = visual_state
+    const source_style = snapshot?.render_style_source ?? render_style
+    const matcap = source_style === `matcap`
       ? get_atom_matcap(matcap_preset as MatcapPreset, mark_dirty)
       : null
-    atoms.set_render_style(
-      render_style_to_int(render_style),
-      style_pbr(render_style),
-      matcap,
-    )
-    atoms.set_highlight_strength(highlight_strength)
+    if (snapshot) {
+      apply_webgl_atom_uniforms(atoms.material.uniforms, snapshot)
+      if (matcap) atoms.material.uniforms.uMatcap.value = matcap
+    } else {
+      atoms.set_render_style(
+        render_style_to_backend(render_style, `webgl2`),
+        style_pbr(render_style),
+        matcap,
+      )
+      atoms.set_highlight_strength(highlight_strength)
+    }
     mark_dirty()
   })
 
@@ -240,6 +275,11 @@
   $effect(() => {
     const atoms = atom_renderer
     if (!atoms) return
+    if (visual_state) {
+      apply_webgl_atom_uniforms(atoms.material.uniforms, visual_state)
+      mark_dirty()
+      return
+    }
     const cam = threlte.camera.current
     atoms.material.uniforms.uIsOrthographic.value = cam
       ? !!(cam as { isOrthographicCamera?: boolean }).isOrthographicCamera

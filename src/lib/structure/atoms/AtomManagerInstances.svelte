@@ -46,9 +46,15 @@
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
   import { get_atom_matcap, type MatcapPreset } from './matcap-texture'
-  // Shared style mapping (#533) — the legacy material and the packet/replica
-  // impostor path must agree on what each Appearance → Material style means.
-  import { render_style_to_int, style_pbr } from './render-style'
+  import {
+    TOON_HIGHLIGHT_THRESHOLD,
+    TOON_SHADOW_BRIGHTNESS,
+    TOON_SHADOW_THRESHOLD,
+    render_style_to_backend,
+    style_pbr,
+    type ResolvedVisualState,
+  } from '$lib/structure/rendering/visual-state'
+  import { apply_webgl_atom_uniforms } from '$lib/structure/rendering/visual-adapters'
 
   interface Props {
     atom_manager: AtomManager
@@ -115,6 +121,9 @@
     render_packet?: RenderPacket | null
     /** The scene-level combined layer owns packet visuals for this manager. */
     packet_renderer_owned?: boolean
+    /** StructureScene-owned immutable visual snapshot. Isolated consumers may
+     * omit it and keep using the legacy scalar appearance props above. */
+    visual_state?: ResolvedVisualState | null
   }
 
   let {
@@ -137,6 +146,7 @@
     max_capacity = 200_000,
     render_packet = null,
     packet_renderer_owned = false,
+    visual_state = null,
   }: Props = $props()
 
   const threlte = useThrelte()
@@ -425,16 +435,18 @@
         uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
         uDepthCueBgColor: depth_cue_uniforms?.uDepthCueBgColor ?? { value: new Color(0xffffff) },
         uOutlineStrength: depth_cue_uniforms?.uOutlineStrength ?? { value: 0 },
-        uRenderStyle: { value: render_style_to_int(render_style) },
+        uRenderStyle: {
+          value: render_style_to_backend(render_style, `webgl2`),
+        },
         // Glossy specular highlight multiplier (slider-driven); kept live by $effect below.
         uSpecStrength: { value: highlight_strength },
         // Per-style PBR (glossy vs metallic); kept live by the render-style $effect.
         uRoughness: { value: style_pbr(render_style).roughness },
         uMetalness: { value: style_pbr(render_style).metalness },
         // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial defaults.
-        uShadowThreshold: { value: 0.3 },
-        uHighlightThreshold: { value: 0.97 },
-        uShadowBrightness: { value: 0.5 },
+        uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+        uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+        uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
         // Null until MatCap is selected (see the render-style $effect). Three
         // binds its default 1×1 texture for an unset sampler, so the declared
         // uMatcap sampler is safe to leave empty on non-matcap paths.
@@ -613,6 +625,7 @@
   // ─── Uniform sync effects ───
 
   $effect(() => {
+    if (visual_state) return
     const cam = threlte.camera.current
     const is_ortho = cam ? !!(cam as { isOrthographicCamera?: boolean }).isOrthographicCamera : false
     opaque_material.uniforms.uIsOrthographic.value = is_ortho
@@ -621,6 +634,7 @@
   })
 
   $effect(() => {
+    if (visual_state) return
     opaque_material.uniforms.uAmbientIntensity.value = ambient_light
     opaque_material.uniforms.uDirectionalIntensity.value = directional_light
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
@@ -630,7 +644,11 @@
   // Render-style is a uniform int branch in the fragment shader — no recompile,
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
-    opaque_material.uniforms.uRenderStyle.value = render_style_to_int(render_style)
+    if (visual_state) return
+    opaque_material.uniforms.uRenderStyle.value = render_style_to_backend(
+      render_style,
+      `webgl2`,
+    )
     const pbr = style_pbr(render_style)
     opaque_material.uniforms.uRoughness.value = pbr.roughness
     opaque_material.uniforms.uMetalness.value = pbr.metalness
@@ -651,6 +669,7 @@
   // Headlamp direction is a plain view-space uniform — copy the slider-derived
   // direction into the live material so light moves the instant the slider does.
   $effect(() => {
+    if (visual_state) return
     opaque_material.uniforms.uLightDir.value.copy(light_dir)
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
@@ -659,8 +678,25 @@
   // Specular highlight strength is a plain float uniform — copy the slider value
   // into the live material so glossiness changes the instant the slider moves.
   $effect(() => {
+    if (visual_state) return
     opaque_material.uniforms.uSpecStrength.value = highlight_strength
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // StructureScene's production path owns one immutable resolved snapshot.
+  // Apply it as a unit so WebGL cannot re-derive a different style/PBR/light
+  // combination from the compatibility scalar props.
+  $effect(() => {
+    const snapshot = visual_state
+    if (!snapshot) return
+    apply_webgl_atom_uniforms(opaque_material.uniforms, snapshot)
+    if (snapshot.render_style_source === `matcap`) {
+      opaque_material.uniforms.uMatcap.value = get_atom_matcap(
+        matcap_preset as MatcapPreset,
+        mark_dirty,
+      )
+    }
     mark_dirty()
   })
 </script>
@@ -681,6 +717,7 @@
     {render_style}
     {matcap_preset}
     {highlight_strength}
+    {visual_state}
     ghost_opacity={image_atom_opacity}
   />
 {:else}

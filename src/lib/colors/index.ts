@@ -9,6 +9,10 @@ import muted_colors from './muted-colors.json' with { type: 'json' }
 import pastel_colors from './pastel-colors.json' with { type: 'json' }
 import vesta_colors from './vesta-colors.json' with { type: 'json' }
 import vesta_soft_colors from './vesta-soft-colors.json' with { type: 'json' }
+import {
+  GIZMO_AXIS_COLORS,
+  GIZMO_NEG_AXIS_COLORS,
+} from '$lib/structure/rendering/gizmo'
 
 // Extract color scheme interpolate function names from d3-scale-chromatic
 export type D3InterpolateName = keyof typeof d3_sc & `interpolate${string}`
@@ -34,17 +38,10 @@ export const default_category_colors: Record<string, string> = {
   actinide: `#6495ed`, // cornflowerblue
 }
 
-export const axis_colors = [
-  // [axis name, color, hover color]
-  [`x`, `#d75555`, `#e66666`],
-  [`y`, `#55b855`, `#66c966`],
-  [`z`, `#5555d7`, `#6666e6`],
-] as const
-export const neg_axis_colors = [
-  [`nx`, `#b84444`, `#cc5555`],
-  [`ny`, `#44a044`, `#55b155`],
-  [`nz`, `#4444b8`, `#5555c9`],
-] as const
+// Backwards-compatible public aliases. The dependency-free gizmo module owns
+// these arrays so the DOM and GPU renderers consume the same object.
+export const axis_colors = GIZMO_AXIS_COLORS
+export const neg_axis_colors = GIZMO_NEG_AXIS_COLORS
 
 export type RGBColor = [number, number, number]
 export type ElementColorScheme = Record<(typeof elem_symbols)[number], RGBColor>

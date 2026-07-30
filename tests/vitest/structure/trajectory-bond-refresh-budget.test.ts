@@ -309,12 +309,14 @@ describe(`exact prepared trajectory ownership`, () => {
       .toBeLessThan(picker_effect.indexOf(`const _ial = image_atom_layout`))
 
     expect(scene).toContain(
-      `image_atom_layout={combined_packet_renderer_owned\n` +
+      `image_atom_layout={combined_packet_renderer_owned ||\n` +
+      `            visual_packet_replication_active\n` +
       `            ? empty_image_atom_layout()\n` +
       `            : image_atom_layout}`,
     )
     expect(scene).toContain(
-      `partner_drawn_lookup={combined_packet_renderer_owned\n` +
+      `partner_drawn_lookup={combined_packet_renderer_owned ||\n` +
+      `            visual_packet_replication_active\n` +
       `            ? null\n` +
       `            : partner_drawn_lookup}`,
     )

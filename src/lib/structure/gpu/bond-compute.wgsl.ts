@@ -72,7 +72,7 @@ struct Params {
   _pad0: u32,
   tolerance: f32,
   max_bond_dist: f32,
-  min_dist: f32,
+  min_bond_dist: f32,
   rule_count: u32,   // number of element-pair distance rules in the rules buffer
   lattice: mat3x3<f32>, // columns a,b,c (caller uploads transposed)
   // ── Uniform-grid (cell-list) params (computed CPU-side in bond-grid.ts) ──
@@ -149,7 +149,7 @@ fn try_emit(i: u32, j: u32, pi: vec3<f32>, ri: f32) {
     best_d2 = dot(dvec, dvec);
   }
   let d = sqrt(best_d2);
-  if (d < P.min_dist || d > P.max_bond_dist) { return; }
+  if (d < P.min_bond_dist || d > P.max_bond_dist) { return; }
   if (d <= ri + radii[j] + P.tolerance) {
     // Per-element-pair rule post-filter (matches visibility.ts). Applied only
     // AFTER the atom_radii test passes; can only remove a detected bond.

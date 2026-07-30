@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { result_to_connectivity, create_large_system_mode, to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
+import {
+  create_large_system_mode,
+  result_to_connectivity,
+  to_compute_options,
+} from '$lib/structure/gpu/large-system-mode.svelte'
 
 describe(`result_to_connectivity`, () => {
   it(`translates compute pairs into bond_connectivity entries`, () => {
@@ -47,14 +51,24 @@ describe(`create_large_system_mode`, () => {
 })
 
 describe(`to_compute_options`, () => {
-  it(`maps bond options to compute params (custom bond distance)`, () => {
+  it(`maps legacy fixed-pad options to compute params`, () => {
     expect(to_compute_options({ max_bond_dist: 2.6, tolerance: 0.3 }))
-      .toEqual({ tolerance: 0.3, max_bond_dist: 2.6, min_dist: 0.1 })
+      .toEqual({ tolerance: 0.3, max_bond_dist: 2.6, min_bond_dist: 0.1 })
   })
-  it(`fills defaults when options are missing`, () => {
-    expect(to_compute_options({})).toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 })
+  it(`fills the original large-system defaults when options are missing`, () => {
+    expect(to_compute_options({}))
+      .toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 })
   })
-  it(`honors a custom min_dist when provided`, () => {
-    expect(to_compute_options({ min_dist: 0.2 })).toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.2 })
+  it(`honors a custom min_bond_dist when provided`, () => {
+    expect(to_compute_options({ min_bond_dist: 0.2 }))
+      .toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.2 })
+  })
+  it(`normalizes an invalid tolerance before sharing it with GPU and Rust fallback paths`, () => {
+    expect(to_compute_options({ tolerance: -0.2 }).tolerance).toBe(0)
+    expect(to_compute_options({ tolerance: Number.NaN }).tolerance).toBe(0.45)
+  })
+  it(`accepts legacy min_dist as an alias only when min_bond_dist is absent`, () => {
+    expect(to_compute_options({ min_dist: 0.25 }))
+      .toEqual({ tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.25 })
   })
 })

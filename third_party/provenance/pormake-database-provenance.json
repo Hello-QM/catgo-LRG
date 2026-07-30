@@ -13,7 +13,7 @@
   "releaseEvidence": {
     "algorithm": "sha256sum-manifest-v1",
     "fileCount": 3277,
-    "manifestSha256": "646f28aa8e3bc8958629bbc47e48ca51923cc3bca6502c2b4bd2e9e16af4b602"
+    "manifestSha256": "9a4f41d0960feea59357bea7d0dbf84034cb9bcb5853a0a511a47a48b4ab55f9"
   },
   "pormake": {
     "repository": "https://github.com/Sangwon91/PORMAKE",

@@ -22,6 +22,10 @@ HTTP_TIMEOUT = 30.0
 BROKEN_PROVIDER_IDS = {
     "aflow", "cod", "cmr", "exmpl", "matcloud", "mpds",
     "mpod", "nmd", "odbx", "oqmd", "jarvis", "tcod",
+    # Registry entries currently resolve to endpoints that cannot serve
+    # structures: Materials Cloud main returns 404, OMDB times out, and
+    # 2DMatpedia's advertised TLS endpoint fails the handshake.
+    "mcloud", "omdb", "twodmatpedia",
 }
 
 # Fallback providers when main provider list is unavailable
@@ -37,53 +41,33 @@ FALLBACK_PROVIDERS = [
         },
     },
     {
-        "id": "mc3d",
+        "id": "mpdd",
         "type": "links",
         "attributes": {
-            "name": "MC3D",
-            "description": "Materials Cloud 3D crystals database",
-            "base_url": "https://aiida.materialscloud.org/mc3d/optimade",
-            "homepage": "https://materialscloud.org",
+            "name": "Material-Property-Descriptor Database",
+            "description": "MPDD crystal structures",
+            "base_url": "http://mpddoptimade.phaseslab.org",
+            "homepage": "https://www.phaseslab.com/mpdd",
         },
     },
     {
-        "id": "alexandria",
+        "id": "matterverse",
         "type": "links",
         "attributes": {
-            "name": "Alexandria",
-            "description": "Alexandria database",
-            "base_url": "https://alexandria.icams.rub.de/optimade",
-            "homepage": "https://alexandria.icams.rub.de",
+            "name": "Matterverse",
+            "description": "Machine-learning material predictions",
+            "base_url": "https://optimade.matterverse.ai",
+            "homepage": "https://matterverse.ai",
         },
     },
     {
-        "id": "mcloud",
+        "id": "atomgpt",
         "type": "links",
         "attributes": {
-            "name": "Materials Cloud",
-            "description": "Materials Cloud main database",
-            "base_url": "https://www.materialscloud.org/optimade/main",
-            "homepage": "https://www.materialscloud.org",
-        },
-    },
-    {
-        "id": "omdb",
-        "type": "links",
-        "attributes": {
-            "name": "Open Materials Database",
-            "description": "Open Materials Database",
-            "base_url": "https://optimade.openmaterialsdb.se",
-            "homepage": "https://openmaterialsdb.se",
-        },
-    },
-    {
-        "id": "twodmatpedia",
-        "type": "links",
-        "attributes": {
-            "name": "2DMatpedia",
-            "description": "2D Materials database",
-            "base_url": "https://optimade.2dmatpedia.org",
-            "homepage": "https://www.2dmatpedia.org",
+            "name": "AtomGPT JARVIS-DFT",
+            "description": "JARVIS-DFT structures served by AtomGPT",
+            "base_url": "https://atomgpt.org/optimade/v1",
+            "homepage": "https://atomgpt.org",
         },
     },
 ]
@@ -150,8 +134,9 @@ async def resolve_provider_url(base_url: str) -> str:
         except Exception:
             continue
 
-    # Fallback to original URL
-    _resolved_urls_cache[base_url] = base_url
+    # Do not cache a failed resolution. A transient index outage must recover
+    # on the next search instead of pinning the unresolved meta-database URL
+    # until the sidecar process restarts.
     return base_url
 
 
@@ -184,8 +169,8 @@ async def get_providers():
         _providers_cache = providers
         return {"data": providers}
     except Exception as e:
-        # Return fallback providers on error
-        _providers_cache = FALLBACK_PROVIDERS
+        # Return fallback providers for this request, but do not cache them.
+        # The provider registry may have suffered only a transient outage.
         return {"data": FALLBACK_PROVIDERS, "warning": str(e)}
 
 

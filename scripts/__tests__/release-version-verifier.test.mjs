@@ -53,7 +53,7 @@ function runVerifierWithEnvironment(root, environment) {
   })
 }
 
-function replaceVersion(root, path, from = '1.4.6', to = '1.4.5') {
+function replaceVersion(root, path, from = '1.4.8', to = '1.4.7') {
   const target = resolve(root, path)
   const current = readFileSync(target, 'utf8')
   assert.match(current, new RegExp(from.replaceAll('.', '\\.')), path)
@@ -63,9 +63,9 @@ function replaceVersion(root, path, from = '1.4.6', to = '1.4.5') {
 test('accepts a consistent release tree and its exact v-prefixed tag', () => {
   const root = fixture()
   try {
-    const result = runVerifier(root, '--tag', 'v1.4.6')
+    const result = runVerifier(root, '--tag', 'v1.4.8')
     assert.equal(result.status, 0, result.stderr)
-    assert.match(result.stdout, /release version 1\.4\.6 verified/)
+    assert.match(result.stdout, /release version 1\.4\.8 verified/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -78,7 +78,7 @@ test('accepts Windows CRLF checkouts', () => {
       const target = resolve(root, path)
       writeFileSync(target, readFileSync(target, 'utf8').replaceAll('\n', '\r\n'))
     }
-    const result = runVerifier(root, '--tag', 'v1.4.6')
+    const result = runVerifier(root, '--tag', 'v1.4.8')
     assert.equal(result.status, 0, result.stderr)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -106,7 +106,7 @@ test('rejects a tag that does not exactly match the manifest version', () => {
   try {
     const result = runVerifier(root, '--tag', 'v1.4.7')
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /expected v1\.4\.6/)
+    assert.match(result.stderr, /expected v1\.4\.8/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -127,7 +127,7 @@ test('honors the workflow tag and publishing requirement environment', () => {
   const root = fixture()
   try {
     const matching = runVerifierWithEnvironment(root, {
-      RELEASE_VERSION_TAG: 'v1.4.6',
+      RELEASE_VERSION_TAG: 'v1.4.8',
       RELEASE_VERSION_REQUIRE_TAG: 'true',
     })
     assert.equal(matching.status, 0, matching.stderr)
@@ -137,7 +137,7 @@ test('honors the workflow tag and publishing requirement environment', () => {
       RELEASE_VERSION_REQUIRE_TAG: 'true',
     })
     assert.notEqual(mismatched.status, 0)
-    assert.match(mismatched.stderr, /expected v1\.4\.6/)
+    assert.match(mismatched.stderr, /expected v1\.4\.8/)
 
     const missing = runVerifierWithEnvironment(root, {
       RELEASE_VERSION_TAG: '',
