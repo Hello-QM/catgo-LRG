@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.8] - 2026-07-30
+
+### Fixed
+
+- **Consistent periodic rendering in standard and large-system modes** — WebGL and WebGPU now share authoritative atom, bond, boundary, camera, and visual-state data, fixing missing or extra boundary atoms, dangling or transient long bonds, lattice-vector differences, and stale interaction updates.
+- **Materials Project, OPTIMADE, and PubChem search restored** — provider routing, current API fields, fallbacks, pagination, totals, and cache keys now behave consistently in the app and VS Code extension.
+- **VS Code bundled assets load reliably** — relative webview URLs keep packaged WASM and worker files on the extension resource path.
+
 ## [1.4.7] - 2026-07-28
 
 ### Fixed
