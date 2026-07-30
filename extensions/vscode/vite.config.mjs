@@ -10,6 +10,10 @@ import { mock_vscode } from './tests/vscode-mock'
 const __dirname = fileURLToPath(new URL(`.`, import.meta.url))
 
 export default defineConfig(({ mode }) => ({
+  // VS Code serves this bundle from a vscode-webview:// URI. Absolute
+  // `/assets/...` URLs resolve against the webview origin and return empty
+  // responses; relative URLs stay beside dist/webview.js.
+  base: `./`,
   // wasm-bindgen-rayon's threaded glue imports child worker chunks. Vite's
   // default IIFE worker output cannot code-split, so emit module workers.
   worker: {
