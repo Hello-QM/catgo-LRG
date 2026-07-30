@@ -21,7 +21,10 @@ import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
-import type { RenderPacket } from '$lib/structure/scene/render-packet'
+import type {
+  ImageInstanceTable,
+  RenderPacket,
+} from '$lib/structure/scene/render-packet'
 import {
   create_render_packet_builder,
   type PacketBondConnectivity,
@@ -338,6 +341,39 @@ describe(`AtomReplicaRenderer — shader contract`, () => {
 })
 
 describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
+  test(`authoritative boundary table replaces graph ghosts and updates without a packet change`, () => {
+    const packet = make_packet([3, 3, 3], `ghost-images`)
+    const first: ImageInstanceTable = {
+      count: 2,
+      base_sites: Uint32Array.from([2, 1]),
+      jimages: Int8Array.from([3, 0, 0, -1, 2, 0]),
+    }
+    const second: ImageInstanceTable = {
+      count: 1,
+      base_sites: Uint32Array.from([0]),
+      jimages: Int8Array.from([0, 0, -1]),
+    }
+    const renderer = new AtomReplicaRenderer()
+    renderer.update(packet, first)
+    expect(geo(renderer.ghost_mesh).instanceCount).toBe(2)
+    expect(Array.from(
+      (attr(renderer.ghost_mesh, `ghostBaseSite`).array as Float32Array)
+        .subarray(0, 2),
+    )).toEqual([2, 1])
+
+    // The async ordinary 19/19 cache can arrive while the RenderPacket
+    // identity stays fixed. Table identity alone must rebuild the sparse draw.
+    renderer.update(packet, second)
+    expect(geo(renderer.ghost_mesh).instanceCount).toBe(1)
+    expect((attr(renderer.ghost_mesh, `ghostBaseSite`).array as Float32Array)[0])
+      .toBe(0)
+    expect(Array.from(
+      (attr(renderer.ghost_mesh, `ghostImage`).array as Float32Array)
+        .subarray(0, 3),
+    )).toEqual([0, 0, -1])
+    renderer.dispose()
+  })
+
   test(`ghost-images policy draws exactly the T1 image-instance table`, () => {
     const packet = make_packet([2, 1, 1], `ghost-images`)
     const renderer = new AtomReplicaRenderer()

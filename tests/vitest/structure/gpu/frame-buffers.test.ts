@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
+import {
+  apply_position_overrides,
+  pack_lattice,
+  pack_positions,
+} from '$lib/structure/gpu/frame-buffers'
 import type { Site, PymatgenLattice } from '$lib/structure'
 
 function site(xyz: [number, number, number]): Site {
@@ -14,6 +18,25 @@ describe(`pack_positions`, () => {
   it(`returns a raw Float32Array frame unchanged (already 3N)`, () => {
     const frame = new Float32Array([7, 8, 9])
     expect(pack_positions(frame)).toBe(frame)
+  })
+})
+
+describe(`apply_position_overrides`, () => {
+  it(`preserves the zero-copy frame when no interaction preview is active`, () => {
+    const frame = new Float32Array([1, 2, 3])
+    expect(apply_position_overrides(frame, null)).toBe(frame)
+    expect(apply_position_overrides(frame, new Map())).toBe(frame)
+  })
+
+  it(`clones the frame and replaces only valid base-site positions`, () => {
+    const frame = new Float32Array([1, 2, 3, 4, 5, 6])
+    const out = apply_position_overrides(frame, new Map([
+      [1, [7, 8, 9] as const],
+      [4, [10, 11, 12] as const],
+    ]))
+    expect(out).not.toBe(frame)
+    expect(Array.from(out)).toEqual([1, 2, 3, 7, 8, 9])
+    expect(Array.from(frame)).toEqual([1, 2, 3, 4, 5, 6])
   })
 })
 

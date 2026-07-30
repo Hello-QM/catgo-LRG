@@ -337,6 +337,14 @@ const EMPTY_IMAGES: ImageInstanceTable = {
   jimages: new Int8Array(0),
 }
 
+const make_images = (
+  rows: readonly (readonly [number, number, number, number])[],
+): ImageInstanceTable => ({
+  count: rows.length,
+  base_sites: Uint32Array.from(rows, ([site]) => site),
+  jimages: Int8Array.from(rows.flatMap(([, jx, jy, jz]) => [jx, jy, jz])),
+})
+
 const pack_signed_jimage = (jx: number, jy: number, jz: number) =>
   (jx + 128) | ((jy + 128) << 8) | ((jz + 128) << 16)
 
@@ -492,7 +500,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       topology: make_topology(graph),
       frame: make_frame(),
       replicas: make_replicas({ boundary_policy: `ghost-images` }),
-    }, EMPTY_IMAGES)
+    }, make_images([[0, 1, 0, 0]]))
     renderer.set_ghost_opacity(0.25)
     renderer.set_bond_style({ periodic_bond_opacity: 0.25 })
     renderer.render()
@@ -544,7 +552,15 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
 
     const atom_shader = rec.shader_sources[`large-system-impostor`]
     expect(atom_shader).toContain(
-      `out.color = vec4<f32>(rgb, coverage * in.opacity);`,
+      `let alpha = coverage * in.opacity;`,
+    )
+    expect(atom_shader).toContain(`out.color = vec4<f32>(rgb, alpha);`)
+    expect(atom_shader).toContain(
+      `if (!(coverage > 0.0))`,
+    )
+    expect(atom_shader).not.toContain(`d <= r`)
+    expect(atom_shader).toContain(
+      `if (!(ndc_depth >= 0.0 && ndc_depth <= 1.0))`,
     )
     const bond_shader = rec.shader_sources[`large-system-bond-render`]
     expect(bond_shader).toContain(`override ghost_pass : u32 = 0u;`)
@@ -552,11 +568,52 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       `let wrong_pass = (ghost_pass != 0u) != ghost_complete;`,
     )
     expect(bond_shader).toContain(
-      `out.opacity = select(clamp(bond.style1.x, 0.0, 1.0), 1.0, inside);`,
+      `effective_inside,
+  );`,
     )
+    expect(bond_shader).toContain(
+      `let is_ortho = shading.light_dir.w > 0.5;`,
+    )
+    expect(bond_shader).toContain(`let rc = ro - pa;`)
+    expect(bond_shader).toContain(`let n_raw = cross(rd, cylinder_axis);`)
+    expect(bond_shader).toContain(`let side_distance = abs(dot(rc, n));`)
+    expect(bond_shader).toContain(`fn cylinder_coverage(radius : f32, distance : f32)`)
+    expect(bond_shader).toContain(`let fw_raw = fwidth(distance);`)
+    expect(bond_shader).toContain(`let body_coverage = cylinder_coverage(r, body_edge_distance);`)
+    expect(bond_shader).toContain(`let cap_coverage = cylinder_coverage(r, cap_edge_distance);`)
+    expect(bond_shader).toContain(`@location(5) vpos : vec3<f32>`)
+    expect(bond_shader).not.toContain(`@interpolate(perspective, sample)`)
+    expect(bond_shader).not.toContain(`qb * qb - 4.0 * qa * qc`)
+    expect(bond_shader).not.toContain(`if (!found)`)
+    expect(bond_shader).toContain(`let alpha = coverage * in.opacity;`)
+    expect(bond_shader).toContain(`if (!(alpha > 0.0))`)
+    expect(bond_shader).toContain(
+      `if (!(depth >= 0.0 && depth <= 1.0))`,
+    )
+    expect(bond_shader).not.toContain(`fwidth(measure)`)
+    expect(bond_shader).not.toContain(`let oc = -pa;`)
+
+    const pick_shader = rec.shader_sources[`large-system-pick`]
+    expect(pick_shader).toContain(
+      `let is_ortho = camera.cam_pos.w > 0.5;`,
+    )
+    expect(pick_shader).toContain(`vec3<f32>(in.vpos.xy, 0.0)`)
+    expect(pick_shader).toContain(`vec3<f32>(0.0, 0.0, -1.0)`)
 
     const frame = rec.passes.find(({ label }) => label === `frame`)
     expect(frame?.commands).toEqual([
+      {
+        kind: `drawIndirect`,
+        pipeline: `large-system-bond-render-pipeline`,
+      },
+      {
+        kind: `draw`,
+        pipeline: `large-system-bond-decorator-pipeline`,
+        vertex_count: 6,
+        instance_count: 1,
+        first_vertex: 0,
+        first_instance: 0,
+      },
       {
         kind: `draw`,
         pipeline: `large-system-impostor-pipeline`,
@@ -567,7 +624,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       },
       {
         kind: `drawIndirect`,
-        pipeline: `large-system-bond-render-pipeline`,
+        pipeline: `large-system-bond-render-ghost-pipeline`,
       },
       {
         kind: `draw`,
@@ -576,10 +633,6 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
         instance_count: 1,
         first_vertex: 0,
         first_instance: N,
-      },
-      {
-        kind: `drawIndirect`,
-        pipeline: `large-system-bond-render-ghost-pipeline`,
       },
       {
         kind: `draw`,
@@ -723,8 +776,9 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     expect(shader).toContain(`var color_end = color_start;`)
     expect(shader).toContain(`if (is_full) {`)
-    expect(shader).toContain(`color_start = color_a;`)
-    expect(shader).toContain(`color_end = color_b;`)
+    expect(shader).toContain(
+      `color_end = select(color_a, color_b, half == 0u);`,
+    )
     expect(shader).toContain(
       `let base_color = select(
     in.color_end,
@@ -889,7 +943,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
-  it(`derives sparse packet ghosts from the same graph, including a center self-image`, () => {
+  it(`uses the ordinary packet image table instead of graph-derived ghosts`, () => {
     const graph: BaseBondGraph = {
       version: 1,
       // Site 4 can sit anywhere in the base cell: the graph, not decorative
@@ -899,11 +953,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       kinds: new Uint8Array(1),
       strengths: new Float32Array([1]),
     }
-    const decorative_images: ImageInstanceTable = {
-      count: 1,
-      base_sites: new Uint32Array([7]),
-      jimages: new Int8Array([0, 0, 0]),
-    }
+    const decorative_images = make_images([[4, 1, 0, 0]])
     const rec = make_recording_device()
     const renderer = create_large_system_renderer(
       rec.device as unknown as GPUDevice,
@@ -926,7 +976,14 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
 
     renderer.render()
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N])
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-pipeline`,
+      vertex_count: 4,
+      instance_count: N,
+      first_vertex: 0,
+      first_instance: 0,
+    })
     expect(frame_pass?.commands).toContainEqual({
       kind: `draw`,
       pipeline: `large-system-impostor-ghost-pipeline`,
@@ -966,10 +1023,10 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect([...new Uint32Array(pairs[0].bytes.buffer)]).toEqual([
       0,
       0,
-      pack_signed_jimage(2, -3, 0),
+      pack_signed_jimage(2, -3, 0) | (1 << 24),
       1,
       1,
-      pack_signed_jimage(-1, 0, 0),
+      pack_signed_jimage(-1, 0, 0) | (1 << 24),
       0,
       1,
       pack_signed_jimage(0, 0, 0),
@@ -981,6 +1038,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(bond_shader).toContain(`jp & 255u`)
     expect(bond_shader).toContain(`jp >> 8u`)
     expect(bond_shader).toContain(`jp >> 16u`)
+    expect(bond_shader).toContain(`let boundary_flags = jp >> 24u;`)
     expect(bond_shader).not.toContain(`jp & 3u`)
 
     renderer.render()
@@ -1049,6 +1107,21 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     expect(structure_source).toMatch(
       /show_image_atoms\s*\?\s*`ghost-images`\s*:\s*scene_props\.hide_incomplete_bonds\s*\?\s*`hide`\s*:\s*`stub`/,
+    )
+    expect(structure_source).toMatch(
+      /let large_overlay_structure = \$derived\([\s\S]*?physical_supercell_render\?\.base_structure\s*\?\?[\s\S]*?trajectory_packet_active[\s\S]*?transform\.base_structure \?\? structure/,
+    )
+    expect(structure_source).toContain(
+      `structure={large_overlay_structure}`,
+    )
+    expect(structure_source).toContain(
+      `packet_owner_id={large_overlay_owner_id}`,
+    )
+    expect(structure_source).toContain(
+      `replica_semantics={physical_supercell_render`,
+    )
+    expect(structure_source).toContain(
+      `physical_site_map={physical_supercell_render?.physical_site_map}`,
     )
 
     expect(scene_source).toContain(`colors: atom_colors_buffer`)
@@ -1191,7 +1264,14 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(policy_rows[3]).toBe(1) // stub=0, hide=1, ghost-images=2
     renderer.render()
     let frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N * 2]) // hide never draws ghosts
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-pipeline`,
+      vertex_count: 4,
+      instance_count: N * 2,
+      first_vertex: 0,
+      first_instance: 0,
+    }) // hide never draws ghosts
     expect(frame_pass?.indirect).toBe(1)
     expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
 
@@ -1204,14 +1284,21 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
         dims: [2, 1, 1],
         boundary_policy: `ghost-images`,
       }),
-    }, EMPTY_IMAGES)
+    }, make_images([[0, 2, 0, 0]]))
     sc = writes_to(rec.writes, `large-system-supercell`).at(-1)
     expect(sc).toBeDefined()
     policy_rows = new Float32Array(sc!.bytes.buffer, 16, 12)
     expect(policy_rows[3]).toBe(2)
     renderer.render()
     frame_pass = rec.passes.find((p) => p.label === `frame`)
-    expect(frame_pass?.draws[0]).toEqual([4, N * 2])
+    expect(frame_pass?.commands).toContainEqual({
+      kind: `draw`,
+      pipeline: `large-system-impostor-pipeline`,
+      vertex_count: 4,
+      instance_count: N * 2,
+      first_vertex: 0,
+      first_instance: 0,
+    })
     expect(frame_pass?.commands).toContainEqual({
       kind: `draw`,
       pipeline: `large-system-impostor-ghost-pipeline`,
@@ -1373,7 +1460,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       topology: make_topology(graph),
       frame: make_frame(),
       replicas: make_replicas({ dims: [2, 1, 1], boundary_policy: `ghost-images` }),
-    }, EMPTY_IMAGES)
+    }, make_images([[5, -1, 0, 0]]))
 
     const replica = await renderer.pick(2, 2)
     expect(replica).toEqual({ kind: `atom`, base_site: 3, cell: [1, 0, 0], ghost: false })
@@ -1382,7 +1469,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     const miss = await renderer.pick(2, 2)
     expect(miss).toEqual({ kind: `miss`, base_site: -1, cell: [0, 0, 0], ghost: false })
 
-    // The pick pass drew every replica AND the graph-derived ghost (16 + 1).
+    // The pick pass drew every replica AND the ordinary-view ghost (16 + 1).
     const pick_pass = rec.passes.find((p) => p.label === `large-system-pick-pass`)
     expect(pick_pass?.draws[0]).toEqual([4, 17])
 

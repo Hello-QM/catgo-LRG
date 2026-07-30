@@ -170,7 +170,10 @@ function extract_plain_geometry(structure: ParsedStructure): PlainGeometry {
 // it simply shows which atoms fall within the display boundaries.
 export function find_translational_images(
   structure: ParsedStructure,
-  { range_min = -0.01, range_max = 1.01 }: { range_min?: number; range_max?: number } = {},
+  { range_min = -0.01, range_max = 1.01 }: {
+    range_min?: number
+    range_max?: number
+  } = {},
   geom?: PlainGeometry,
 ): [number, Vec3, Vec3][] {
   if (!structure.lattice || !structure.sites || structure.sites.length === 0) return []
@@ -275,9 +278,37 @@ export function find_translational_images(
   return result
 }
 
-// Return structure with bond-completing image atoms added (VESTA-like boundary completion)
+function append_pbc_image_sites(
+  structure: ParsedStructure,
+  image_sites: [number, Vec3, Vec3][],
+): ParsedStructure & { num_original_sites?: number; image_to_original_map?: number[] } {
+  const num_original_sites = structure.sites.length
+  const image_to_original_map: number[] = []
+  const imaged_struct = {
+    ...structure,
+    sites: [...structure.sites],
+    num_original_sites,
+    image_to_original_map,
+  }
+
+  for (const [site_idx, img_xyz, img_abc] of image_sites) {
+    const orig_site = structure.sites[site_idx]
+    imaged_struct.sites.push({
+      ...orig_site,
+      abc: img_abc,
+      xyz: img_xyz,
+      properties: { ...orig_site.properties, orig_site_idx: site_idx },
+    })
+    image_to_original_map.push(site_idx)
+  }
+
+  return imaged_struct
+}
+
+// Return structure with image atoms added, optionally completing boundary bonds.
 export function get_pbc_image_sites(
   structure: ParsedStructure,
+  bond_completion: boolean = true,
 ): ParsedStructure & { num_original_sites?: number; image_to_original_map?: number[] } {
   if (!structure || !structure.sites || structure.sites.length === 0) {
     return structure
@@ -311,6 +342,10 @@ export function get_pbc_image_sites(
     range_min: -0.05,
     range_max: 1.05,
   }, geom)
+
+  // Preserve the historical public default while allowing callers whose
+  // contract is purely geometric (notably find_pbc_images_fast) to opt out.
+  if (!bond_completion) return append_pbc_image_sites(structure, initial_images)
 
   // Phase 2: bond-complete the image set.
   // For each image atom, ensure all its bonded neighbors also have images
@@ -431,27 +466,7 @@ export function get_pbc_image_sites(
   }
 
   const image_sites = [...initial_images, ...extra_images]
-  const num_original_sites = structure.sites.length
-  const image_to_original_map: number[] = []
-  const imaged_struct = {
-    ...structure,
-    sites: [...structure.sites],
-    num_original_sites,
-    image_to_original_map,
-  }
-
-  for (const [site_idx, img_xyz, img_abc] of image_sites) {
-    const orig_site = structure.sites[site_idx]
-    imaged_struct.sites.push({
-      ...orig_site,
-      abc: img_abc,
-      xyz: img_xyz,
-      properties: { ...orig_site.properties, orig_site_idx: site_idx },
-    })
-    image_to_original_map.push(site_idx)
-  }
-
-  return imaged_struct
+  return append_pbc_image_sites(structure, image_sites)
 }
 
 /**
@@ -632,9 +647,20 @@ export function deduplicate_periodic_images(
  */
 export async function find_pbc_images_fast(
   structure: ParsedStructure,
-  options?: { range_min?: number; range_max?: number; bond_completion?: boolean; bond_tolerance?: number },
+  options?: {
+    range_min?: number
+    range_max?: number
+    bond_completion?: boolean
+    bond_tolerance?: number
+  },
 ): Promise<ParsedStructure & { num_original_sites?: number; image_to_original_map?: number[] }> {
   if (!structure?.sites?.length || !structure.lattice) return structure
+  const resolved_options = {
+    range_min: options?.range_min ?? -0.05,
+    range_max: options?.range_max ?? 1.05,
+    bond_completion: options?.bond_completion ?? false,
+    bond_tolerance: options?.bond_tolerance ?? 1.25,
+  }
 
   // Try WASM first.
   // bond_completion defaults to FALSE so the ghost atom set matches Phase 7's
@@ -647,7 +673,7 @@ export async function find_pbc_images_fast(
   // bond-completion can still opt in by passing `bond_completion: true`.
   const wasm_result = await wasm_find_pbc_images(
     structure as any,
-    options ?? { range_min: -0.05, range_max: 1.05, bond_completion: false, bond_tolerance: 1.25 },
+    resolved_options,
   )
 
   // wasm_result === null means the WASM path FAILED (module unavailable or
@@ -682,6 +708,6 @@ export async function find_pbc_images_fast(
     return imaged_struct
   }
 
-  // JS fallback (WASM not ready or returned empty)
-  return get_pbc_image_sites(structure)
+  // JS fallback (WASM unavailable or failed)
+  return get_pbc_image_sites(structure, resolved_options.bond_completion)
 }

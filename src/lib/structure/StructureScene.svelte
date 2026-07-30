@@ -64,6 +64,7 @@
   import type {
     BaseBondGraph,
     BaseTopology,
+    ImageInstanceTable,
     RenderPacket,
   } from './scene/render-packet'
   import {
@@ -109,10 +110,18 @@
   } from './bonding/image-atom-layout'
   import {
     build_sites_to_draw,
+    image_sites_to_instance_table,
     make_image_site_key,
+    merge_image_instances_into_sites_to_draw,
     type ImageSiteEntry,
     type ImageSiteKey,
   } from './pbc-image-atoms'
+  import { find_pbc_images_fast } from './pbc'
+  import {
+    displayed_image_atoms_to_instance_table,
+    expand_ordinary_image_table,
+    type PeriodicDecorationSource,
+  } from './scene/periodic-decoration-snapshot'
   import {
     create_current_trajectory_source_request_guard,
     prepared_frame_key_for_shared_topology_source,
@@ -328,6 +337,8 @@
     // semantics), and bond picks carry the base bond GRAPH index.
     get_render_packet: () =>
       combined_packet_renderer_owned ? manager_render_packet : null,
+    get_packet_boundary_atom_images: () =>
+      manager_packet_boundary_atom_images,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
     set_hovered_bond_idx: (idx) => {
@@ -799,6 +810,9 @@
     // captures one immutable snapshot; camera-dependent depth planes publish a
     // new revision through the explicit camera bridge.
     visual_state_source = $bindable<VisualStateSource | null>(null),
+    periodic_decoration_source =
+      $bindable<PeriodicDecorationSource | null>(null),
+    bond_owner_id = 0,
     // Camera matrices are mutable Three objects, so their internal changes are
     // invisible to Svelte. The owner binds this explicit revision and every
     // camera mutation path bumps it.
@@ -1116,6 +1130,10 @@
     atom_manager?: AtomManager
     /** Single revision-bearing visual source shared by WebGL2 and WebGPU. */
     visual_state_source?: VisualStateSource | null
+    /** Final graph plus separate ordinary atom/decorator image sets. */
+    periodic_decoration_source?: PeriodicDecorationSource | null
+    /** Parent-issued identity token for the current pre-image bond input. */
+    bond_owner_id?: number
     /** Explicit revision for mutable camera/controls changes. */
     camera_revision?: number
     deleted_bond_keys?: Set<string>
@@ -2770,6 +2788,11 @@
   // cross-cell bonds with `image` populated; the renderer paints two
   // halves anchored at the original atoms.
   let bond_input = $derived(bond_input_structure ?? structure)
+  // Owner barrier for the ordinary graph bridge. The final BondManager
+  // shadow-sync advances these only after it reconciles the graph belonging to
+  // bond_state.last_bond_structure.
+  let manager_graph_owner_id = $state(0)
+  let manager_graph_atom_count = $state(0)
   // Merge the user-tunable `bond_scale` into the strategy options. atom_radii
   // reads `scale` (bond iff dist ≤ scale·Σr); electroneg/solid_angle ignore it.
   let bonding_options_eff = $derived({
@@ -3352,18 +3375,122 @@
       },
     )
   })
-  let image_atom_layout = $derived.by((): ImageAtomLayout => {
-    if (sites_to_draw === null) return empty_image_atom_layout()
-    void bond_manager.version
-    return build_image_atom_layout(sites_to_draw, bond_manager)
+  const EMPTY_PERIODIC_IMAGES: ImageInstanceTable = {
+    count: 0,
+    base_sites: new Uint32Array(0),
+    jimages: new Int8Array(0),
+  }
+  // Exact appended atom table while ordinary displayed_structure still owns
+  // its CPU-side PBC images.
+  let displayed_manager_atom_images = $derived.by(() =>
+    displayed_image_atoms_to_instance_table(
+      structure?.sites ?? [],
+      num_original_sites,
+      image_to_original_map,
+    )
+  )
+  // Visual supercells intentionally keep displayed_structure at the base cell
+  // and instance the N real atoms on the GPU. Preserve the last exact ordinary
+  // image table for that same base owner; if the viewer entered a saved NxNxN
+  // state before ordinary images were ever materialized, fill the cache through
+  // the existing WASM PBC path. This retains the ordinary 19/19 boundary
+  // contract without CPU-materializing the visual supercell itself.
+  let visual_boundary_owner_id = $state(0)
+  let visual_boundary_atom_images = $state(EMPTY_PERIODIC_IMAGES)
+  let visual_boundary_ready = $state(false)
+  let visual_boundary_generation = 0
+
+  $effect(() => {
+    const owner = bond_input
+    const images = displayed_manager_atom_images
+    if (!owner || images.count === 0) return
+    visual_boundary_owner_id = bond_owner_id
+    visual_boundary_atom_images = images
+    visual_boundary_ready = true
   })
-  // Phase 7d partner-drawn predicate. Closes over `sites_to_draw` so the
+
+  $effect(() => {
+    const owner = bond_input
+    const dims = render_packet?.replicas.dims
+    const visual_replicas = !!dims && dims[0] * dims[1] * dims[2] > 1
+    if (
+      !visual_replicas ||
+      !show_image_atoms ||
+      !owner ||
+      !(`lattice` in owner) ||
+      visual_boundary_owner_id === bond_owner_id && visual_boundary_ready
+    ) return
+
+    const generation = ++visual_boundary_generation
+    const owner_id = bond_owner_id
+    visual_boundary_owner_id = owner_id
+    visual_boundary_atom_images = EMPTY_PERIODIC_IMAGES
+    visual_boundary_ready = false
+    void find_pbc_images_fast(
+      owner as Parameters<typeof find_pbc_images_fast>[0],
+      { bond_completion: false },
+    ).then((result) => {
+      if (
+        generation !== visual_boundary_generation ||
+        bond_input !== owner ||
+        bond_owner_id !== owner_id
+      ) return
+      visual_boundary_atom_images = displayed_image_atoms_to_instance_table(
+        result.sites,
+        result.num_original_sites,
+        result.image_to_original_map,
+      )
+      visual_boundary_ready = true
+    }).catch((error) => {
+      if (
+        generation !== visual_boundary_generation ||
+        bond_input !== owner ||
+        bond_owner_id !== owner_id
+      ) return
+      console.warn(`[StructureScene] failed to prepare visual-supercell boundary atoms`, error)
+      // Mark the request settled so a reactive flush cannot spin retries.
+      // The raw decorator set remains available as a conservative fallback.
+      visual_boundary_ready = true
+    })
+  })
+
+  let manager_atom_images = $derived.by(() => {
+    if (!show_image_atoms) return EMPTY_PERIODIC_IMAGES
+    if (displayed_manager_atom_images.count > 0) {
+      return displayed_manager_atom_images
+    }
+    return visual_boundary_owner_id === bond_owner_id && visual_boundary_ready
+      ? visual_boundary_atom_images
+      : EMPTY_PERIODIC_IMAGES
+  })
+  // The final ordinary boundary contract: bond decorators cover the exact
+  // image spheres rendered from displayed_structure. Clone and extend the raw
+  // CrystalToolkit map once, then publish this same aligned set to WebGPU.
+  let ordinary_sites_to_draw = $derived.by(() => {
+    if (sites_to_draw === null) return null
+    return merge_image_instances_into_sites_to_draw(
+      sites_to_draw,
+      manager_atom_images,
+    )
+  })
+  let image_atom_layout = $derived.by((): ImageAtomLayout => {
+    if (ordinary_sites_to_draw === null) return empty_image_atom_layout()
+    void bond_manager.version
+    return build_image_atom_layout(ordinary_sites_to_draw, bond_manager)
+  })
+  let manager_periodic_images = $derived.by(() => {
+    const entries = ordinary_sites_to_draw
+    if (entries === null) return EMPTY_PERIODIC_IMAGES
+    return image_sites_to_instance_table(entries.values(), [1, 1, 1])
+  })
+  // Phase 7d partner-drawn predicate. Closes over ordinary_sites_to_draw so
+  // every atom sphere visible in normal mode can own its bond decoration.
   // renderer can dispatch decorator instances to incomplete-edge stubs when
   // a bond's partner image atom is not in the drawn set. Predicate identity
-  // changes with sites_to_draw → triggers `force_full_resync` via the
+  // changes with the map → triggers `force_full_resync` via the
   // existing layout-change $effect in BondManagerInstances.
   let partner_drawn_lookup = $derived.by((): PartnerDrawnLookup | null => {
-    const std = sites_to_draw
+    const std = ordinary_sites_to_draw
     if (std === null) return null
     return (idx, jx, jy, jz) => std.has(make_image_site_key(idx, [jx, jy, jz]))
   })
@@ -3567,16 +3694,17 @@
     }
   })
   $effect.pre(() => {
-    // WebGPU overlay active: this WebGL scene is covered and not painting, and
-    // the overlay computes its own GPU bonds — so skip the per-frame trajectory
-    // bond-pair rebuild (compute_bond_connectivity_for_frame +
-    // build_trajectory_bond_pairs). Read suspend FIRST (reactive) so toggle-OFF
-    // (true→false) re-fires this effect; the resume branch then bypasses the
-    // memo so bonds rebuild for the current frame even if positions advanced
-    // (under the overlay) without `trajectory_frame_positions` identity having
-    // changed since the last build before suspension.
+    // WebGPU overlay active: skip only the PER-FRAME trajectory bond-pair
+    // rebuild. Static large-system rendering now consumes bond_manager's final
+    // ordinary graph, so a structure/options edit while the overlay is visible
+    // must still flow through this effect once and republish that graph.
+    // Read suspend FIRST (reactive) so toggle-OFF (true→false) re-fires this
+    // effect; the resume branch then bypasses the memo for trajectory frames.
     const __suspended = webgl_suspended
-    if (__suspended) { __bbp_was_suspended = true; return }
+    if (__suspended && trajectory_step_idx >= 0) {
+      __bbp_was_suspended = true
+      return
+    }
     const __resuming_bbp = __bbp_was_suspended
     __bbp_was_suspended = false
     if (import.meta.env?.DEV) __probe_bbp_fires++
@@ -3787,7 +3915,7 @@
         counts.set(bp.site_idx_1, (counts.get(bp.site_idx_1) ?? 0) + 1)
         counts.set(bp.site_idx_2, (counts.get(bp.site_idx_2) ?? 0) + 1)
       }
-      const std = sites_to_draw
+      const std = ordinary_sites_to_draw
       const n = structure.sites.length
       const low_bond_sites: Array<{ site_idx: number; bond_count: number }> = []
       for (let i = 0; i < n; i++) {
@@ -4011,7 +4139,6 @@
     }
     return out
   })
-
   // --- Polyhedra computation (bond-graph: uses filtered_bond_pairs) ---
   let polyhedra_data = $derived.by(() => {
     // Polyhedra depend on a synchronous atom_radii bond compute (compute_bonds_sync
@@ -4735,6 +4862,16 @@
         mgr.commit_orders_batch()
       }
     }
+
+    // Publish graph ownership only after the manager diff above has completed.
+    // If the next structure's async connectivity is not ready,
+    // last_bond_structure is null/old and the parent-side owner check safely
+    // withholds this graph for that transient frame.
+    const graph_owner = bond_state.last_bond_structure
+    // Only stamp the parent-issued token when the graph and current pre-image
+    // structure share the exact owner inside this component.
+    manager_graph_owner_id = graph_owner === bond_input ? bond_owner_id : 0
+    manager_graph_atom_count = graph_owner?.sites?.length ?? 0
   })
 
   // ═══ AtomManager SoA shadow store ═══
@@ -5571,6 +5708,32 @@
     return manager_graph_snapshot
   })
 
+  // Atom ghosts and bond decorators now share the ACTUAL final ordinary
+  // boundary set. Keeping both fields explicit preserves the renderer
+  // contract while preventing either backend from independently adding or
+  // dropping a boundary row.
+  // Owner barrier for the ordinary graph bridge. This is advanced only by the
+  // bond-manager shadow-sync transaction below, after it has reconciled the
+  // graph for bond_state.last_bond_structure. During an async structure swap
+  // the old graph therefore keeps its old owner and the WebGPU adapter rejects
+  // it instead of interpreting old jimages with the new lattice.
+  $effect(() => {
+    // During a cold visual-supercell start the exact lightweight atom table
+    // arrives asynchronously from WASM. Keep the interim publication aligned
+    // (raw/raw) so WebGPU never draws decorator bonds without their spheres;
+    // the next publication replaces both lanes with the exact final 19/19 set.
+    const atom_images = manager_atom_images.count > 0
+      ? manager_atom_images
+      : manager_periodic_images
+    periodic_decoration_source = {
+      graph: manager_bond_graph,
+      owner_id: manager_graph_owner_id,
+      atom_count: manager_graph_atom_count,
+      atom_images,
+      images: manager_periodic_images,
+    }
+  })
+
   let manager_topology_attribute_key_cache:
     | ManagerTopologyAttributeKey
     | null = null
@@ -5633,6 +5796,34 @@
       frame: upstream.frame,
       replicas: upstream.replicas,
     }
+  })
+  // The normal WebGL packet renderer consumes the same final ordinary
+  // boundary tables as the large-system renderer. Expand the authoritative
+  // 1× image ownership onto the visual replica surface instead of letting
+  // either WebGL renderer independently infer endpoint-B-only ghosts.
+  let manager_packet_boundary_atom_images = $derived.by(
+    (): ImageInstanceTable | null => {
+      const packet = manager_render_packet
+      if (packet?.replicas.boundary_policy !== `ghost-images`) return null
+      const images = manager_atom_images.count > 0
+        ? manager_atom_images
+        : manager_periodic_images
+      return expand_ordinary_image_table(images, packet.replicas.dims)
+    },
+  )
+  let manager_packet_boundary_decoration_images = $derived.by(
+    (): ImageInstanceTable | null => {
+      const packet = manager_render_packet
+      if (packet?.replicas.boundary_policy !== `ghost-images`) return null
+      return expand_ordinary_image_table(
+        manager_periodic_images,
+        packet.replicas.dims,
+      )
+    },
+  )
+  let visual_packet_replication_active = $derived.by(() => {
+    const dims = manager_render_packet?.replicas.dims
+    return !!dims && dims[0] * dims[1] * dims[2] > 1
   })
 
   function packet_render_features_eligible(): boolean {
@@ -7006,6 +7197,8 @@
           {#if manager_render_packet && combined_packet_renderer_owned && !webgl_suspended}
             <WebGLReplicaLayer
               packet={manager_render_packet}
+              boundary_atom_images={manager_packet_boundary_atom_images}
+              boundary_decoration_images={manager_packet_boundary_decoration_images}
               gpu_positions_rgba={manager_gpu_positions}
               position_resource={shared_position_texture}
               color_resource={shared_atom_color_texture}
@@ -7229,10 +7422,12 @@
           {incomplete_periodic_edge_mode}
           {incomplete_edge_length_scale}
           {hide_incomplete_bonds}
-          image_atom_layout={combined_packet_renderer_owned
+          image_atom_layout={combined_packet_renderer_owned ||
+            visual_packet_replication_active
             ? empty_image_atom_layout()
             : image_atom_layout}
-          partner_drawn_lookup={combined_packet_renderer_owned
+          partner_drawn_lookup={combined_packet_renderer_owned ||
+            visual_packet_replication_active
             ? null
             : partner_drawn_lookup}
           multibond_enabled={bond_order_perception}

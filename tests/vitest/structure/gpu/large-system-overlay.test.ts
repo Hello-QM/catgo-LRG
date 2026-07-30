@@ -406,7 +406,9 @@ describe(`visual source ownership and wiring`, () => {
     expect(scene).toContain(`var(--structure-gizmo-size)`)
     expect(structure).toContain(`const hud_safe = $derived(`)
     expect(structure).toContain(`style:--structure-gizmo-size={GIZMO_SIZE_CSS}`)
-    expect(structure).toContain(`visual_state_source={scene_visual_state_source}\n            {hud_safe}`)
+    expect(structure).toContain(`visual_state_source={scene_visual_state_source}`)
+    expect(structure).toContain(`periodic_decoration_source={trajectory_packet_active`)
+    expect(structure).toContain(`            {hud_safe}`)
   })
 })
 
@@ -420,6 +422,7 @@ describe(`LargeSystemOverlay gizmo layout`, () => {
     expect(mocks.renderer.set_gizmo_layout).toHaveBeenCalledWith({
       safe_left: 12,
       safe_bottom: 20,
+      show: true,
     })
 
     mocks.renderer.set_gizmo_layout.mockClear()
@@ -430,6 +433,7 @@ describe(`LargeSystemOverlay gizmo layout`, () => {
     expect(mocks.renderer.set_gizmo_layout).toHaveBeenCalledWith({
       safe_left: 30,
       safe_bottom: 40,
+      show: true,
     })
   })
 })

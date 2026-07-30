@@ -10,6 +10,8 @@ import {
   normalize_bond_style,
   pack_bond_render_uniform,
   pack_cell_uniform,
+  LATTICE_VECTOR_BYTES,
+  pack_lattice_vector_uniform,
 } from '$lib/structure/gpu/large-system-renderer'
 import { srgb_channel_to_linear } from '$lib/structure/rendering/background'
 import type { ResolvedVisualShading } from '$lib/structure/rendering/visual-state'
@@ -85,6 +87,23 @@ describe(`large-system cell transform packing`, () => {
     ]
     expected.forEach((value, idx) => expect(packed[idx]).toBeCloseTo(value))
   })
+
+  it(`packs ordinary lattice-vector origin, colors, and geometry scale`, () => {
+    const packed = pack_lattice_vector_uniform(
+      [10, 11, 12],
+      [[1, 0, 0], [0, 0.2158605, 0], [0, 0, 1]],
+      2,
+    )
+    expect(packed.byteLength).toBe(LATTICE_VECTOR_BYTES)
+    const expected = [
+      10, 11, 12, 0,
+      1, 0, 0, 1,
+      0, 0.2158605, 0, 1,
+      0, 0, 1, 1,
+      0.1, 0.35, 0.5, 0.85,
+    ]
+    expected.forEach((value, idx) => expect(packed[idx]).toBeCloseTo(value))
+  })
 })
 
 // The lean shared gizmo module owns the palette and generates the GPU literals;
@@ -120,6 +139,19 @@ describe(`gizmo color parity with $lib/colors`, () => {
         }
       })
     }
+  })
+
+  it(`mirrors the ordinary sphere gizmo endpoint, line, and back-face semantics`, () => {
+    expect(GIZMO_WGSL).toContain(`const HEAD_DIST : f32 = 1.3;`)
+    expect(GIZMO_WGSL).toContain(`const LINE_DIST : f32 = HEAD_DIST - POS_R;`)
+    expect(GIZMO_WGSL).toContain(`acc = over(acc, AXIS_COLORS[i], cov(d));`)
+    expect(GIZMO_WGSL).toContain(`let positive_front = depth[i] >= 0.0;`)
+    expect(GIZMO_WGSL).toContain(
+      `let negative_alpha = select(NEG_ALPHA, NEG_ALPHA * 0.5, positive_front);`,
+    )
+    expect(GIZMO_WGSL).toContain(
+      `acc = over(acc, sprite_color, alpha * ball_cov);`,
+    )
   })
 })
 
@@ -176,6 +208,8 @@ const make_mock_device = (
     buffer_offset: number
     bytes: Uint8Array
   }[] = []
+  const render_pipeline_descs: GPURenderPipelineDescriptor[] = []
+  const render_pipeline_labels: string[] = []
   const clear_values: { r: number; g: number; b: number; a: number }[] = []
   // Controllable device-loss promise, mirroring GPUDevice.lost. Resolving it
   // drives the renderer's one-per-lease loss subscription.
@@ -187,6 +221,8 @@ const make_mock_device = (
     counters,
     buffers,
     write_records,
+    render_pipeline_descs,
+    render_pipeline_labels,
     clear_values,
     lost,
     resolve_lost,
@@ -222,7 +258,10 @@ const make_mock_device = (
   createShaderModule: () => ({}),
   createBindGroupLayout: () => ({}),
   createPipelineLayout: () => ({}),
-  createRenderPipeline: () => ({}),
+  createRenderPipeline: (desc: GPURenderPipelineDescriptor) => {
+    render_pipeline_descs.push(desc)
+    return { label: desc.label }
+  },
   createComputePipeline: () => ({ getBindGroupLayout: () => ({}) }),
   createBindGroup: () => {
     counters.bind_group += 1
@@ -243,7 +282,9 @@ const make_mock_device = (
       const clear = desc?.colorAttachments?.[0]?.clearValue
       if (clear) clear_values.push({ ...clear })
       return {
-        setPipeline: () => {},
+        setPipeline: (pipeline: { label?: string }) => {
+          if (pipeline.label) render_pipeline_labels.push(pipeline.label)
+        },
         setBindGroup: () => {},
         draw: () => {},
         drawIndirect: () => {},
@@ -380,6 +421,76 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     // a second encoding would be brighter than display_mid. The exact display
     // assertion above therefore locks both failure modes.
     expect(clear.r).not.toBeCloseTo(linear_mid, 3)
+
+    renderer.destroy()
+  })
+
+  it(`uses 4x coverage without stippled A2C for atoms and bonds`, () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+
+    for (const label of [
+      `large-system-impostor-pipeline`,
+      `large-system-bond-render-pipeline`,
+      `large-system-bond-decorator-pipeline`,
+    ]) {
+      const desc = device.render_pipeline_descs.find((entry) => entry.label === label)
+      expect(desc, `${label} exists`).toBeDefined()
+      expect(desc?.multisample?.count).toBe(4)
+      expect(desc?.multisample?.alphaToCoverageEnabled).toBe(false)
+      const target = Array.from(desc?.fragment?.targets ?? [])[0]
+      expect(target?.blend?.color).toEqual({
+        srcFactor: `src-alpha`,
+        dstFactor: `one-minus-src-alpha`,
+        operation: `add`,
+      })
+    }
+    const decorator = device.render_pipeline_descs.find(
+      (entry) => entry.label === `large-system-bond-decorator-pipeline`,
+    )
+    expect(decorator?.depthStencil?.depthWriteEnabled).toBe(true)
+    expect(decorator?.depthStencil?.depthCompare).toBe(`less`)
+
+    renderer.destroy()
+  })
+
+  it(`draws ordinary-style lattice vector arrows through their own world-space pipeline`, () => {
+    const device = make_mock_device()
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    renderer.set_cell(
+      new Float32Array([10, 0, 0, 0, 11, 0, 0, 0, 12]),
+      true,
+      [0.2, 0.3, 0.4],
+      [1, 2, 3],
+      {
+        show: true,
+        width_scale: 2,
+        colors: [[1, 0, 0], [0, 0.2158605, 0], [0, 0, 1]],
+      },
+    )
+    renderer.render()
+
+    expect(device.render_pipeline_labels).toContain(
+      `large-system-lattice-vector-pipeline`,
+    )
+    const vector_write = device.write_records.find(
+      ({ label }) => label === `large-system-lattice-vector-uniform`,
+    )
+    expect(vector_write?.bytes.byteLength).toBe(LATTICE_VECTOR_BYTES)
+    const vector_pipeline = device.render_pipeline_descs.find(
+      ({ label }) => label === `large-system-lattice-vector-pipeline`,
+    )
+    expect(vector_pipeline?.primitive?.topology).toBe(`triangle-list`)
+    expect(vector_pipeline?.depthStencil).toMatchObject({
+      depthWriteEnabled: true,
+      depthCompare: `less`,
+    })
 
     renderer.destroy()
   })
@@ -670,6 +781,113 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     }, empty_images)
     renderer.render()
     expect(renderer.debug_bond_state().dispatches.detect).toBe(2)
+
+    renderer.destroy()
+  })
+
+  it(`clears an old active graph and rejects its in-flight result on a topology owner swap`, async () => {
+    const raw = make_mock_device({
+      validation_reads: [[2, 0], [3, 0], [4, 0]],
+    })
+    const renderer = create_large_system_renderer(
+      raw as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const n = 8
+    const positions = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) {
+      positions[i * 3] = (i % 2) * 2.4
+      positions[i * 3 + 1] = (Math.floor(i / 2) % 2) * 2.4
+      positions[i * 3 + 2] = Math.floor(i / 4) * 2.4
+    }
+    const lattice = new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20])
+    const topology = {
+      version: 1,
+      atom_count: n,
+      site_ids: Uint32Array.from({ length: n }, (_, i) => i),
+      atomic_numbers: new Uint8Array(n).fill(6),
+      radii: new Float32Array(n).fill(0.5),
+      colors: new Float32Array(n * 3).fill(0.5),
+    }
+    const owner_a = { tag: `owner-a` }
+    const owner_b = { tag: `owner-b` }
+    const replicas = {
+      version: 1,
+      dims: [1, 1, 1] as const,
+      boundary_policy: `stub` as const,
+      semantics: `visual-shared-base` as const,
+    }
+    const empty_images = {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    }
+    const set_bond_data = () => renderer.set_bond_data(
+      new Float32Array(n).fill(0.76),
+      lattice,
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
+      true,
+    )
+
+    renderer.set_packet({
+      topology,
+      frame: {
+        owner: owner_a,
+        frame_idx: 0,
+        positions_version: 0,
+        positions,
+        lattice,
+      },
+      replicas,
+    }, empty_images)
+    set_bond_data()
+    renderer.render()
+    await flush()
+    renderer.render()
+    expect(renderer.get_diagnostics().active_bond_count).toBe(2)
+    expect(renderer.debug_bond_state().graph_version).toBe(1)
+
+    // Start another A-owned candidate, then replace the topology before its
+    // validation microtask resolves.
+    renderer.set_packet({
+      topology,
+      frame: {
+        owner: owner_a,
+        frame_idx: 1,
+        positions_version: 1,
+        positions,
+        lattice,
+      },
+      replicas,
+    }, empty_images)
+    renderer.render()
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(2)
+
+    renderer.set_packet({
+      topology: { ...topology, version: 2 },
+      frame: {
+        owner: owner_b,
+        frame_idx: 0,
+        positions_version: 0,
+        positions,
+        lattice,
+      },
+      replicas,
+    }, empty_images)
+    set_bond_data()
+
+    // The Build-style owner swap must blank the old index graph immediately;
+    // waiting for B's async candidate is preferable to drawing G(A) @ frame B.
+    expect(renderer.get_diagnostics().active_bond_count).toBe(0)
+    await flush()
+    expect(renderer.debug_bond_state().graph_version).toBe(1)
+
+    renderer.render()
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(3)
+    await flush()
+    renderer.render()
+    expect(renderer.get_diagnostics().active_bond_count).toBe(4)
+    expect(renderer.debug_bond_state().graph_version).toBe(2)
 
     renderer.destroy()
   })

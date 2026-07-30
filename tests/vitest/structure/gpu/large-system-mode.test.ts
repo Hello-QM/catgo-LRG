@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { result_to_connectivity, create_large_system_mode, to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
+import {
+  create_large_system_mode,
+  result_to_connectivity,
+  to_compute_options,
+} from '$lib/structure/gpu/large-system-mode.svelte'
 
 describe(`result_to_connectivity`, () => {
   it(`translates compute pairs into bond_connectivity entries`, () => {

@@ -3,7 +3,11 @@ import { flushSync, mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
 import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
-import type { RenderPacket } from '$lib/structure/scene/render-packet'
+import type {
+  BaseBondGraph,
+  ImageInstanceTable,
+  RenderPacket,
+} from '$lib/structure/scene/render-packet'
 
 const mocks = vi.hoisted(() => {
   const renderer = {
@@ -192,6 +196,288 @@ afterEach(async () => {
 })
 
 describe(`LargeSystemOverlay authoritative packet bridge`, () => {
+  it(`publishes a physical-distinct true supercell from base-sized buffers`, async () => {
+    const physical_site_map = Uint32Array.from([0, 1, 4, 5, 2, 3, 6, 7])
+    const props = $state({
+      enabled: true,
+      structure: make_structure(),
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      supercell: [2, 2, 1] as [number, number, number],
+      replica_semantics: `physical-distinct-sites` as const,
+      physical_site_map,
+      show_bonds: `always` as const,
+      show_cell: true,
+      cell_lattice_override: [[20, 0, 0], [0, 20, 0], [0, 0, 10]],
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+
+    run_overlay_frame()
+
+    const packet = last_packet()
+    expect(packet.topology.atom_count).toBe(2)
+    expect(packet.replicas.dims).toEqual([2, 2, 1])
+    expect(packet.replicas.semantics).toBe(`physical-distinct-sites`)
+    expect(packet.replicas.physical_site_map).toBe(physical_site_map)
+    expect([...mocks.renderer.set_cell.mock.calls.at(-1)![0]]).toEqual([
+      20, 0, 0,
+      0, 20, 0,
+      0, 0, 10,
+    ])
+  })
+
+  it(`maps the materialized ordinary boundary source into the physical base packet`, async () => {
+    const structure = make_structure()
+    const physical_site_map = Uint32Array.from([0, 1, 4, 5, 2, 3, 6, 7])
+    const boundary: ImageInstanceTable = {
+      count: 2,
+      base_sites: Uint32Array.from([4, 0]),
+      jimages: Int8Array.from([
+        1, 0, 0,
+        -1, 0, 0,
+      ]),
+    }
+    const graph: BaseBondGraph = {
+      version: 12,
+      pairs: Uint32Array.from([
+        0, 1,
+        4, 5,
+        1, 4,
+        5, 0,
+      ]),
+      jimages: Int8Array.from([
+        0, 0, 0,
+        0, 0, 0,
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      kinds: Uint8Array.from([0, 0, 0, 0]),
+      strengths: Float32Array.from([1, 1, 1, 1]),
+    }
+    const props = $state({
+      enabled: true,
+      structure,
+      packet_owner_id: 31,
+      periodic_decoration_owner_id: 32,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      supercell: [2, 2, 1] as [number, number, number],
+      replica_semantics: `physical-distinct-sites` as const,
+      physical_site_map,
+      periodic_decoration_source: {
+        graph,
+        owner_id: 32,
+        atom_count: physical_site_map.length,
+        atom_images: boundary,
+        images: boundary,
+      },
+      show_bonds: `always` as const,
+      show_image_atoms: true,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+
+    const packet_call = mocks.renderer.set_packet.mock.calls.at(-1)
+    expect([...packet_call?.[0].topology.bond_graph?.pairs ?? []]).toEqual([
+      0, 1, 0, 1,
+    ])
+    expect([
+      ...packet_call?.[0].topology.bond_graph?.jimages ?? [],
+    ]).toEqual([
+      0, 0, 0,
+      -1, 0, 0,
+    ])
+    const expected_images = {
+      count: 2,
+      base_sites: Uint32Array.from([0, 0]),
+      jimages: Int8Array.from([
+        3, 0, 0,
+        -2, 0, 0,
+      ]),
+    }
+    expect(packet_call?.[1]).toStrictEqual(expected_images)
+    expect(packet_call?.[2]).toStrictEqual(expected_images)
+    expect(mocks.renderer.set_bond_data).not.toHaveBeenCalled()
+  })
+
+  it(`passes distinct ordinary atom and bond-decorator image tables`, async () => {
+    const structure = make_structure()
+    const graph: BaseBondGraph = {
+      version: 9,
+      pairs: new Uint32Array([0, 1]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array([0]),
+      strengths: new Float32Array([1]),
+    }
+    const images: ImageInstanceTable = {
+      count: 2,
+      base_sites: new Uint32Array([1, 0]),
+      jimages: new Int8Array([1, 0, 0, -1, 0, 0]),
+    }
+    const atom_images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([1]),
+      jimages: new Int8Array([1, 0, 0]),
+    }
+    const props = $state({
+      enabled: true,
+      structure,
+      packet_owner_id: 11,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      periodic_decoration_source: {
+        graph,
+        owner_id: 11,
+        atom_count: structure.sites.length,
+        atom_images,
+        images,
+      },
+      show_bonds: `always` as const,
+      show_image_atoms: true,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+
+    run_overlay_frame()
+
+    const packet_call = mocks.renderer.set_packet.mock.calls.at(-1)
+    expect(packet_call?.[0].topology.bond_graph).toStrictEqual(graph)
+    expect(packet_call?.[1]).toStrictEqual(atom_images)
+    expect(packet_call?.[2]).toStrictEqual(images)
+    expect(mocks.renderer.set_bond_data).not.toHaveBeenCalled()
+    expect(mocks.renderer.set_bond_rules).not.toHaveBeenCalled()
+  })
+
+  it(`rejects a same-sized ordinary graph owned by the previous structure`, async () => {
+    const structure = make_structure()
+    const previous_owner = make_structure()
+    const graph: BaseBondGraph = {
+      version: 9,
+      pairs: new Uint32Array([0, 1]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array([0]),
+      strengths: new Float32Array([1]),
+    }
+    const empty_images: ImageInstanceTable = {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    }
+    const props = $state({
+      enabled: true,
+      structure,
+      packet_owner_id: 12,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      periodic_decoration_source: {
+        graph,
+        owner_id: 11,
+        atom_count: previous_owner.sites.length,
+        atom_images: empty_images,
+        images: empty_images,
+      },
+      show_bonds: `always` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+
+    run_overlay_frame()
+
+    expect(last_packet().topology.bond_graph).toBeUndefined()
+    expect(mocks.renderer.set_bond_data).toHaveBeenCalled()
+  })
+
+  it(`expands ordinary 1x images onto the visual-supercell outer surface`, async () => {
+    const structure = make_structure()
+    const graph: BaseBondGraph = {
+      version: 10,
+      pairs: new Uint32Array([0, 1]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array([0]),
+      strengths: new Float32Array([1]),
+    }
+    const atom_images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([1]),
+      jimages: new Int8Array([1, 0, 0]),
+    }
+    const images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([0]),
+      jimages: new Int8Array([-1, 0, 0]),
+    }
+    const props = $state({
+      enabled: true,
+      structure,
+      packet_owner_id: 13,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      periodic_decoration_source: {
+        graph,
+        owner_id: 13,
+        atom_count: structure.sites.length,
+        atom_images,
+        images,
+      },
+      supercell: [2, 2, 1] as [number, number, number],
+      show_bonds: `always` as const,
+      show_image_atoms: true,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+
+    const packet_call = mocks.renderer.set_packet.mock.calls.at(-1)
+    expect(packet_call?.[1]).toStrictEqual({
+      count: 2,
+      base_sites: new Uint32Array([1, 1]),
+      jimages: new Int8Array([
+        2, 0, 0,
+        2, 1, 0,
+      ]),
+    })
+    expect(packet_call?.[2]).toStrictEqual({
+      count: 2,
+      base_sites: new Uint32Array([0, 0]),
+      jimages: new Int8Array([
+        -1, 0, 0,
+        -1, 1, 0,
+      ]),
+    })
+  })
+
   it(`consumes authoritative colors and view transform from one visual snapshot`, async () => {
     const colors = new Float32Array([1, 0, 0, 0, 1, 0])
     const initial = make_visual_source(1, colors)
@@ -241,6 +527,10 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
         expect.closeTo(0, 5),
       ]),
     )
+    expect(mocks.renderer.set_cell.mock.calls.at(-1)?.[4]).toMatchObject({
+      show: true,
+      width_scale: 1,
+    })
   })
 
   it(`defers set_packet until an exact authoritative base color buffer is ready`, async () => {
@@ -366,6 +656,77 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(rotated.frame.positions[2]).toBeCloseTo(0, 5)
   })
 
+  it(`streams translation and rotation previews before the shared view transform`, async () => {
+    const colors = new Float32Array([1, 0, 0, 0, 1, 0])
+    const props = $state({
+      enabled: true,
+      structure: make_structure(),
+      frame_positions: new Float32Array([2, 0, 0, 0, 2, 0]),
+      realtime_position_overrides: null as
+        | ReadonlyMap<number, readonly [number, number, number]>
+        | null,
+      visual_state_source: make_visual_source(
+        1,
+        colors,
+        [0, 0, Math.PI / 2],
+      ).source,
+      show_bonds: `never` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+    const base = last_packet()
+    expect(Array.from(base.frame.positions)).toEqual([
+      expect.closeTo(0, 5),
+      expect.closeTo(2, 5),
+      expect.closeTo(0, 5),
+      expect.closeTo(-2, 5),
+      expect.closeTo(0, 5),
+      expect.closeTo(0, 5),
+    ])
+    run_until_sleep()
+
+    props.realtime_position_overrides = new Map([
+      [0, [3, 0, 0] as const],
+      [1, [0, 4, 0] as const],
+    ])
+    await settle()
+    expect(
+      [...raf_callbacks.values()].filter((callback) => callback.name === `frame`),
+    ).toHaveLength(1)
+    run_overlay_frame()
+
+    const preview = last_packet()
+    expect(preview.frame.positions_version).toBeGreaterThan(
+      base.frame.positions_version,
+    )
+    expect(Array.from(preview.frame.positions)).toEqual([
+      expect.closeTo(0, 5),
+      expect.closeTo(3, 5),
+      expect.closeTo(0, 5),
+      expect.closeTo(-4, 5),
+      expect.closeTo(0, 5),
+      expect.closeTo(0, 5),
+    ])
+    expect(preview.topology).toBe(base.topology)
+    expect(preview.replicas).toBe(base.replicas)
+
+    props.realtime_position_overrides = new Map()
+    await settle()
+    run_overlay_frame()
+    const restored = last_packet()
+    expect(restored.frame.positions_version).toBeGreaterThan(
+      preview.frame.positions_version,
+    )
+    expect(Array.from(restored.frame.positions)).toEqual(
+      Array.from(base.frame.positions),
+    )
+  })
+
   it(`wakes a suspended RAF loop exactly once for a bond-outline-only revision`, async () => {
     const colors = new Float32Array([1, 0, 0, 0, 1, 0])
     const props = $state({
@@ -423,6 +784,9 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     run_overlay_frame()
     expect(mocks.renderer.set_ghost_opacity).toHaveBeenCalledOnce()
     expect(mocks.renderer.set_ghost_opacity).toHaveBeenLastCalledWith(0.2)
+    expect(mocks.renderer.set_bond_style).toHaveBeenCalledWith(
+      expect.objectContaining({ radius: 0.07 }),
+    )
     run_until_sleep()
 
     mocks.renderer.set_ghost_opacity.mockClear()
@@ -511,6 +875,7 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
       visual_state_source: make_visual_source(1, element).source,
       supercell: [2, 1, 1] as [number, number, number],
       show_image_atoms: true,
+      hide_incomplete_bonds: false,
       show_bonds: `never` as const,
     })
     const component = mount(LargeSystemOverlay, {
@@ -571,5 +936,16 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(mocks.renderer.set_packet.mock.calls.at(-1)?.[1]).toMatchObject({
       count: 0,
     })
+
+    props.show_image_atoms = false
+    props.hide_incomplete_bonds = true
+    await settle()
+    run_overlay_frame()
+    expect(last_packet().replicas.boundary_policy).toBe(`hide`)
+
+    props.hide_incomplete_bonds = false
+    await settle()
+    run_overlay_frame()
+    expect(last_packet().replicas.boundary_policy).toBe(`stub`)
   })
 })

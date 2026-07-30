@@ -24,6 +24,12 @@
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { PeriodicDecorationSource } from '$lib/structure/scene/periodic-decoration-snapshot'
+  import {
+    build_physical_supercell_render_source,
+    physical_supercell_render_source_for,
+    register_physical_supercell_render_source,
+  } from '$lib/structure/scene/physical-supercell-render-source'
   import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
@@ -268,6 +274,8 @@
   // StructureScene is the single visual-state publisher. Its visible revision
   // wakes the WebGPU overlay even after the overlay frame loop has suspended.
   let scene_visual_state_source = $state<VisualStateSource | null>(null)
+  let scene_periodic_decoration_source =
+    $state<PeriodicDecorationSource | null>(null)
   let scene_camera_revision = $state(0)
 
   function note_scene_camera_change(revision_before: number) {
@@ -2307,6 +2315,50 @@
       trajectory_packet_active,
     }),
   )
+  // A true Build supercell is still fully materialized in `structure`, but a
+  // positive diagonal transform can keep rendering its provenance-backed base
+  // cell through the same WebGPU instancing path as the bottom-right visual
+  // control.  Any state that can distinguish physical replicas (selection or a
+  // per-site style), a trajectory, a transformed cell view, or another visual
+  // replication factor falls back to the complete materialized topology.
+  let physical_supercell_render = $derived.by(() => {
+    if (
+      !large_system_mode ||
+      !structure ||
+      trajectory_packet_active ||
+      visual_replicas_active ||
+      cell_type !== `original` ||
+      selected_sites.length > 0 ||
+      site_radius_overrides.size > 0 ||
+      site_color_overrides.size > 0
+    ) return null
+    return physical_supercell_render_source_for(structure)
+  })
+  // Proxy-safe owner tokens for the ordinary-graph bridge. Object identity is
+  // resolved here, before values cross bindable/$state component boundaries;
+  // consumers compare the numeric token rather than raw-vs-proxy objects.
+  const render_owner_ids = new WeakMap<object, number>()
+  let next_render_owner_id = 0
+  function render_owner_id(owner: object | null | undefined): number {
+    if (!owner) return 0
+    const known = render_owner_ids.get(owner)
+    if (known !== undefined) return known
+    const created = ++next_render_owner_id
+    render_owner_ids.set(owner, created)
+    return created
+  }
+  let scene_bond_owner_id = $derived(
+    render_owner_id((supercell_structure ?? structure) as object | undefined),
+  )
+  let large_overlay_structure = $derived(
+    physical_supercell_render?.base_structure ??
+      (trajectory_packet_active
+        ? structure
+        : (transform.base_structure ?? structure)),
+  )
+  let large_overlay_owner_id = $derived(
+    render_owner_id(large_overlay_structure as object | undefined),
+  )
   // ── Shared render packet ────────────────────────────────────────────────────
   // ONE packet per effective frame: the BASE scientific structure (owner) +
   // exactly 3N current positions + the current frame lattice + visual replica
@@ -3025,10 +3077,21 @@
     // (pre-supercell) structure, not the materialized output.
     snapshot: (live) => $state.snapshot(live) as PymatgenStructure,
     push_undo: push_to_undo,
-    // handle_structure_replace sets the structure and resets the renderer's
-    // visual supercell_scaling to 1x1x1 so factors don't compound.
-    publish: ({ structure: new_structure }) =>
-      build.handle_structure_replace(new_structure),
+    // Keep the materialized structure as the scientific owner, but retain the
+    // executor's axis-aligned replication provenance as a render-only WebGPU
+    // source.  Other edits replace the structure identity and automatically
+    // miss this WeakMap entry, so translational-equivalence reuse cannot go
+    // stale. handle_structure_replace also resets visual scaling to 1x1x1.
+    publish: (execution) => {
+      const render_source = build_physical_supercell_render_source(execution)
+      build.handle_structure_replace(execution.structure)
+      if (render_source && structure) {
+        // Svelte may expose the assigned object through a reactive proxy;
+        // register both identities without writing metadata into exports.
+        register_physical_supercell_render_source(execution.structure, render_source)
+        register_physical_supercell_render_source(structure, render_source)
+      }
+    },
     history_token: () => `structure-supercell-${++supercell_history_seq}`,
   })
 
@@ -4660,6 +4723,7 @@
           <StructureScene
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
+            bond_owner_id={scene_bond_owner_id}
             {webgl_suspended}
             {trajectory_frame_positions}
             {trajectory_frame_forces}
@@ -4673,6 +4737,7 @@
             {render_packet}
             {...scene_props}
             {hud_safe}
+            gizmo={scene_props.show_gizmo}
             initial_view={persist_settings ? saved_default_view : null}
             {show_image_atoms}
             {clip_center}
@@ -4775,6 +4840,7 @@
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
             bind:visual_state_source={scene_visual_state_source}
+            bind:periodic_decoration_source={scene_periodic_decoration_source}
             bind:camera_revision={scene_camera_revision}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
@@ -4844,14 +4910,22 @@
           <LargeSystemOverlay
             enabled={large_system_mode}
             {camera}
-            structure={structure}
+            structure={large_overlay_structure}
+            packet_owner_id={large_overlay_owner_id}
+            periodic_decoration_owner_id={scene_bond_owner_id}
             frame_positions={get_trajectory_frame_source
               ? presented_frame_source?.positions ?? null
               : trajectory_frame_positions}
             frame_lattice={get_trajectory_frame_source
               ? presented_frame_source?.lattice ?? null
               : trajectory_frame_lattice}
-            supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
+            realtime_position_overrides={interaction.realtime_position_overrides}
+            supercell={physical_supercell_render?.dims ??
+              (visual_replicas_active ? gpu_supercell_factors : [1, 1, 1])}
+            replica_semantics={physical_supercell_render
+              ? `physical-distinct-sites`
+              : `visual-shared-base`}
+            physical_site_map={physical_supercell_render?.physical_site_map}
             {show_image_atoms}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}
@@ -4869,10 +4943,20 @@
             {image_atom_opacity}
             show_bonds={scene_props.show_bonds}
             show_cell={scene_props.show_cell}
-            cell_edge_color={scene_props.cell_edge_color}
+            cell_edge_color={lattice_props.cell_edge_color}
+            cell_edge_width={lattice_props.cell_edge_width}
+            cell_lattice_override={physical_supercell_render &&
+              structure && `lattice` in structure
+                ? structure.lattice.matrix
+                : null}
+            show_cell_vectors={lattice_props.show_cell_vectors}
+            show_gizmo={scene_props.show_gizmo}
             {trajectory_positions_version}
             {trajectory_step_idx}
             visual_state_source={scene_visual_state_source}
+            periodic_decoration_source={trajectory_packet_active
+              ? null
+              : scene_periodic_decoration_source}
             {hud_safe}
             {selected_sites}
             on_pick={handle_overlay_pick}

@@ -6,7 +6,11 @@
     invalidate_webgpu_lease,
   } from '$lib/structure/gpu/webgpu-context'
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
-  import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
+  import {
+    apply_position_overrides,
+    pack_lattice,
+    pack_positions,
+  } from '$lib/structure/gpu/frame-buffers'
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
   import { encode_bond_rules, type BondDistanceRuleLike } from '$lib/structure/gpu/bond-rules'
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
@@ -40,9 +44,20 @@
   } from '$lib/structure/rendering/gizmo'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type {
+    BaseBondGraph,
     ImageInstanceTable,
     RenderPacket,
+    ReplicaSemantics,
   } from '$lib/structure/scene/render-packet'
+  import { logical_site_for_pick } from '$lib/structure/scene/replica-layout'
+  import {
+    expand_ordinary_image_table,
+    type PeriodicDecorationSource,
+  } from '$lib/structure/scene/periodic-decoration-snapshot'
+  import {
+    map_physical_periodic_decoration_to_base,
+    type PhysicalPeriodicDecoration,
+  } from '$lib/structure/scene/physical-supercell-render-source'
 
   let {
     enabled = false,
@@ -61,17 +76,27 @@
     image_atom_opacity = 1,
     show_bonds = `crystals`,
     show_cell = false,
-    cell_edge_color = `#808080`,
+    cell_edge_color = DEFAULTS.structure.cell_edge_color,
+    cell_edge_width = DEFAULTS.structure.cell_edge_width,
+    cell_lattice_override = null,
+    show_cell_vectors = DEFAULTS.structure.show_cell_vectors,
+    show_gizmo = DEFAULTS.structure.show_gizmo,
     frame_positions = undefined,
     frame_lattice = undefined,
+    realtime_position_overrides = null,
     trajectory_positions_version = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
     selected_sites = [],
     on_pick = undefined,
     supercell = [1, 1, 1],
+    replica_semantics = `visual-shared-base`,
+    physical_site_map = undefined,
+    packet_owner_id = 0,
+    periodic_decoration_owner_id = 0,
     show_image_atoms = false,
     visual_state_source = null,
+    periodic_decoration_source = null,
     hud_safe = EMPTY_HUD_SAFE_AREA,
   }: {
     enabled?: boolean
@@ -125,6 +150,16 @@
      *  (DEFAULTS.structure.cell_edge_color = `#808080` grey). Converted to linear
      *  RGB the SAME way atom colors are. */
     cell_edge_color?: string
+    /** Lattice arrow width follows the same cell-edge-width scale as Lattice.svelte. */
+    cell_edge_width?: number
+    /** Optional scientific/output cell used only for the box and a/b/c arrows.
+     *  A physical true-supercell packet renders with a smaller base lattice,
+     *  while its visible unit cell must remain the full materialized lattice. */
+    cell_lattice_override?: number[][] | null
+    /** Show a/b/c world-space lattice arrows whenever the cell itself is shown. */
+    show_cell_vectors?: boolean
+    /** Mirror the ordinary viewer's orientation-gizmo visibility. */
+    show_gizmo?: boolean
     /** Direct BASE trajectory frame positions (exactly 3N floats). Never
      *  derived from the WebGL/displayed renderer. null/undefined falls back to
      *  the base structure's static site xyz. */
@@ -132,6 +167,12 @@
     /** CURRENT frame lattice for variable-cell trajectories (rows a,b,c).
      *  null/undefined falls back to the base structure lattice. */
     frame_lattice?: number[][] | null | undefined
+    /** Transient base-site xyz replacements produced every animation frame
+     *  while selected atoms are translated or rotated. These are visual-only
+     *  until the interaction controller commits them to `structure`. */
+    realtime_position_overrides?:
+      | ReadonlyMap<number, readonly [number, number, number]>
+      | null
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
@@ -155,7 +196,17 @@
      *  the overlay instances `base_count × nx·ny·nz` spheres on the GPU, each
      *  offset by ix·a + iy·b + iz·c. Default [1,1,1] ⇒ ncells = 1 ⇒ atom = inst,
      *  zero offset ⇒ byte-identical to the non-supercell draw. */
-    supercell?: [number, number, number]
+    supercell?: readonly [number, number, number]
+    /** A true Build supercell can render its base topology by instancing while
+     *  retaining unique physical site ids for editing/export selection. */
+    replica_semantics?: ReplicaSemantics
+    physical_site_map?: Uint32Array
+    /** Parent-issued identity token for `structure` (proxy-safe). */
+    packet_owner_id?: number
+    /** Owner of the materialized ordinary boundary snapshot. This differs from
+     *  packet_owner_id only while a true Build supercell renders through its
+     *  reconstructed base-cell fast path. */
+    periodic_decoration_owner_id?: number
     /** Viewer `show_image_atoms` policy. true selects packet boundary policy
      *  `ghost-images`: sparse ghosts draw beyond the outer boundary and outside
      *  bonds complete to them for ANY visual-supercell dims. false selects
@@ -167,6 +218,10 @@
      *  called exactly once by each active frame and that one snapshot drives
      *  every visual adapter for the frame. */
     visual_state_source?: VisualStateSource | null
+    /** Final ordinary-mode graph plus aligned boundary atom/decorator
+     *  ownership. Static frames use this instead of running a second
+     *  bond/image algorithm. */
+    periodic_decoration_source?: PeriodicDecorationSource | null
     /** Pane HUD safe-area insets (CSS px) — the SAME hud_safe StructureScene
      *  hands its WebGL gizmo (`offset: {left: 5+l, bottom: 5+b}`), so the
      *  overlay's corner gizmo dodges a docked toolbar identically. */
@@ -195,10 +250,143 @@
   // set_supercell / set_show_images fan-out.
   const packet_builder = create_render_packet_builder()
   let last_pushed_packet: RenderPacket | null = null
+  let last_pushed_atom_images: ImageInstanceTable | null = null
+  let last_pushed_decoration_images: ImageInstanceTable | null = null
   const EMPTY_IMAGE_TABLE: ImageInstanceTable = {
     count: 0,
     base_sites: new Uint32Array(0),
     jimages: new Int8Array(0),
+  }
+  let expanded_periodic_source:
+    | PeriodicDecorationSource
+    | PhysicalPeriodicDecoration
+    | null = null
+  let expanded_periodic_dims_sig = ``
+  let expanded_periodic_preexpanded = false
+  let expanded_atom_images: ImageInstanceTable = EMPTY_IMAGE_TABLE
+  let expanded_decoration_images: ImageInstanceTable = EMPTY_IMAGE_TABLE
+  let physical_periodic_source: PeriodicDecorationSource | null = null
+  let physical_periodic_map: Uint32Array | null = null
+  let physical_periodic_dims_sig = ``
+  let physical_periodic_base_count = -1
+  let mapped_physical_periodic: PhysicalPeriodicDecoration | null = null
+
+  /** Memoized outer-surface expansion of the ordinary 1× image streams.
+   *  Keeping this at the adapter boundary preserves source identity on idle
+   *  frames and prevents a visual-supercell change from interpreting +1 image
+   *  rows as interior cells. */
+  function resolve_periodic_image_tables(
+    source: PeriodicDecorationSource | PhysicalPeriodicDecoration | null,
+    dims: readonly [number, number, number],
+    preexpanded = false,
+  ): {
+    atom_images: ImageInstanceTable
+    decoration_images: ImageInstanceTable
+  } {
+    if (!source) {
+      expanded_periodic_source = null
+      expanded_periodic_dims_sig = ``
+      expanded_periodic_preexpanded = false
+      expanded_atom_images = EMPTY_IMAGE_TABLE
+      expanded_decoration_images = EMPTY_IMAGE_TABLE
+      return {
+        atom_images: expanded_atom_images,
+        decoration_images: expanded_decoration_images,
+      }
+    }
+    const dims_sig = `${dims[0]},${dims[1]},${dims[2]}`
+    if (
+      source !== expanded_periodic_source ||
+      dims_sig !== expanded_periodic_dims_sig ||
+      preexpanded !== expanded_periodic_preexpanded
+    ) {
+      expanded_periodic_source = source
+      expanded_periodic_dims_sig = dims_sig
+      expanded_periodic_preexpanded = preexpanded
+      expanded_atom_images = preexpanded
+        ? source.atom_images
+        : expand_ordinary_image_table(source.atom_images, dims)
+      expanded_decoration_images = preexpanded
+        ? source.images
+        : expand_ordinary_image_table(source.images, dims)
+    }
+    return {
+      atom_images: expanded_atom_images,
+      decoration_images: expanded_decoration_images,
+    }
+  }
+
+  function resolve_physical_periodic_source(
+    source: PeriodicDecorationSource,
+    map: Uint32Array,
+    dims: readonly [number, number, number],
+    base_count: number,
+  ): PhysicalPeriodicDecoration | null {
+    const dims_sig = `${dims[0]},${dims[1]},${dims[2]}`
+    if (
+      source !== physical_periodic_source ||
+      map !== physical_periodic_map ||
+      dims_sig !== physical_periodic_dims_sig ||
+      base_count !== physical_periodic_base_count
+    ) {
+      physical_periodic_source = source
+      physical_periodic_map = map
+      physical_periodic_dims_sig = dims_sig
+      physical_periodic_base_count = base_count
+      mapped_physical_periodic = map_physical_periodic_decoration_to_base(
+        source,
+        map,
+        dims,
+        base_count,
+      )
+    }
+    return mapped_physical_periodic
+  }
+  let authoritative_packet_source: RenderPacket | null = null
+  let authoritative_graph_source: BaseBondGraph | null = null
+  let authoritative_packet: RenderPacket | null = null
+  let authoritative_bonds_active = false
+
+  function source_matches_owner(
+    source: PeriodicDecorationSource | null,
+    owner_id: number,
+    atom_count: number,
+  ): source is PeriodicDecorationSource {
+    if (!source) return false
+    if (source.owner_id !== owner_id || source.atom_count !== atom_count) {
+      return false
+    }
+    for (let idx = 0; idx < source.graph.pairs.length; idx++) {
+      if (source.graph.pairs[idx] >= atom_count) return false
+    }
+    for (let idx = 0; idx < source.images.count; idx++) {
+      if (source.images.base_sites[idx] >= atom_count) return false
+    }
+    for (let idx = 0; idx < source.atom_images.count; idx++) {
+      if (source.atom_images.base_sites[idx] >= atom_count) return false
+    }
+    return true
+  }
+
+  function attach_authoritative_graph(
+    packet: RenderPacket,
+    graph: BaseBondGraph,
+  ): RenderPacket {
+    if (
+      authoritative_packet &&
+      authoritative_packet_source === packet &&
+      authoritative_graph_source === graph
+    ) return authoritative_packet
+    authoritative_packet_source = packet
+    authoritative_graph_source = graph
+    authoritative_packet = {
+      ...packet,
+      topology: {
+        ...packet.topology,
+        bond_graph: graph,
+      },
+    }
+    return authoritative_packet
   }
 
   // Cached atom buffers, rebuilt only when their authoritative inputs change
@@ -414,21 +602,49 @@
   function sync_cell(): boolean {
     if (!renderer) return false
     const [cr, cg, cb] = hex_to_linear_rgb(cell_edge_color)
+    const vector_colors = [
+      hex_to_linear_rgb(`red`),
+      hex_to_linear_rgb(`green`),
+      hex_to_linear_rgb(`blue`),
+    ] as const
+    const width_scale = cell_edge_width / DEFAULTS.structure.cell_edge_width
     const origin = apply_view_transform_to_origin(current_view_transform())
+    const raw_cell_lattice =
+      cell_lattice_override && cell_lattice_override.length === 3
+        ? new Float32Array([
+            cell_lattice_override[0][0], cell_lattice_override[0][1],
+            cell_lattice_override[0][2], cell_lattice_override[1][0],
+            cell_lattice_override[1][1], cell_lattice_override[1][2],
+            cell_lattice_override[2][0], cell_lattice_override[2][1],
+            cell_lattice_override[2][2],
+          ])
+        : bond_lattice
+    const visible_cell_lattice = cell_lattice_override
+      ? apply_view_transform_to_lattice(
+          raw_cell_lattice,
+          current_view_transform(),
+        )
+      : raw_cell_lattice
     let lat_sig = ``
-    for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
+    for (let i = 0; i < 9; i++) lat_sig += `${visible_cell_lattice[i]};`
     const sig =
       `${show_cell}|${cr},${cg},${cb}|` +
+      `${show_cell_vectors}|${width_scale}|` +
       `${origin[0]},${origin[1]},${origin[2]}|${lat_sig}`
     if (sig === cell_sig) return false
     cell_sig = sig
     // bond_periodic means the structure/current frame carries a lattice; pass
     // null otherwise so molecules never draw a (degenerate) box.
     renderer.set_cell(
-      bond_periodic ? bond_lattice : null,
+      bond_periodic ? visible_cell_lattice : null,
       show_cell,
       [cr, cg, cb],
       origin,
+      {
+        show: show_cell_vectors,
+        width_scale,
+        colors: vector_colors,
+      },
     )
     return true
   }
@@ -449,6 +665,9 @@
   let last_step_idx = -1
   let last_frame_positions_source: Float32Array | null | undefined = undefined
   let last_frame_lattice_source: number[][] | null | undefined = undefined
+  let last_realtime_position_overrides:
+    | ReadonlyMap<number, readonly [number, number, number]>
+    | null = null
   // Current BASE-frame xyz (exactly 3N). Identity view transforms consume direct
   // trajectory arrays zero-copy; non-identity transforms allocate one rotated
   // frame buffer. A static fallback is packed only when direct input is absent.
@@ -473,6 +692,7 @@
     last_step_idx = trajectory_step_idx
     last_frame_positions_source = frame_positions
     last_frame_lattice_source = frame_lattice
+    last_realtime_position_overrides = realtime_position_overrides
     const view_transform = current_view_transform()
     last_view_transform_sig = view_transform.signature
     const sites = structure?.sites
@@ -483,9 +703,13 @@
       return
     }
     const expected = sites.length * 3
-    const source_positions = frame_positions?.length === expected
+    const base_positions = frame_positions?.length === expected
       ? frame_positions
       : pack_positions(sites)
+    const source_positions = apply_position_overrides(
+      base_positions,
+      realtime_position_overrides,
+    )
     packet_frame_positions = apply_view_transform_to_positions(
       source_positions,
       view_transform,
@@ -791,11 +1015,15 @@
     const scale_y = rect.height > 0 ? canvas.height / rect.height : 1
     const x = (client_x - rect.left) * scale_x
     const y = (client_y - rect.top) * scale_y
-    // pick() returns a ReplicaPickResult {kind, base_site, cell, ghost}. This
-    // pane renders visual-shared-base replicas, so every replica AND ghost
-    // folds back to its base site (design §7.3) — base_site IS the logical id.
+    // Resolve through the packet layout: visual replicas fold to one base id;
+    // true-supercell replicas map to their unique materialized physical site.
     const result = await renderer.pick(x, y)
-    on_pick(result.kind === `atom` ? result.base_site : -1)
+    const replicas = last_pushed_packet?.replicas
+    on_pick(
+      result.kind === `atom` && replicas
+        ? logical_site_for_pick(result, replicas)
+        : -1,
+    )
   }
 
   /** True if `next` differs from the last uploaded camera uniform (epsilon
@@ -889,6 +1117,7 @@
       (trajectory_positions_version?.v ?? -1) !== last_pos_version ||
       frame_positions !== last_frame_positions_source ||
       frame_lattice !== last_frame_lattice_source ||
+      realtime_position_overrides !== last_realtime_position_overrides ||
       current_view_transform().signature !== last_view_transform_sig
     ) {
       refresh_frame_positions()
@@ -908,7 +1137,7 @@
         Math.max(1, Math.floor(supercell?.[1] ?? 1)),
         Math.max(1, Math.floor(supercell?.[2] ?? 1)),
       ]
-      const packet = packet_builder.build({
+      const base_packet = packet_builder.build({
         structure,
         frame_positions: packet_frame_positions.length > 0
           ? packet_frame_positions
@@ -917,13 +1146,69 @@
         frame_idx: trajectory_step_idx,
         positions_version: packet_positions_revision,
         dims,
-        boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
+        boundary_policy: show_image_atoms
+          ? `ghost-images`
+          : hide_incomplete_bonds
+            ? `hide`
+            : `stub`,
+        replica_semantics,
+        physical_site_map,
         colors: atom_colors,
         radii: atom_radii.length > 0 ? atom_radii : null,
       })
-      if (packet !== last_pushed_packet) {
-        renderer.set_packet(packet, EMPTY_IMAGE_TABLE)
+      const direct_source = source_matches_owner(
+        periodic_decoration_source,
+        packet_owner_id,
+        base_packet.topology.atom_count,
+      )
+        ? periodic_decoration_source
+        : null
+      const physical_source = direct_source === null &&
+          replica_semantics === `physical-distinct-sites` &&
+          physical_site_map &&
+          source_matches_owner(
+            periodic_decoration_source,
+            periodic_decoration_owner_id,
+            physical_site_map.length,
+          )
+        ? resolve_physical_periodic_source(
+          periodic_decoration_source,
+          physical_site_map,
+          dims,
+          base_packet.topology.atom_count,
+        )
+        : null
+      const source = direct_source ?? physical_source
+      const source_is_preexpanded = physical_source !== null
+      const packet = source
+        ? attach_authoritative_graph(base_packet, source.graph)
+        : base_packet
+      const next_authoritative = source !== null
+      if (next_authoritative !== authoritative_bonds_active) {
+        authoritative_bonds_active = next_authoritative
+        bonds_dirty = true
+      }
+      const {
+        atom_images: packet_atom_images,
+        decoration_images: packet_decoration_images,
+      } = resolve_periodic_image_tables(
+        source,
+        dims,
+        source_is_preexpanded,
+      )
+      if (
+        packet !== last_pushed_packet ||
+        packet_atom_images !== last_pushed_atom_images ||
+        packet_decoration_images !== last_pushed_decoration_images
+      ) {
+        renderer.set_packet(
+          packet,
+          packet_atom_images,
+          packet_decoration_images,
+        )
         last_pushed_packet = packet
+        last_pushed_atom_images = packet_atom_images
+        last_pushed_decoration_images = packet_decoration_images
         dirty = true
       }
     }
@@ -948,7 +1233,7 @@
     // draw), so the overlay shows no bonds — atoms + cell box still render. We
     // still track the rebuild state so the next time bonds turn back on the
     // changed inputs are re-pushed (bonds_dirty was set on enable above).
-    if (bonds_visible) {
+    if (bonds_visible && !authoritative_bonds_active) {
       rebuild_bonds_if_needed()
       if (bonds_dirty) {
         renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
@@ -1057,6 +1342,12 @@
     // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
     // the (possibly memoized-identical) packet is re-pushed and fully uploads.
     last_pushed_packet = null
+    last_pushed_atom_images = null
+    last_pushed_decoration_images = null
+    authoritative_packet_source = null
+    authoritative_graph_source = null
+    authoritative_packet = null
+    authoritative_bonds_active = false
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
@@ -1094,7 +1385,11 @@
     // Seed the corner-gizmo layout with the pane's current HUD safe-area before
     // the first size derivation (`renderer` is not reactive state, so the
     // hud_safe $effect below only covers LATER changes, not this initial value).
-    r.set_gizmo_layout({ safe_left: hud_safe.l, safe_bottom: hud_safe.b })
+    r.set_gizmo_layout({
+      safe_left: hud_safe.l,
+      safe_bottom: hud_safe.b,
+      show: show_gizmo,
+    })
     // ── Device-loss transaction (Bonds T6) ─────────────────────────────────
     // The renderer holds the ONE `device.lost` subscription for this lease
     // and has already gated every submission (render/pick/setters no-op,
@@ -1205,6 +1500,7 @@
       site_radius_overrides,
       bonding_options,
       bond_distance_rules,
+      periodic_decoration_source,
     ]
     if (renderer) {
       needs_render = true
@@ -1219,8 +1515,9 @@
     // seeded at renderer creation; this covers changes while the overlay is up.)
     const safe_left = hud_safe.l
     const safe_bottom = hud_safe.b
+    const show = show_gizmo
     if (renderer) {
-      renderer.set_gizmo_layout({ safe_left, safe_bottom })
+      renderer.set_gizmo_layout({ safe_left, safe_bottom, show })
       needs_render = true
       wake()
     }
@@ -1236,6 +1533,17 @@
       trajectory_positions_version?.v,
       trajectory_step_idx,
     ]
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Selected-atom translation and rotation both publish immutable transient
+    // override maps once per interaction RAF. Wake the WebGPU loop so the next
+    // packet uploads those positions before the pointer is released.
+    void [realtime_position_overrides, realtime_position_overrides?.size]
     if (renderer) {
       needs_render = true
       wake()
@@ -1302,7 +1610,7 @@
     // cell on/off or recoloring it revives a suspended loop; the frame re-pushes
     // via sync_cell and repaints once. (Lattice changes are caught by the
     // structure/per-frame wakes, which update bond_lattice.)
-    void [show_cell, cell_edge_color]
+    void [show_cell, cell_edge_color, cell_edge_width, show_cell_vectors]
     if (renderer) {
       needs_render = true
       wake()
