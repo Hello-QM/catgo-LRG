@@ -16,6 +16,9 @@ const IS_STATIC =
   (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) ||
   isMobile()
 const PUBCHEM_API = `https://pubchem.ncbi.nlm.nih.gov/rest/pug`
+const PUBCHEM_SEARCH_PROPERTIES =
+  `MolecularFormula,MolecularWeight,IUPACName`
+const MAX_DIRECT_ELEMENT_CIDS = 2000
 
 // API base URL - same as compute.ts
 let API_BASE = _DEFAULT_API
@@ -219,6 +222,64 @@ function parse_elements_from_formula(formula: string): string[] {
   return matches ? [...new Set(matches)] : []
 }
 
+interface PubChemProperty {
+  CID: number
+  MolecularFormula?: string
+  MolecularWeight?: number | string
+  IUPACName?: string
+}
+
+function properties_to_compounds(
+  properties: PubChemProperty[],
+): PubChemSearchCompound[] {
+  return properties.map((property) => {
+    const parsed_weight = Number(property.MolecularWeight)
+    return {
+      cid: property.CID,
+      formula: property.MolecularFormula || ``,
+      weight: Number.isFinite(parsed_weight) ? parsed_weight : undefined,
+      name: property.IUPACName,
+    }
+  })
+}
+
+async function fetch_direct_list_key(search_url: string): Promise<{
+  list_key: string
+  size: number
+} | null> {
+  const response = await fetch(search_url)
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`PubChem search failed: ${response.status}`)
+  const data = await response.json() as {
+    IdentifierList?: { ListKey?: string; Size?: number }
+  }
+  const list_key = data.IdentifierList?.ListKey
+  if (!list_key) return null
+  return {
+    list_key,
+    size: data.IdentifierList?.Size ?? 0,
+  }
+}
+
+async function fetch_direct_list_properties(
+  list_key: string,
+  offset: number,
+  limit: number,
+): Promise<PubChemProperty[]> {
+  if (limit <= 0) return []
+  const page_url =
+    `${PUBCHEM_API}/compound/listkey/${encodeURIComponent(list_key)}` +
+    `/property/${PUBCHEM_SEARCH_PROPERTIES}/JSON` +
+    `?listkey_start=${offset}&listkey_count=${limit}`
+  const response = await fetch(page_url)
+  if (response.status === 404) return []
+  if (!response.ok) throw new Error(`PubChem property fetch failed: ${response.status}`)
+  const data = await response.json() as {
+    PropertyTable?: { Properties?: PubChemProperty[] }
+  }
+  return data.PropertyTable?.Properties || []
+}
+
 /**
  * Autocomplete PubChem compound names for a partial search term.
  * Returns an array of name suggestions (up to `limit`).
@@ -294,7 +355,8 @@ export async function search_pubchem_compounds(
   }
 
   // Check cache (include search_type and offset in key)
-  const cache_key = `${search_type}:${term}:${elements?.join(`,`) ?? ``}:${offset}`
+  const cache_key =
+    `${search_type}:${term}:${normalized_elements?.join(`,`) ?? ``}:${limit}:${offset}`
   const now = Date.now()
   if (
     cached_search_results[cache_key] &&
@@ -310,51 +372,67 @@ export async function search_pubchem_compounds(
 
     if (IS_STATIC) {
       // Static mode: query PubChem REST API directly (CORS supported)
-      let url: string
       if (search_type === `cid`) {
-        url =
+        const url =
           `${PUBCHEM_API}/compound/cid/${term}/property/MolecularFormula,MolecularWeight,IUPACName/JSON`
-      } else if (search_type === `formula`) {
-        url = `${PUBCHEM_API}/compound/fastformula/${
-          encodeURIComponent(term)
-        }/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
-      } else {
-        url = `${PUBCHEM_API}/compound/name/${
-          encodeURIComponent(term)
-        }/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
-      }
-      const response = await fetch(url)
-      if (!response.ok) {
+        const response = await fetch(url)
         if (response.status === 404) {
-          // No results found
-          const result: PubChemSearchResponse = { compounds: [] }
-          cached_search_results[cache_key] = result
-          search_cache_time[cache_key] = now
-          return result
+          return { compounds: [], total_count: 0, has_more: false }
         }
-        throw new Error(`PubChem search failed: ${response.status}`)
-      }
-      const data = await response.json() as {
-        PropertyTable?: {
-          Properties?: Array<
-            {
-              CID: number
-              MolecularFormula?: string
-              MolecularWeight?: number
-              IUPACName?: string
-            }
-          >
+        if (!response.ok) throw new Error(`PubChem search failed: ${response.status}`)
+        const data = await response.json() as {
+          PropertyTable?: { Properties?: PubChemProperty[] }
         }
+        compounds = properties_to_compounds(data.PropertyTable?.Properties || [])
+        total_count = compounds.length
+        has_more = false
+      } else if (search_type === `element`) {
+        const primary = normalized_elements?.[0]
+        if (!primary) return { compounds: [], total_count: 0, has_more: false }
+        const search_url =
+          `${PUBCHEM_API}/compound/fastsubstructure/smiles/${
+            encodeURIComponent(`[${primary}]`)
+          }/cids/JSON?list_return=listkey&MaxRecords=${MAX_DIRECT_ELEMENT_CIDS}`
+        const list = await fetch_direct_list_key(search_url)
+        if (!list) return { compounds: [], total_count: 0, has_more: false }
+
+        const remaining = normalized_elements?.slice(1) || []
+        if (remaining.length === 0) {
+          compounds = properties_to_compounds(
+            await fetch_direct_list_properties(list.list_key, offset, limit),
+          )
+          total_count = list.size
+          has_more = offset + compounds.length < total_count
+        } else {
+          // PubChem has no multi-element namespace. Mirror the backend:
+          // cap the primary-element hit list, fetch formulas, then filter.
+          const capped_size = Math.min(list.size, MAX_DIRECT_ELEMENT_CIDS)
+          const all_properties = await fetch_direct_list_properties(
+            list.list_key,
+            0,
+            capped_size,
+          )
+          const matching = all_properties.filter((property) => {
+            const found = parse_elements_from_formula(property.MolecularFormula || ``)
+            return remaining.every((element) => found.includes(element))
+          })
+          total_count = matching.length
+          compounds = properties_to_compounds(matching.slice(offset, offset + limit))
+          has_more = offset + compounds.length < total_count
+        }
+      } else {
+        const namespace = search_type === `formula` ? `fastformula` : `name`
+        const search_url =
+          `${PUBCHEM_API}/compound/${namespace}/${encodeURIComponent(term)}` +
+          `/cids/JSON?list_return=listkey`
+        const list = await fetch_direct_list_key(search_url)
+        if (!list) return { compounds: [], total_count: 0, has_more: false }
+        compounds = properties_to_compounds(
+          await fetch_direct_list_properties(list.list_key, offset, limit),
+        )
+        total_count = list.size
+        has_more = offset + compounds.length < total_count
       }
-      const props = data.PropertyTable?.Properties || []
-      compounds = props.map((p) => ({
-        cid: p.CID,
-        formula: p.MolecularFormula || ``,
-        weight: p.MolecularWeight,
-        name: p.IUPACName,
-      }))
-      total_count = compounds.length
-      has_more = compounds.length === limit
     } else {
       // Backend proxy mode
       const params = new URLSearchParams({

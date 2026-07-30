@@ -7,6 +7,7 @@
 import { API_BASE as _DEFAULT_API, STATIC_ONLY } from './config'
 import { isMobile } from '$lib/api/transport'
 import { relay_fetch } from '$lib/chat/provider-routing'
+import type { OptimadeSearchResult, OptimadeStructure } from './optimade'
 
 // Mobile has no Python backend regardless of STATIC_ONLY (local dev builds run
 // with STATIC_ONLY=false), so it must take the direct-API branch — same rule
@@ -135,6 +136,37 @@ async function fetch_json_smart(url: string, api_key: string): Promise<unknown> 
   return await response.json()
 }
 
+export interface MPStructureData {
+  lattice: {
+    matrix: number[][]
+    pbc?: boolean[]
+    a?: number
+    b?: number
+    c?: number
+    alpha?: number
+    beta?: number
+    gamma?: number
+    volume?: number
+    [key: string]: unknown
+  }
+  sites: Array<{
+    species: Array<{
+      element: string
+      occu: number
+      oxidation_state?: number
+      [key: string]: unknown
+    }>
+    abc: number[]
+    xyz: number[]
+    label: string
+    properties: Record<string, unknown>
+    [key: string]: unknown
+  }>
+  charge?: number
+  properties?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export interface MPSummaryData {
   material_id: string
   formula_pretty: string
@@ -154,50 +186,131 @@ export interface MPSummaryData {
   cbm?: number
   vbm?: number
   ordering?: string
+  structure?: MPStructureData
   // Availability map MP returns at `has_props`: { dos: bool, bandstructure: bool, ... }.
   // We only read .dos / .bandstructure for the preview — the full payloads are huge
   // and would defeat the point of "preview before import".
   has_props?: Record<string, boolean>
 }
 
+export interface MPSearchOptions {
+  elements?: string[]
+  formula?: string
+  material_ids?: string[]
+  num_elements?: number
+  limit?: number
+  offset?: number
+}
+
+export interface MPSearchPage {
+  structures: MPSummaryData[]
+  total_count?: number
+  has_more: boolean
+}
+
 /**
- * Search Materials Project for structures with full computed properties
+ * Adapt an MP summary document to the result-card shape shared with OPTIMADE.
  */
-export async function search_mp_structures(
-  elements?: string[],
-  formula?: string,
-  limit: number = 20,
-  material_ids?: string[],
-): Promise<MPSummaryData[]> {
+export function mp_summary_to_optimade_structure(
+  summary: MPSummaryData,
+): OptimadeStructure {
+  const mp_structure = summary.structure
+  const pbc = mp_structure?.lattice.pbc ?? [true, true, true]
+  const species_at_sites = mp_structure?.sites.map(
+    (site) => site.species[0]?.element ?? site.label,
+  )
+
+  return {
+    id: summary.material_id,
+    type: `structures`,
+    attributes: {
+      chemical_formula_descriptive: summary.formula_pretty,
+      chemical_formula_reduced: summary.formula_pretty,
+      nsites: summary.nsites,
+      nelements: summary.nelements,
+      dimension_types: mp_structure
+        ? pbc.map((periodic) => periodic ? 1 : 0)
+        : undefined,
+      nperiodic_dimensions: mp_structure
+        ? pbc.filter(Boolean).length
+        : undefined,
+      lattice_vectors: mp_structure?.lattice.matrix,
+      cartesian_site_positions: mp_structure?.sites.map((site) => site.xyz),
+      species_at_sites,
+      _mp_crystal_system: summary.symmetry?.crystal_system,
+      _mp_spacegroup_symbol: summary.symmetry?.symbol,
+      _mp_spacegroup_number: summary.symmetry?.number,
+      _mp_energy_above_hull: summary.energy_above_hull,
+      _mp_formation_energy_per_atom: summary.formation_energy_per_atom,
+      _mp_band_gap: summary.band_gap,
+      _mp_is_stable: summary.is_stable,
+      _mp_is_metal: summary.is_metal,
+      _mp_efermi: summary.efermi,
+      _mp_cbm: summary.cbm,
+      _mp_vbm: summary.vbm,
+      _mp_ordering: summary.ordering,
+      _mp_has_props: summary.has_props,
+    },
+  }
+}
+
+const MP_SUMMARY_FIELDS = [
+  `material_id`,
+  `formula_pretty`,
+  `nsites`,
+  `nelements`,
+  `symmetry`,
+  `energy_above_hull`,
+  `formation_energy_per_atom`,
+  `band_gap`,
+  `is_stable`,
+  `is_metal`,
+  `efermi`,
+  `cbm`,
+  `vbm`,
+  `ordering`,
+  `has_props`,
+].join(`,`)
+
+/**
+ * Search one page of Materials Project summary documents.
+ */
+export async function search_mp_structures_page(
+  options: MPSearchOptions = {},
+): Promise<MPSearchPage> {
   const api_key = get_mp_api_key()
   if (!api_key) {
     throw new Error(`Materials Project API key not configured`)
   }
 
-  let url: string
-  let data: { data?: MPSummaryData[] }
+  const limit = options.limit ?? 20
+  const offset = options.offset ?? 0
+  let data: {
+    data?: MPSummaryData[]
+    meta?: { total_doc?: number }
+  }
 
   if (vscode_api || direct_api()) {
-    // Direct Materials Project API call (relay-routed in the web build)
     const params = new URLSearchParams({
-      _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal,efermi,cbm,vbm,ordering,has_props`,
+      _fields: MP_SUMMARY_FIELDS,
       _limit: String(limit),
     })
 
-    if (material_ids) {
-      params.set(`material_ids`, material_ids.join(`,`))
-    } else if (elements) {
-      params.set(`elements`, elements.join(`,`))
+    if (offset > 0) params.set(`_skip`, String(offset))
+    if (options.material_ids) {
+      params.set(`material_ids`, options.material_ids.join(`,`))
+    } else if (options.elements) {
+      params.set(`elements`, options.elements.join(`,`))
+    }
+    if (options.formula) params.set(`formula`, options.formula)
+    if (options.num_elements !== undefined) {
+      params.set(`nelements_min`, String(options.num_elements))
+      params.set(`nelements_max`, String(options.num_elements))
     }
 
-    if (formula) {
-      params.set(`formula`, formula)
-    }
-
-    url = `https://api.materialsproject.org/materials/summary/?${params}`
+    const url = `https://api.materialsproject.org/materials/summary/?${params}`
     data = await fetch_json_smart(url, api_key) as typeof data
   } else {
-    // Backend proxy
     const response = await fetch(`${API_BASE}/mp/search`, {
       method: `POST`,
       headers: {
@@ -205,10 +318,12 @@ export async function search_mp_structures(
         'X-API-KEY': api_key,
       },
       body: JSON.stringify({
-        elements: elements || null,
-        formula: formula || null,
-        material_ids: material_ids || null,
+        elements: options.elements || null,
+        formula: options.formula || null,
+        material_ids: options.material_ids || null,
+        num_elements: options.num_elements ?? null,
         limit,
+        offset,
       }),
     })
 
@@ -222,7 +337,47 @@ export async function search_mp_structures(
     data = await response.json()
   }
 
-  return data.data || []
+  const structures = data.data || []
+  const total_count = data.meta?.total_doc
+  return {
+    structures,
+    total_count,
+    has_more: total_count === undefined
+      ? structures.length === limit
+      : offset + structures.length < total_count,
+  }
+}
+
+/**
+ * Search MP's primary REST API while preserving the modal's shared result shape.
+ */
+export async function search_mp_structures_as_optimade(
+  options: MPSearchOptions = {},
+): Promise<OptimadeSearchResult> {
+  const page = await search_mp_structures_page(options)
+  return {
+    structures: page.structures.map(mp_summary_to_optimade_structure),
+    total_count: page.total_count,
+    has_more: page.has_more,
+  }
+}
+
+/**
+ * Search Materials Project for structures with full computed properties
+ */
+export async function search_mp_structures(
+  elements?: string[],
+  formula?: string,
+  limit: number = 20,
+  material_ids?: string[],
+): Promise<MPSummaryData[]> {
+  const page = await search_mp_structures_page({
+    elements,
+    formula,
+    limit,
+    material_ids,
+  })
+  return page.structures
 }
 
 /**
@@ -236,14 +391,16 @@ export async function get_mp_structure_summary(material_id: string): Promise<MPS
 
   try {
     let url: string
-    let data: { data?: MPSummaryData }
+    let data: { data?: MPSummaryData | MPSummaryData[] }
 
     if (vscode_api || direct_api()) {
       // Direct API call (relay-routed in the web build)
       const params = new URLSearchParams({
-        _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal,efermi,cbm,vbm,ordering,has_props`,
+        _fields: `${MP_SUMMARY_FIELDS},structure`,
+        material_ids: material_id,
+        _limit: `1`,
       })
-      url = `https://api.materialsproject.org/materials/summary/${material_id}?${params}`
+      url = `https://api.materialsproject.org/materials/summary/?${params}`
       data = await fetch_json_smart(url, api_key) as typeof data
     } else {
       // Backend proxy
@@ -256,7 +413,8 @@ export async function get_mp_structure_summary(material_id: string): Promise<MPS
       data = await response.json()
     }
 
-    return data.data || null
+    if (Array.isArray(data.data)) return data.data[0] ?? null
+    return data.data ?? null
   } catch (err) {
     console.error(`[MP API] Error fetching ${material_id}:`, err)
     return null

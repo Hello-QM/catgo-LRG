@@ -20,7 +20,9 @@ class MPSearchRequest(BaseModel):
     elements: Optional[list[str]] = None
     formula: Optional[str] = None
     material_ids: Optional[list[str]] = None  # Search by specific material IDs
+    num_elements: Optional[int] = None
     limit: int = 20
+    offset: int = 0
 
 
 @router.get("/validate-key")
@@ -108,6 +110,13 @@ async def search_structures(
     if request.formula:
         params["formula"] = request.formula
 
+    if request.num_elements is not None:
+        params["nelements_min"] = str(request.num_elements)
+        params["nelements_max"] = str(request.num_elements)
+
+    if request.offset > 0:
+        params["_skip"] = str(request.offset)
+
     print(f"[MP DEBUG] Search params: {params}")
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -169,14 +178,17 @@ async def get_structure(
             "vbm",
             "ordering",
             "has_props",
+            "structure",
         ]),
+        "material_ids": material_id,
+        "_limit": "1",
     }
 
     print(f"[MP DEBUG] Fetching structure: {material_id}")
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         try:
-            url = f"{MP_API_BASE}/materials/summary/{material_id}"
+            url = f"{MP_API_BASE}/materials/summary/"
             print(f"[MP DEBUG] URL: {url}")
             response = await client.get(
                 url,
