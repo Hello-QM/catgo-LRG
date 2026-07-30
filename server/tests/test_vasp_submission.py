@@ -225,7 +225,7 @@ def test_single_submit_uses_resolver_for_custodian_and_preflight_before_submit()
     hpc.run_on_owner = AsyncMock(side_effect=run_on_owner)
     events = []
 
-    async def record_manifest(*args):
+    async def record_manifest(*args, **kwargs):
         events.append("manifest")
 
     async def record_submit(*args):
@@ -276,6 +276,7 @@ def test_single_submit_uses_resolver_for_custodian_and_preflight_before_submit()
     assert resolution.command == "srun --hint=nomultithread vasp_ncl"
     assert resolution.binary_token == "vasp_ncl"
     assert resolution.source == "hpc.job_defaults.vasp_command"
+    assert write_manifest.await_args.kwargs == {"use_custodian": True}
 
     custodian_uploads = [
         str(call.args[0])

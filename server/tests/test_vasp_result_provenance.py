@@ -150,7 +150,7 @@ def test_manifest_is_bound_to_live_inputs_and_result(tmp_path):
     }
     assert parsed["vasp_binary"] == "vasp_std"
     assert parsed["resolved_run_command"] == "srun vasp_std"
-    assert parsed["metadata_parser"].endswith("@4")
+    assert parsed["metadata_parser"].endswith("@5")
 
     wrapped = json.loads(provenance.wrap_payload(
         json.dumps(parsed),
@@ -242,6 +242,147 @@ def test_explicit_kpoints_mesh_wins_over_kspacing():
         outcar="free  energy   TOTEN = -1.0 eV",
     ))
     assert parsed["kgrid"] == [3, 3, 1]
+    assert parsed["kpoint_source"] == "KPOINTS"
+
+
+def test_kspacing_without_kpoints_is_verifiable_end_to_end(tmp_path):
+    contents = {
+        "INCAR": "GGA = PE\nEDIFFG = -0.02\nKSPACING = 0.25\n",
+        "POSCAR": (
+            "test\n1\n1 0 0\n0 1 0\n0 0 1\nH\n2\nDirect\n"
+            "0 0 0\n0 0 0.5\n"
+        ),
+        "POTCAR": "PAW_PBE H\n",
+    }
+    for name, text in contents.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    (tmp_path / "OUTCAR").write_text(
+        "NIONS = 2\nNELECT = 2\nGGA = PE\n"
+        "POTCAR: PAW_PBE H\n"
+        "generate k-points for:   10   9   1\n"
+        "free  energy   TOTEN = -2.1 eV\n",
+        encoding="utf-8",
+    )
+    command = build_vasp_input_manifest_command(
+        str(tmp_path),
+        resolve_vasp_command({"run_command": "srun vasp_std"}, {}),
+    )
+    completed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    proc = subprocess.run(
+        ["bash", "-c", _vasp_metadata_command(str(tmp_path))],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "KPOINTS ABSENT" in proc.stdout
+    parsed = _parse_vasp_metadata(proc.stdout)
+    assert parsed["input_manifest_validated"] is True
+    assert parsed["input_hashes"]["KPOINTS"] is None
+    assert parsed["kpoint_source"] == "INCAR:KSPACING"
+    assert parsed["kspacing"] == pytest.approx(0.25)
+    assert parsed["kgrid"] == [10, 9, 1]
+
+    wrapped = json.loads(provenance.wrap_payload(
+        json.dumps(parsed),
+        tool="catgo_energy",
+        action="collect",
+        inputs={"workflow_id": "wf-kspacing"},
+    ))
+    assert "unverifiable_without" not in wrapped
+    flat, claims, conflicts = provenance.verification_view(wrapped)
+    assert conflicts == {}
+    assert claims == ["vasp_energy"]
+    assert verify_gates.verifiability(flat, claims)[0]["status"] == "VERIFIABLE"
+
+
+def test_last_outcar_generated_mesh_wins_for_kspacing():
+    parsed = _parse_vasp_metadata(_payload(
+        incar="KSPACING = 0.25",
+        outcar=(
+            "generate k-points for: 2 2 1\n"
+            "generate k-points for: 4 3 1\n"
+        ),
+    ))
+    assert parsed["kgrid"] == [4, 3, 1]
+
+
+def test_line_mode_kpoints_does_not_borrow_generated_mesh():
+    parsed = _parse_vasp_metadata(_payload(
+        incar="KSPACING = 0.25",
+        kpoints="path\n20\nLine-mode\nReciprocal\n0 0 0\n0.5 0 0",
+        outcar="generate k-points for: 4 3 1",
+    ))
+    assert parsed["kpoint_source"] == "KPOINTS"
+    assert "kgrid" not in parsed
+
+
+@pytest.mark.parametrize(
+    "hashes",
+    [
+        {"INCAR": "a" * 64, "POSCAR": "b" * 64,
+         "POTCAR": "c" * 64, "KPOINTS": None},
+        {"INCAR": "a" * 64, "POSCAR": "b" * 64,
+         "POTCAR": "c" * 64, "KPOINTS": "d" * 64},
+    ],
+)
+def test_input_hash_validators_accept_present_or_declared_absent_kpoints(hashes):
+    assert provenance._valid_provenance_value("input_hashes", hashes)
+    assert verify_gates._provenance_value_present("input_hashes", hashes)
+
+
+@pytest.mark.parametrize("name", ["INCAR", "POSCAR", "POTCAR"])
+def test_input_hash_validators_reject_missing_core_hash(name):
+    hashes = {
+        "INCAR": "a" * 64,
+        "POSCAR": "b" * 64,
+        "POTCAR": "c" * 64,
+        "KPOINTS": None,
+    }
+    hashes[name] = None
+    assert not provenance._valid_provenance_value("input_hashes", hashes)
+    assert not verify_gates._provenance_value_present("input_hashes", hashes)
+
+
+@pytest.mark.parametrize(
+    ("kpoints_hash", "source", "kspacing"),
+    [
+        (None, "KPOINTS", 0.25),
+        (None, "INCAR:KSPACING", None),
+        (None, "INCAR:KSPACING", 0.0),
+        ("d" * 64, "INCAR:KSPACING", 0.25),
+    ],
+)
+def test_vasp_verifiability_rejects_inconsistent_kpoint_provenance(
+    kpoints_hash, source, kspacing,
+):
+    result = {
+        "energy": -1.0,
+        "n_atoms": 1,
+        "xc_functional": "GGA=PE",
+        "potcar_titels": ["PAW_PBE H"],
+        "nelect": 1.0,
+        "kgrid": [1, 1, 1],
+        "submission_manifest_digest": "sha256:" + "e" * 64,
+        "input_hashes": {
+            "INCAR": "a" * 64,
+            "POSCAR": "b" * 64,
+            "POTCAR": "c" * 64,
+            "KPOINTS": kpoints_hash,
+        },
+        "vasp_binary": "vasp_std",
+        "resolved_run_command": "srun vasp_std",
+        "kpoint_source": source,
+        "kspacing": kspacing,
+    }
+    verdict = verify_gates.verifiability(result, ["vasp_energy"])[0]
+    assert verdict["status"] == "UNVERIFIABLE"
 
 
 def test_missing_fields_stay_missing():

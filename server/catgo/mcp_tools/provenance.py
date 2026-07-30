@@ -37,7 +37,7 @@ _ENVELOPE_CONTROL_FIELDS = {
 _STRICT_RESULT_FIELDS = {
     "energy", "n_atoms", "fmax", "ediffg", "potcar_titels", "nelect", "kgrid",
     "xc_functional", "submission_manifest_digest", "input_hashes",
-    "vasp_binary", "resolved_run_command",
+    "vasp_binary", "resolved_run_command", "kpoint_source", "kspacing",
     "reference_digest", "slab_adsorbate_digest", "gas_reference_digest",
     "E_ads_eV", "E_ads_unit", "dG_ads_eV", "dG_ads_unit",
 }
@@ -77,7 +77,7 @@ NEEDS = {
     "vasp_energy": [
         "n_atoms", "xc_functional", "potcar_titels", "nelect", "kgrid",
         "submission_manifest_digest", "input_hashes", "vasp_binary",
-        "resolved_run_command",
+        "resolved_run_command", "kpoint_source",
     ],
     # Bader/charge partitioning depends on the PAW set and the electron count it was
     # partitioned from; a charge without them cannot be compared to another charge.
@@ -333,7 +333,8 @@ def _valid_provenance_value(field, value):
             )
         )
     if field in {
-        "energy", "nelect", "fmax", "ediffg", "E_ads_eV", "dG_ads_eV",
+        "energy", "nelect", "fmax", "ediffg", "kspacing",
+        "E_ads_eV", "dG_ads_eV",
         "temperature", "pressure", "zpe_correction_eV",
         "entropy_correction_eV",
     }:
@@ -348,7 +349,7 @@ def _valid_provenance_value(field, value):
             return True
         if field == "nelect":
             return float(value) > 0.0
-        if field in {"temperature", "pressure"}:
+        if field in {"temperature", "pressure", "kspacing"}:
             return float(value) > 0.0
         return float(value) >= 0.0
     if field in {"E_ads_unit", "dG_ads_unit"}:
@@ -367,15 +368,25 @@ def _valid_provenance_value(field, value):
     }:
         return valid_result_digest(value)
     if field == "input_hashes":
+        required = {"INCAR", "POSCAR", "POTCAR"}
         return (
             isinstance(value, dict)
             and set(value) == {"INCAR", "POSCAR", "POTCAR", "KPOINTS"}
             and all(
-                isinstance(digest, str)
-                and bool(re.fullmatch(r"[0-9a-f]{64}", digest))
-                for digest in value.values()
+                isinstance(value.get(name), str)
+                and bool(re.fullmatch(r"[0-9a-f]{64}", value[name]))
+                for name in required
+            )
+            and (
+                value["KPOINTS"] is None
+                or (
+                    isinstance(value["KPOINTS"], str)
+                    and bool(re.fullmatch(r"[0-9a-f]{64}", value["KPOINTS"]))
+                )
             )
         )
+    if field == "kpoint_source":
+        return value in {"KPOINTS", "INCAR:KSPACING"}
     if field in {"vasp_binary", "resolved_run_command"}:
         return (
             isinstance(value, str)
@@ -654,6 +665,8 @@ def _known_from_payload(payload):
         "potcar_titels": ("potcar_titels", "titels"),
         "nelect": ("nelect",),
         "kgrid": ("kgrid",),
+        "kpoint_source": ("kpoint_source",),
+        "kspacing": ("kspacing",),
         "fmax": ("fmax", "max_force"),
         "ediffg": ("ediffg",),
         "converged": ("converged",),

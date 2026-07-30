@@ -172,6 +172,17 @@ def _is_numeric(tool, args):
     return not action.startswith(_NUMERIC_EXEMPT_PREFIXES)
 
 
+def _may_produce_numeric(tool, args):
+    """True before dispatch when only the response can prove it is numeric."""
+    if _is_numeric(tool, args):
+        return True
+    return (
+        tool == "catgo_workflow"
+        and str((args or {}).get("action", "")).lower()
+        in {"status", "results", "step_error"}
+    )
+
+
 def precheck(tool, args, session_key="default"):
     """Call BEFORE dispatching a tool. Returns (decision, reason).
 
@@ -185,6 +196,14 @@ def precheck(tool, args, session_key="default"):
     st = _st(session_key)
     if not _is_guarded_release(tool, args):
         return (ALLOW, "")
+
+    if st.get("in_flight", 0) > 0:
+        return (
+            FORBIDDEN,
+            f"BLOCKED: {st['in_flight']} numeric tool call(s) are still running "
+            f"({st['last_numeric']}). Wait for them to finish and verify their "
+            f"results before submitting.",
+        )
 
     if st["failed"]:
         ov = st["override"]
@@ -232,12 +251,27 @@ def arm_pending(tool, session_key="default"):
     concurrent submit arriving inside that window saw a clean session and went
     through — the result it should have waited for was still being computed.
     The in-flight count blocks releases the same way a produced result does; it
-    is cleared by postmark whether the call succeeded or failed, so a failed
-    tool cannot leave the session wedged.
+    is cleared only by finish_pending() in the shared wrapper's finally block,
+    so failures and cancellation cannot wedge the session and an unrelated
+    postmark cannot retire somebody else's call.
     """
     st = _st(session_key)
     st["in_flight"] = st.get("in_flight", 0) + 1
+    st["last_numeric"] = tool
     _refresh(st)
+
+
+def finish_pending(session_key="default"):
+    """Retire one pre-dispatch marker, including cancellation/error paths."""
+    st = _st(session_key)
+    if st.get("in_flight", 0) > 0:
+        st["in_flight"] -= 1
+    _refresh(st)
+
+
+def drop_session(session_key="default"):
+    """Discard an MCP session ledger after its transport is reclaimed."""
+    _sessions.pop(str(session_key), None)
 
 
 def postmark(tool, args, ok=True, session_key="default"):
@@ -249,8 +283,6 @@ def postmark(tool, args, ok=True, session_key="default"):
     the pending state and bypass enforcement.
     """
     st = _st(session_key)
-    if st.get("in_flight"):
-        st["in_flight"] -= 1
     if not ok:
         _refresh(st)
         return

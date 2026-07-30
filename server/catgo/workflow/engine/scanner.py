@@ -406,6 +406,15 @@ class WorkflowEngine:
             elif wf_config.get("base_work_dir"):
                 hpc["base_work_dir"] = wf_config["base_work_dir"]
 
+            # Preserve explicit False. V1 stores these at the top level; the V2
+            # adapter stores use_custodian under hpc. Losing either shape made
+            # the UI default (True) silently execute as False.
+            for key in ("use_custodian", "custodian_max_errors"):
+                if key in wf_config:
+                    hpc[key] = wf_config[key]
+                elif key in wf_hpc_config:
+                    hpc[key] = wf_hpc_config[key]
+
             # Top-level keys
             for key in ("calc_templates", "cluster_configs",
                         "default_session_id", "orca_binary"):

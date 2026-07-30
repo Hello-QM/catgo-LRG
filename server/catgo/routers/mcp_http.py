@@ -32,8 +32,9 @@ from mcp.types import TextContent, Tool
 
 logger = logging.getLogger(__name__)
 
-# Ensure server dir on path for mcp_tools imports
-_server_dir = str(Path(__file__).resolve().parent.parent)
+# This file is server/catgo/routers/<this>; server/ is three parents up.
+# Adding server/catgo/ shadows server/workflow/ with catgo/workflow/.
+_server_dir = str(Path(__file__).resolve().parents[2])
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 
@@ -196,7 +197,13 @@ mcp_server = Server("catgo-claude-code-http")
 session_manager = StreamableHTTPSessionManager(
     app=mcp_server,
     json_response=True,
-    stateless=True,
+    # Stateful mode gives headless clients a standards-defined Mcp-Session-Id.
+    # Stateless mode created no protocol session id, so every no-panel client
+    # shared one verification ledger in this server process.
+    stateless=False,
+    # CLI processes can die without the protocol DELETE. Bound abandoned
+    # transports instead of retaining one Server.run task forever.
+    session_idle_timeout=3600.0,
 )
 
 
@@ -338,12 +345,17 @@ async def mcp_asgi_app(scope, receive, send):
         await session_manager.handle_request(scope, receive, send)
         return
 
-    from catgo.mcp_tools.helpers import current_panel_id
+    from catgo.mcp_tools.helpers import (
+        current_panel_id,
+        current_verification_session_id,
+    )
 
     # ASGI headers are a list of (bytes, bytes) tuples; compare case-insensitive.
     tab_id = ""
+    mcp_session_id = ""
     for header_name, header_value in scope.get("headers", []):
-        if header_name == b"x-catgo-tab-id":
+        lowered = header_name.lower()
+        if lowered == b"x-catgo-tab-id":
             try:
                 tab_id = header_value.decode("latin-1").strip()
             except UnicodeDecodeError:
@@ -356,13 +368,23 @@ async def mcp_asgi_app(scope, receive, send):
                     header_value,
                 )
                 tab_id = ""
-            break
+        elif lowered == b"mcp-session-id":
+            mcp_session_id = header_value.decode("latin-1").strip()
 
-    if tab_id:
-        token = current_panel_id.set(tab_id)
-        try:
-            await session_manager.handle_request(scope, receive, send)
-        finally:
-            current_panel_id.reset(token)
-    else:
+    panel_token = current_panel_id.set(tab_id) if tab_id else None
+    verification_key = (
+        f"http:tab:{tab_id}"
+        if tab_id
+        else (f"http:mcp:{mcp_session_id}" if mcp_session_id else None)
+    )
+    verification_token = (
+        current_verification_session_id.set(verification_key)
+        if verification_key else None
+    )
+    try:
         await session_manager.handle_request(scope, receive, send)
+    finally:
+        if verification_token is not None:
+            current_verification_session_id.reset(verification_token)
+        if panel_token is not None:
+            current_panel_id.reset(panel_token)

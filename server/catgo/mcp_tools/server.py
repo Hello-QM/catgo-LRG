@@ -64,10 +64,8 @@ from catgo.mcp_tools.structure_tools import (
     _handle_fetch_molecule,
 )
 from catgo.mcp_tools.plugin_tools import _handle_plugin_analyzer, _handle_plugin_reader
-# verification layer (additive): reuse the merged variant's handler, response
-# classifier, and enforcement semantics so both MCP entry points stay identical.
-from catgo.mcp_tools.server_claude_code import _handle_verify, _response_succeeded
-from catgo.mcp_tools import verify_enforcement as _verify_enf
+# Reuse one verification lifecycle so the two MCP entry points cannot drift.
+from catgo.mcp_tools.server_claude_code import _handle_verify, run_with_verification
 
 logger = logging.getLogger(__name__)
 
@@ -559,50 +557,7 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
-    # verification enforcement (additive): block an irreversible submit while numeric
-    # results are pending un-verified; track produced/verified state around dispatch.
-    decision, reason = _verify_enf.precheck(name, arguments)
-    if decision == _verify_enf.FORBIDDEN:
-        return [TextContent(type="text", text=reason)]
-    result = await _dispatch_tool(name, arguments)
-    ok = _response_succeeded(name, result, arguments)
-    wrapped_numeric = False
-    raw_numeric_text = result[0].text if ok and result else ""
-    from catgo.mcp_tools import provenance as _prov
-    v2_result_response = (
-        name == "catgo_workflow"
-        and str(arguments.get("action", "")).lower() in {
-            "status", "results", "step_error"
-        }
-        and _prov.workflow_payload_has_results(raw_numeric_text)
-    ) if ok and result else False
-    numeric_response = _verify_enf._is_numeric(name, arguments) or v2_result_response
-    if ok and result and numeric_response:
-        wrapped = _prov.wrap_payload(result[0].text, tool=name,
-                                     action=arguments.get("action"), inputs=arguments)
-        if wrapped is not None:
-            result[0] = TextContent(type="text", text=wrapped)
-            wrapped_numeric = True
-    is_empty_batch = (
-        name == "catgo_workflow"
-        and str(arguments.get("action", "")).lower() == "batch_results"
-        and _prov.batch_payload_is_empty(raw_numeric_text)
-    )
-    result_records = (
-        _prov.extract_result_records(result[0].text)
-        if ok and result and numeric_response else []
-    )
-    postmark_args = {
-        **arguments,
-        **({"_numeric_response": True} if v2_result_response else {}),
-        **({"_result_records": result_records} if result_records else {}),
-    }
-    _verify_enf.postmark(name, postmark_args, ok=ok and not is_empty_batch)
-    if decision == _verify_enf.PROMPT and result:
-        # a waived FAIL still went out — stamp the response so the override is
-        # visible in the transcript rather than only in the audit list.
-        result[0] = TextContent(type="text", text=f"{reason}\n\n{result[0].text}")
-    return result
+    return await run_with_verification(name, arguments, _dispatch_tool)
 
 
 async def _dispatch_tool(name: str, arguments: dict | None) -> list[TextContent]:

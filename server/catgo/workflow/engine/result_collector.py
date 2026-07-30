@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import shlex
 from typing import Any, Optional
@@ -221,6 +222,25 @@ _VASP_META_MARKERS = {
 _VASP_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?"
 
 
+def _positive_incar_float(text: str, tag: str) -> float | None:
+    """Return the final active, finite, positive scalar assignment."""
+    matches: list[str] = []
+    pattern = re.compile(
+        rf"(?:^|[;\s]){re.escape(tag)}\s*=\s*([^;\s]+)",
+        re.I,
+    )
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].split("!", 1)[0]
+        matches.extend(match.group(1) for match in pattern.finditer(line))
+    if not matches:
+        return None
+    try:
+        value = float(matches[-1].replace("D", "E").replace("d", "e"))
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
 def _quote_remote_dir(work_dir: str) -> str:
     """Quote a remote path WITHOUT killing a leading `~`.
 
@@ -240,7 +260,8 @@ def _vasp_metadata_command(work_dir: str) -> str:
     safe_dir = _quote_remote_dir(work_dir)
     fields = (
         "free  energy|NIONS|ions per type|NELECT|EDIFFG|IBRION|NSW|POTCAR:|TITEL|"
-        "LEXCH|GGA|LHFCALC|AEXX|HFSCREEN|LSOL|EB_K|TAU|LAMBDA_D_K|NC_K"
+        "LEXCH|GGA|LHFCALC|AEXX|HFSCREEN|LSOL|EB_K|TAU|LAMBDA_D_K|NC_K|"
+        "generate[[:space:]]+k-points[[:space:]]+for:"
     )
     # OUTCAR is commonly appended across restarts. Keep only the final VASP
     # invocation's compact metadata so an old run cannot supply current provenance.
@@ -289,8 +310,11 @@ def _vasp_metadata_command(work_dir: str) -> str:
         "catgo_hash=$(shasum -a 256 \"$catgo_path\" | awk '{print $1}'); "
         "elif command -v openssl >/dev/null 2>&1; then "
         "catgo_hash=$(openssl dgst -sha256 \"$catgo_path\" | sed 's/^.*= //'); "
-        "fi; fi; "
+        "fi; "
         "printf '%s %s\\n' \"$catgo_file\" \"${catgo_hash:-UNAVAILABLE}\"; "
+        "else "
+        "printf '%s %s\\n' \"$catgo_file\" 'ABSENT'; "
+        "fi; "
         "done"
     )
     return (
@@ -376,6 +400,7 @@ def _parse_vasp_metadata(raw: str) -> dict:
     outcar = "\n".join(sections["outcar"])
     result: dict = {}
     field_sources: dict[str, str] = {}
+    kspacing = _positive_incar_float(incar, "KSPACING")
 
     manifest_errors = []
     manifest = None
@@ -399,6 +424,8 @@ def _parse_vasp_metadata(raw: str) -> dict:
             manifest_errors.append("hash_algorithm")
         if manifest.get("hash_available") is not True:
             manifest_errors.append("hash_available")
+        if type(manifest.get("use_custodian")) is not bool:
+            manifest_errors.append("use_custodian")
         if manifest.get("missing_mandatory_inputs") != []:
             manifest_errors.append("missing_mandatory_inputs")
         command = manifest.get("resolved_run_command")
@@ -430,21 +457,20 @@ def _parse_vasp_metadata(raw: str) -> dict:
             if len(parts) == 2 and parts[0] in {
                 "INCAR", "POSCAR", "POTCAR", "KPOINTS"
             }:
-                live_hashes[parts[0]] = parts[1]
+                live_hashes[parts[0]] = (
+                    None if parts[1] == "ABSENT" else parts[1]
+                )
         manifest_inputs = manifest.get("inputs")
         if not isinstance(manifest_inputs, dict):
             manifest_errors.append("inputs")
         else:
-            # Custodian self-heals by REWRITING inputs. Demanding byte-identical
-            # hashes turned a successfully corrected run into an unverifiable
-            # one. Semantics chosen: the manifest records what was SUBMITTED;
-            # under custodian a divergence in a file custodian may rewrite is
-            # recorded provenance ("submitted X, ran Y"), not tampering. POTCAR
-            # is never rewritten, so it stays strict either way — and without
-            # custodian nothing may change.
+            # The remote manifest is evidence, not an independent trust anchor.
+            # Record a custodian-mode divergence for diagnosis, but fail closed:
+            # a future submission ledger must bind the mode and correction before
+            # rewritten inputs can be certified. POTCAR is never rewritable.
             under_custodian = manifest.get("use_custodian") is True
             rewritable = {"INCAR", "KPOINTS", "POSCAR"} if under_custodian else set()
-            rewritten: dict[str, dict[str, str]] = {}
+            rewritten: dict[str, dict[str, str | None]] = {}
             for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS"):
                 entry = manifest_inputs.get(name)
                 if not isinstance(entry, dict):
@@ -452,16 +478,46 @@ def _parse_vasp_metadata(raw: str) -> dict:
                     continue
                 recorded_hash = entry.get("sha256")
                 live_hash = live_hashes.get(name)
-                # `mandatory` is declared per job by the preflight: KPOINTS is
-                # optional when the INCAR sets KSPACING, and an absent optional
-                # input is not an error.
                 declared_mandatory = entry.get("mandatory")
-                if declared_mandatory not in (True, False):
+                exists = entry.get("exists")
+                if type(declared_mandatory) is not bool:
                     manifest_errors.append(f"inputs.{name}.mandatory")
                     declared_mandatory = True
-                if declared_mandatory and entry.get("exists") is not True:
+                if type(exists) is not bool:
                     manifest_errors.append(f"inputs.{name}.exists")
-                if not declared_mandatory and entry.get("exists") is not True:
+                    exists = False
+                if name != "KPOINTS" and declared_mandatory is not True:
+                    manifest_errors.append(f"inputs.{name}.mandatory")
+                if (
+                    name == "KPOINTS"
+                    and declared_mandatory is False
+                    and kspacing is None
+                ):
+                    manifest_errors.append(
+                        "inputs.KPOINTS.optional_without_kspacing"
+                    )
+                if declared_mandatory and exists is not True:
+                    manifest_errors.append(f"inputs.{name}.exists")
+                if name not in live_hashes:
+                    manifest_errors.append(f"inputs.{name}.live_status")
+                if exists is False:
+                    if recorded_hash is not None:
+                        manifest_errors.append(f"inputs.{name}.sha256")
+                    if live_hash is None:
+                        continue
+                    if not isinstance(live_hash, str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", live_hash
+                    ):
+                        manifest_errors.append(f"inputs.{name}.live_hash")
+                    elif name in rewritable:
+                        rewritten[name] = {"submitted": None, "ran": live_hash}
+                        manifest_errors.append(
+                            f"inputs.{name}.unanchored_rewrite"
+                        )
+                    else:
+                        manifest_errors.append(
+                            f"inputs.{name}.unexpected_live_file"
+                        )
                     continue
                 if not isinstance(recorded_hash, str) or not re.fullmatch(
                     r"[0-9a-f]{64}", recorded_hash
@@ -475,6 +531,9 @@ def _parse_vasp_metadata(raw: str) -> dict:
                 elif not hmac.compare_digest(recorded_hash, live_hash):
                     if name in rewritable:
                         rewritten[name] = {"submitted": recorded_hash, "ran": live_hash}
+                        manifest_errors.append(
+                            f"inputs.{name}.unanchored_rewrite"
+                        )
                     else:
                         manifest_errors.append(f"inputs.{name}.live_hash")
             if rewritten:
@@ -505,7 +564,8 @@ def _parse_vasp_metadata(raw: str) -> dict:
                     "catgo_vasp_input_manifest.json:canonical_sha256"
                 ),
                 "input_hashes": (
-                    "catgo_vasp_input_manifest.json+live_files:sha256_match"
+                    "catgo_vasp_input_manifest.json+live_files:"
+                    "sha256_match_or_declared_absent"
                 ),
                 "vasp_binary": "catgo_vasp_input_manifest.json:binary_token",
                 "resolved_run_command": (
@@ -605,6 +665,9 @@ def _parse_vasp_metadata(raw: str) -> dict:
 
     # An explicit KPOINTS file takes precedence over KSPACING in INCAR.
     lines = [line.strip() for line in kpoints.splitlines() if line.strip()]
+    if lines:
+        result["kpoint_source"] = "KPOINTS"
+        field_sources["kpoint_source"] = "KPOINTS:present"
     if len(lines) >= 4:
         try:
             automatic = int(lines[1].split()[0]) == 0
@@ -614,6 +677,21 @@ def _parse_vasp_metadata(raw: str) -> dict:
         if automatic and len(mesh) == 3 and all(x > 0 for x in mesh):
             result["kgrid"] = mesh
             field_sources["kgrid"] = "KPOINTS:automatic_mesh"
+    elif not lines and kspacing is not None:
+        result["kpoint_source"] = "INCAR:KSPACING"
+        result["kspacing"] = kspacing
+        field_sources["kpoint_source"] = "INCAR:KSPACING"
+        field_sources["kspacing"] = "INCAR:KSPACING"
+        generated = re.findall(
+            r"(?im)^\s*generate\s+k-points\s+for\s*:\s*"
+            r"(\d+)\s+(\d+)\s+(\d+)\s*$",
+            outcar,
+        )
+        if generated:
+            mesh = [int(value) for value in generated[-1]]
+            if all(value > 0 for value in mesh):
+                result["kgrid"] = mesh
+                field_sources["kgrid"] = "OUTCAR:last_generate_k-points_for"
 
     force_lines = [line.strip() for line in sections["forces"] if line.strip()]
     if force_lines and re.fullmatch(r"N\s+\d+", force_lines[0]):
@@ -679,7 +757,7 @@ def _parse_vasp_metadata(raw: str) -> dict:
     if field_sources:
         result["field_sources"] = field_sources
         result["metadata_parser"] = (
-            "catgo.workflow.engine.result_collector._parse_vasp_metadata@4"
+            "catgo.workflow.engine.result_collector._parse_vasp_metadata@5"
         )
     return result
 

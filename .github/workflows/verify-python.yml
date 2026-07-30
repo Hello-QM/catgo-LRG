@@ -6,12 +6,16 @@ on:
   push:
     paths:
       - "server/catgo/mcp_tools/**"
+      - "server/catgo/routers/mcp_http.py"
+      - "server/catgo/routers/workflow.py"
       - "server/catgo/workflow/engine/**"
       - "server/workflow/engines/analysis.py"
       - "server/tests/test_adsorption_energy_zpe.py"
       - "server/tests/test_batch_submit.py"
       - "server/tests/test_claude_code_mcp.py"
       - "server/tests/test_job_script.py"
+      - "server/tests/test_engine_merge.py"
+      - "server/tests/test_review_findings.py"
       - "server/tests/test_vasp_result_provenance.py"
       - "server/tests/test_vasp_submission.py"
       - "server/pyproject.toml"
@@ -21,12 +25,16 @@ on:
   pull_request:
     paths:
       - "server/catgo/mcp_tools/**"
+      - "server/catgo/routers/mcp_http.py"
+      - "server/catgo/routers/workflow.py"
       - "server/catgo/workflow/engine/**"
       - "server/workflow/engines/analysis.py"
       - "server/tests/test_adsorption_energy_zpe.py"
       - "server/tests/test_batch_submit.py"
       - "server/tests/test_claude_code_mcp.py"
       - "server/tests/test_job_script.py"
+      - "server/tests/test_engine_merge.py"
+      - "server/tests/test_review_findings.py"
       - "server/tests/test_vasp_result_provenance.py"
       - "server/tests/test_vasp_submission.py"
       - "server/pyproject.toml"
@@ -67,7 +75,9 @@ jobs:
             tests/test_adsorption_energy_zpe.py \
             tests/test_batch_submit.py \
             tests/test_claude_code_mcp.py \
+            tests/test_engine_merge.py \
             tests/test_job_script.py \
+            tests/test_review_findings.py \
             tests/test_vasp_result_provenance.py \
             tests/test_vasp_submission.py
       - name: Build and import installed wheel

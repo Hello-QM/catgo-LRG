@@ -26,6 +26,8 @@ import logging
 import os
 import sys
 import time
+import uuid
+import weakref
 from contextvars import ContextVar
 
 import httpx
@@ -3676,6 +3678,8 @@ def _response_succeeded(
     error_prefixes = (
         "unknown ",       # "Unknown tool:" and "Unknown <tool> action '...'" variants
         f"{name.lower()} failed:",
+        f"{name.lower()} timed out.",
+        f"{name.lower()} encountered an internal error.",
         "cannot connect",
         "cannot get ",
         "error:",
@@ -3725,14 +3729,47 @@ def _verification_session_key() -> str:
     The stdio server is one process per client, so "default" was fine. The HTTP
     transport serves EVERY client from one process: on a shared key one user's
     unverified result blocks another user's submit, and an override registered by
-    one session can be spent by another. The panel/tab id is the identity the
-    rest of this server already routes by.
+    one session can be spent by another. Use the panel/tab identity when present,
+    then the low-level MCP ServerSession for headless clients.
     """
     try:
-        from .helpers import current_panel_id
+        from .helpers import (
+            current_panel_id,
+            current_verification_session_id,
+        )
     except ImportError:
-        from helpers import current_panel_id
-    return str(current_panel_id.get() or "default")
+        from helpers import current_panel_id, current_verification_session_id
+    bound = current_verification_session_id.get()
+    if bound:
+        return bound
+    panel = current_panel_id.get()
+    if panel and panel != "default":
+        return f"http:tab:{panel}"
+    # A stateful HTTP transport processes calls in a long-lived ServerSession.
+    # Request-header ContextVars do not cross its memory stream, but MCP's own
+    # request context does. Attach a random stable key to that session; using
+    # id(session) alone risks inheriting stale state after object-id reuse.
+    try:
+        mcp_session = server.request_context.session
+    except LookupError:
+        mcp_session = None
+    if mcp_session is not None:
+        key = getattr(mcp_session, "_catgo_verification_session_id", None)
+        if not key:
+            key = f"mcp:{uuid.uuid4().hex}"
+            setattr(mcp_session, "_catgo_verification_session_id", key)
+            try:
+                from . import verify_enforcement as _enf
+            except ImportError:
+                import verify_enforcement as _enf
+            try:
+                weakref.finalize(mcp_session, _enf.drop_session, key)
+            except TypeError:
+                # Test doubles or a future slotted session may not be weakrefable.
+                # The transport idle timeout still bounds live HTTP resources.
+                pass
+        return key
+    return "default"
 
 
 async def run_with_verification(name: str, arguments: dict, dispatch) -> list[TextContent]:
@@ -3756,62 +3793,65 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
 
     # Arm BEFORE dispatch: an HPC-backed numeric call takes seconds, and a
     # concurrent submit arriving in that window used to see a clean session.
-    armed = _enf._is_numeric(name, arguments)
+    armed = _enf._may_produce_numeric(name, arguments)
     if armed:
         _enf.arm_pending(name, session_key=session_key)
     try:
         result = await dispatch(name, arguments)
-    except BaseException:
-        if armed:
-            _enf.postmark(name, arguments, ok=False, session_key=session_key)
-        raise
-    ok = _response_succeeded(name, result, arguments)
-    # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
-    # Single boundary = the same place the ecosystem audit found metadata being
-    # discarded (59.6% of 178 public tools emit none).
-    wrapped_numeric = False
-    raw_numeric_text = result[0].text if ok and result else ""
-    try:
-        from . import provenance as _prov
-    except ImportError:
-        import provenance as _prov
-    v2_result_response = (
-        name == "catgo_workflow"
-        and str(arguments.get("action", "")).lower() in {
-            "status", "results", "step_error"
+        ok = _response_succeeded(name, result, arguments)
+        # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
+        # Single boundary = the same place the ecosystem audit found metadata being
+        # discarded (59.6% of 178 public tools emit none).
+        raw_numeric_text = result[0].text if ok and result else ""
+        try:
+            from . import provenance as _prov
+        except ImportError:
+            import provenance as _prov
+        v2_result_response = (
+            name == "catgo_workflow"
+            and str(arguments.get("action", "")).lower() in {
+                "status", "results", "step_error"
+            }
+            and _prov.workflow_payload_has_results(raw_numeric_text)
+        ) if ok and result else False
+        numeric_response = _enf._is_numeric(name, arguments) or v2_result_response
+        if ok and result and numeric_response:
+            wrapped = _prov.wrap_payload(
+                result[0].text,
+                tool=name,
+                action=arguments.get("action"),
+                inputs=arguments,
+            )
+            if wrapped is not None:
+                result[0] = T(type="text", text=wrapped)
+        # batch_results is numeric only when at least one item was enveloped.
+        is_empty_batch = (
+            name == "catgo_workflow"
+            and str(arguments.get("action", "")).lower() == "batch_results"
+            and _prov.batch_payload_is_empty(raw_numeric_text)
+        )
+        result_records = (
+            _prov.extract_result_records(result[0].text)
+            if ok and result and numeric_response else []
+        )
+        postmark_args = {
+            **arguments,
+            **({"_numeric_response": True} if v2_result_response else {}),
+            **({"_result_records": result_records} if result_records else {}),
         }
-        and _prov.workflow_payload_has_results(raw_numeric_text)
-    ) if ok and result else False
-    numeric_response = _enf._is_numeric(name, arguments) or v2_result_response
-    if ok and result and numeric_response:
-        wrapped = _prov.wrap_payload(result[0].text, tool=name,
-                                     action=arguments.get("action"), inputs=arguments)
-        if wrapped is not None:
-            result[0] = T(type="text", text=wrapped)
-            wrapped_numeric = True
-    # batch_results is numeric only when at least one item was actually enveloped.
-    # Empty pages and argument errors must not poison the session as "unverified".
-    is_empty_batch = (
-        name == "catgo_workflow"
-        and str(arguments.get("action", "")).lower() == "batch_results"
-        and _prov.batch_payload_is_empty(raw_numeric_text)
-    )
-    result_records = (
-        _prov.extract_result_records(result[0].text)
-        if ok and result and numeric_response else []
-    )
-    postmark_args = {
-        **arguments,
-        **({"_numeric_response": True} if v2_result_response else {}),
-        **({"_result_records": result_records} if result_records else {}),
-    }
-    _enf.postmark(name, postmark_args, ok=ok and not is_empty_batch,
-                  session_key=session_key)
-    if decision == _enf.PROMPT and result:
-        # a waived FAIL still went out — stamp the response so the override is
-        # visible in the transcript rather than only in the audit list.
-        result[0] = T(type="text", text=f"{reason}\n\n{result[0].text}")
-    return result
+        _enf.postmark(
+            name,
+            postmark_args,
+            ok=ok and not is_empty_batch,
+            session_key=session_key,
+        )
+        if decision == _enf.PROMPT and result:
+            # A waived FAIL still went out — stamp it in the transcript.
+            result[0] = T(type="text", text=f"{reason}\n\n{result[0].text}")
+        return result
+    finally:
+        if armed:
+            _enf.finish_pending(session_key=session_key)
 
 
 async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:

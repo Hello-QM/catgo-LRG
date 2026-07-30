@@ -977,6 +977,7 @@ def _run_config_to_engine_config(config: WorkflowRunConfig) -> dict:
             "default_session_id": config.default_session_id,
             "base_work_dir": config.base_work_dir,
             "use_custodian": config.use_custodian,
+            "custodian_max_errors": config.custodian_max_errors,
             "potcar_root": "",
         },
         "execution_mode": config.execution_mode,

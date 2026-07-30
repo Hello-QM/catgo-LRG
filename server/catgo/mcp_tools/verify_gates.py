@@ -670,7 +670,7 @@ ENERGY_PROVENANCE_FIELDS = (
 VASP_ENERGY_PROVENANCE_FIELDS = (
     *ENERGY_PROVENANCE_FIELDS,
     "submission_manifest_digest", "input_hashes", "vasp_binary",
-    "resolved_run_command",
+    "resolved_run_command", "kpoint_source",
 )
 PROVENANCE_SPEC = {
     "energy":       {"all_of": [("energy", *ENERGY_PROVENANCE_FIELDS)],
@@ -788,7 +788,7 @@ def _provenance_value_present(field, value):
         )
     if field in {
         "energy", "nelect", "E_ads_eV", "dG_ads_eV", "temperature", "pressure",
-        "zpe_correction_eV", "entropy_correction_eV",
+        "zpe_correction_eV", "entropy_correction_eV", "kspacing",
     }:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return False
@@ -819,15 +819,25 @@ def _provenance_value_present(field, value):
     if field == "pairing_mode":
         return value == "explicit_roles"
     if field == "input_hashes":
+        required = {"INCAR", "POSCAR", "POTCAR"}
         return (
             isinstance(value, dict)
             and set(value) == {"INCAR", "POSCAR", "POTCAR", "KPOINTS"}
             and all(
-                isinstance(digest, str)
-                and bool(re.fullmatch(r"[0-9a-f]{64}", digest))
-                for digest in value.values()
+                isinstance(value.get(name), str)
+                and bool(re.fullmatch(r"[0-9a-f]{64}", value[name]))
+                for name in required
+            )
+            and (
+                value["KPOINTS"] is None
+                or (
+                    isinstance(value["KPOINTS"], str)
+                    and bool(re.fullmatch(r"[0-9a-f]{64}", value["KPOINTS"]))
+                )
             )
         )
+    if field == "kpoint_source":
+        return value in {"KPOINTS", "INCAR:KSPACING"}
     if field in {"vasp_binary", "resolved_run_command"}:
         return isinstance(value, str) and bool(value.strip())
     return True
@@ -1267,6 +1277,27 @@ def verifiability(result, claims):
                 + "recomputed ΔG = E_ads + ΔZPE - TΔS"
             )
             conditional_ok = conditional_ok and _binding_free_energy_valid(result)
+        if claim == "vasp_energy":
+            hashes = result.get("input_hashes")
+            source = result.get("kpoint_source")
+            kpoints_hash = (
+                hashes.get("KPOINTS") if isinstance(hashes, dict) else None
+            )
+            if kpoints_hash is None:
+                kpoint_provenance_ok = (
+                    source == "INCAR:KSPACING"
+                    and _provenance_value_present(
+                        "kspacing", result.get("kspacing")
+                    )
+                )
+            else:
+                kpoint_provenance_ok = source == "KPOINTS"
+            conditional_need = (
+                (conditional_need + " AND " if conditional_need else "")
+                + "KPOINTS hash/source consistency OR "
+                "declared-absent KPOINTS+positive KSPACING"
+            )
+            conditional_ok = conditional_ok and kpoint_provenance_ok
         ok = all_ok and any_ok and conditional_ok
         needs = []
         if all_groups:
@@ -1274,7 +1305,7 @@ def verifiability(result, claims):
         if any_groups:
             needs.append("(" + " OR ".join("+".join(g) for g in any_groups) + ")")
         if conditional_need:
-            needs.append(conditional_need + " [when a gas reference is used]")
+            needs.append(conditional_need)
         need = " AND ".join(needs)
         out.append({"claim": claim,
                     "status": "VERIFIABLE" if ok else "UNVERIFIABLE",

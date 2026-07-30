@@ -271,10 +271,9 @@ def build_vasp_input_manifest_command(
     binary_token_json = shlex.quote(json.dumps(resolution.binary_token, ensure_ascii=True))
     source_json = shlex.quote(json.dumps(resolution.source, ensure_ascii=True))
     binary_declared = "true" if resolution.binary_token is not None else "false"
-    # Recorded so the collector can tell a legitimate custodian correction from
-    # tampering: custodian rewrites INCAR/KPOINTS/POSCAR while self-healing, and
-    # demanding byte-identical hashes turned a successfully healed run into an
-    # unverifiable one.
+    # Recorded diagnostically. It does not authorize hash divergence: until an
+    # independent submit-time correction ledger exists, the collector records a
+    # custodian-mode rewrite but deliberately leaves the result unverifiable.
     custodian_declared = "true" if use_custodian else "false"
     remote_dir = _quote_remote_work_dir(work_dir)
 
@@ -318,6 +317,32 @@ catgo_emit_input() {{
     fi
 }}
 
+catgo_has_positive_kspacing() {{
+    awk '
+    {{
+        line=$0
+        sub(/[#!].*$/, "", line)
+        upper=toupper(line)
+        while (match(upper, /(^|[;[:space:]])KSPACING[[:space:]]*=/)) {{
+            value=substr(line, RSTART + RLENGTH)
+            sub(/^[[:space:]]*/, "", value)
+            split(value, fields, /[;[:space:]]/)
+            value=fields[1]
+            gsub(/[Dd]/, "E", value)
+            if (value ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([Ee][-+]?[0-9]+)?$/ && value + 0 > 0) {{
+                found=1
+            }} else {{
+                found=0
+            }}
+            offset=RSTART + RLENGTH
+            line=substr(line, offset)
+            upper=substr(upper, offset)
+        }}
+    }}
+    END {{ exit(found ? 0 : 1) }}
+    ' "$1"
+}}
+
 catgo_missing_json=
 catgo_missing_text=
 if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; then
@@ -329,7 +354,7 @@ fi
 # mesh comes from the INCAR and VASP ignores (and does not need) a KPOINTS file.
 # Demanding it unconditionally rejected perfectly valid jobs at submit time.
 catgo_kspacing=false
-if [ -f INCAR ] && grep -qiE '^[[:space:]]*KSPACING[[:space:]]*=' INCAR; then
+if [ -f INCAR ] && catgo_has_positive_kspacing INCAR; then
     catgo_kspacing=true
 fi
 for catgo_name in {" ".join(VASP_MANDATORY_INPUTS)}; do
@@ -416,8 +441,7 @@ async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResoluti
     an input audit nothing runs is not an audit. Reading the two files back costs
     one SSH call on a path that is already doing several, and a FAIL here is
     worth far more than the same finding after the job burns its allocation.
-    Advisory by design: it logs, it does not block, because the output-side
-    enforcement layer is what owns "refuse to proceed".
+    Advisory by the D-057 policy: it logs, it does not block submission.
     """
     try:
         from catgo.mcp_tools import verify_gates
@@ -427,15 +451,31 @@ async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResoluti
     read = (
         "cd " + remote + " && for f in INCAR KPOINTS; do "
         "printf '<<<CATGO_%s>>>\n' \"$f\"; "
-        "if [ -f \"$f\" ]; then cat \"$f\"; fi; done"
+        "if [ -f \"$f\" ]; then cat \"$f\"; fi; done; "
+        "printf '<<<CATGO_POTCAR_TITELS>>>\\n'; "
+        "if [ -f POTCAR ]; then "
+        "grep -E '^[[:space:]]*TITEL[[:space:]]*=' POTCAR || true; fi"
     )
     try:
         res = await hpc.run_on_owner(lambda: hpc.conn.run(read, check=False))
         text = res.stdout or ""
         incar = text.split("<<<CATGO_INCAR>>>", 1)[-1].split("<<<CATGO_KPOINTS>>>")[0]
-        kpoints = text.split("<<<CATGO_KPOINTS>>>", 1)[-1] if "<<<CATGO_KPOINTS>>>" in text else ""
+        kpoints_block = text.split("<<<CATGO_KPOINTS>>>", 1)[-1] if "<<<CATGO_KPOINTS>>>" in text else ""
+        kpoints = kpoints_block.split("<<<CATGO_POTCAR_TITELS>>>", 1)[0]
+        titel_block = (
+            text.split("<<<CATGO_POTCAR_TITELS>>>", 1)[-1]
+            if "<<<CATGO_POTCAR_TITELS>>>" in text else ""
+        )
+        titels = [
+            line.split("=", 1)[-1].strip()
+            for line in titel_block.splitlines()
+            if "=" in line and line.split("=", 1)[-1].strip()
+        ]
         verdicts = verify_gates.precheck_inputs(
-            incar, kpoints_text=kpoints or None, binary=resolution.binary_token,
+            incar,
+            kpoints_text=kpoints or None,
+            titels=titels or None,
+            binary=resolution.binary_token,
         )
         failed = [v for v in verdicts if v.get("status") == "FAIL"]
         if failed:

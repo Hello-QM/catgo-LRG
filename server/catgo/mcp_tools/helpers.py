@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 # single-panel bucket that the landing-page preview cards poll.
 current_panel_id: ContextVar[str] = ContextVar("current_panel_id", default="default")
 
+# Bound by the HTTP transport. Keep this separate from viewer routing: headless
+# MCP clients have no panel, but still need an isolated verification ledger.
+current_verification_session_id: ContextVar[str | None] = ContextVar(
+    "current_verification_session_id",
+    default=None,
+)
+
 
 def _resolve_api_base() -> str:
     """Compute the CatGO backend base URL that MCP tools call back into.
