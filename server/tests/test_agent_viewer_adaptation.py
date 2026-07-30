@@ -177,9 +177,14 @@ def test_analysis_push_rejects_a_session_the_pane_could_not_adopt(client):
     assert client.post(
         "/api/view/analysis/push", json={"kind": "dos", "session": {}}
     ).status_code == 400
-    ok = client.post(
+    # a bare session_id used to be accepted; the pane renders from this object,
+    # so it now has to carry the fields it reads (see test_publish_hardening)
+    assert client.post(
         "/api/view/analysis/push", json={"kind": "dos", "session": {"session_id": "d-9"}}
-    )
+    ).status_code == 400
+    ok = client.post("/api/view/analysis/push", json={"kind": "dos", "session": {
+        "session_id": "d-9", "nions": 4, "elements": ["Pt"], "efermi": -2.5,
+    }})
     assert ok.status_code == 200 and ok.json()["ok"] is True
 
 

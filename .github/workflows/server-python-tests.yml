@@ -26,14 +26,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install deps
-        # Install what the SERVER declares, not a hand-written list: the first
-        # version of this job omitted fastapi (every router test failed to
-        # import) and let pip resolve `mcp>=1.0.0` to 2.0.0, which dropped
-        # `Server.list_tools` and broke catgo/mcp_tools/server.py at import.
-        # `mcp<2` reproduces what the code is actually written against (1.28.1
-        # locally); lifting it needs a port, not a looser pin.
+        # Install what the SERVER declares, not a hand-written list. The first
+        # version of this job hand-wrote one, omitted fastapi, and every router
+        # test died at collection. The mcp<2 cap now lives in requirements.txt
+        # where a fresh install sees it too, so nothing is repeated here.
         run: |
-          python -m pip install -r server/requirements.txt "mcp<2"
+          python -m pip install -r server/requirements.txt
           python -m pip install pytest pytest-asyncio
       - name: Module self-tests (python <module>.py)
         working-directory: server
@@ -51,6 +49,7 @@ jobs:
             tests/test_node_result_publish.py \
             tests/test_path_trajectory_publish.py \
             tests/test_publish_safety.py \
+            tests/test_publish_hardening.py \
             tests/test_sse_cross_thread.py \
             tests/test_agent_viewer_adaptation.py \
             tests/test_mcp_tool_dispatch.py \

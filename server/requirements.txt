@@ -8,7 +8,11 @@ python-multipart>=0.0.6
 httpx>=0.27.0
 
 # MCP (Model Context Protocol) server for AI agent tool integration
-mcp>=1.0.0
+# Capped below 2.0: mcp 2.0.0 removed Server.list_tools, which
+# catgo/mcp_tools/server.py uses as an import-time decorator, so the whole
+# MCP server module fails to import under it. Lifting the cap needs a port
+# to the 2.x API, not a looser pin.
+mcp>=1.0.0,<2
 
 # SSH/SFTP for HPC connectivity
 asyncssh>=2.14.0

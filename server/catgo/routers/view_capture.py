@@ -514,6 +514,15 @@ def list_analysis_sessions():
     return {"sessions": out, "count": len(out)}
 
 
+# What each electronic pane actually reads off `initial_session`. Kept to the
+# fields without which it cannot render, not the full upload-response shape.
+_ANALYSIS_SESSION_FIELDS = {
+    "dos": ("nions", "elements", "efermi"),
+    "bands": ("nbands", "nkpts", "efermi", "elements"),
+    "cohp": ("efermi", "all_bonds"),
+}
+
+
 @router.post("/analysis/push")
 def push_analysis(data: dict[str, Any]):
     """Publish an analysis session to the viewer.
@@ -531,6 +540,23 @@ def push_analysis(data: dict[str, Any]):
     if _oversized(session):
         raise HTTPException(
             status_code=413, detail=f"session exceeds {_MAX_EVENT_BYTES} bytes"
+        )
+    # A session_id alone is not adoptable: the pane binds this object to its
+    # `initial_session` prop and renders straight from it, so a stub produces an
+    # analysis panel wired to nothing. Require the fields the pane reads.
+    required = _ANALYSIS_SESSION_FIELDS.get(kind)
+    if required is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown analysis kind '{kind}'; known: "
+                   f"{', '.join(sorted(_ANALYSIS_SESSION_FIELDS))}",
+        )
+    missing = [f for f in required if session.get(f) is None]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"session for kind '{kind}' is missing {missing}; the pane "
+                   "renders from this object and cannot adopt a partial one",
         )
     view_state.announce_analysis(kind, session, panel_id=str(data.get("panel_id", "")))
     return {"ok": True}

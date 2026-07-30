@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import weakref
 import uuid
 from collections import Counter, deque
@@ -112,7 +113,20 @@ def has_subscribers(panel_id: str) -> bool:
     return any(panel_subscribers.get(k) for k in _subscriber_keys(panel_id))
 
 
-def _notify(panel_id: str, event: str, data: dict) -> None:
+def _ordered_subscriber_keys(panel_id: str) -> list[str]:
+    """Subscriber keys with the RESOLVED panel first.
+
+    Only matters for `single` delivery (the command bus): a command must be
+    executed by exactly one viewer, and the specific pane is the one the caller
+    addressed. The alias keys stay as a fallback so a command still reaches a
+    tab whose pane has not registered under its own id.
+    """
+    keys = _subscriber_keys(panel_id)
+    keys.discard(panel_id)
+    return [panel_id, *sorted(keys)]
+
+
+def _notify(panel_id: str, event: str, data: dict, single: bool = False) -> None:
     # Resolve here, once, for EVERY emitter. `_subscriber_keys` only maps
     # resolved -> raw, so an event addressed to a bare tab id reached the tab's
     # global listener but never the pane's own subscriber (registered under
@@ -126,9 +140,11 @@ def _notify(panel_id: str, event: str, data: dict) -> None:
         here = asyncio.get_running_loop()
     except RuntimeError:
         here = None
-    for key in _subscriber_keys(panel_id):
+    for key in _ordered_subscriber_keys(panel_id):
         for q in list(panel_subscribers.get(key, [])):
             _deliver(q, msg, key, event, here)
+            if single:
+                return
 
 
 def _deliver(q, msg, key, event, here):
@@ -278,11 +294,15 @@ async def request_viewer_command(
     command_id = f"cmd-{uuid.uuid4().hex}"
     future = loop.create_future()
     pending_commands[command_id] = future
+    # single=True: a command MUTATES the viewer. `_subscriber_keys` deliberately
+    # includes the tab alias alongside the resolved pane, so a fan-out would have
+    # two panes execute the same add_atom/delete_atoms — the first to answer wins
+    # the future and the second's work is silently applied anyway.
     _notify(panel_id, "command", {
         "command_id": command_id,
         "action": action,
         "arguments": arguments,
-    })
+    }, single=True)
     try:
         return await asyncio.wait_for(future, timeout=timeout)
     finally:
@@ -297,21 +317,47 @@ def complete_viewer_command(command_id: str, result: dict[str, Any]) -> bool:
     return True
 
 
+# A stored trajectory is replayed IN FULL on every (re)connect, so a flaky
+# tunnel or a refresh loop re-sends it indefinitely. Keep it only as long as a
+# reconnecting viewer plausibly still wants it.
+TRAJECTORY_TTL_SECONDS = 1800
+
+
+def _expire_trajectories(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    for pid, entry in list(panel_trajectories.items()):
+        ts = entry.get("ts")
+        if isinstance(ts, (int, float)) and now - ts > TRAJECTORY_TTL_SECONDS:
+            panel_trajectories.pop(pid, None)
+
+
 def push_trajectory(panel_id: str, content: str, filename: str) -> None:
     """Store trajectory + notify SSE subscribers + clear any stale
     single-structure cache for the same panel (mutually exclusive in
     the viewer — a pane shows EITHER a structure OR a trajectory).
     Replayed on (re)connect via the SSE snapshot mechanism."""
     panel_id = resolve_panel_id(panel_id)
-    panel_trajectories[panel_id] = {"content": content, "filename": filename}
+    _expire_trajectories()
+    panel_trajectories[panel_id] = {
+        "content": content, "filename": filename, "ts": time.time(),
+    }
     panel_structures.pop(panel_id, None)
     panel_pending_updates.pop(panel_id, None)
     notify_trajectory(panel_id, content, filename)
 
 
 def get_trajectory(panel_id: str) -> dict | None:
-    """Return {'content': str, 'filename': str} or None."""
-    return panel_trajectories.get(resolve_panel_id(panel_id))
+    """Return {'content': str, 'filename': str} or None.
+
+    Expired entries are dropped rather than replayed: the SSE reconnect path
+    yields this verbatim, so a stale multi-MB path would be re-sent on every
+    reconnect forever.
+    """
+    _expire_trajectories()
+    entry = panel_trajectories.get(resolve_panel_id(panel_id))
+    if not entry:
+        return None
+    return {"content": entry["content"], "filename": entry["filename"]}
 
 
 def update_manifest(panel_id: str, manifest: dict[str, Any]) -> None:
