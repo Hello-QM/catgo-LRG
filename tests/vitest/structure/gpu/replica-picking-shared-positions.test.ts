@@ -13,6 +13,7 @@ import {
   create_render_packet_builder,
   type PacketBondConnectivity,
 } from '$lib/structure/scene/render-packet-builder'
+import type { ImageInstanceTable } from '$lib/structure/scene/render-packet'
 
 function carbon_site(xyz: [number, number, number]): Site {
   return {
@@ -111,6 +112,27 @@ describe(`replica picker shared positions`, () => {
       uploads: 1,
       picker_consumers: 1,
     })
+    picker.dispose()
+    positions.dispose()
+  })
+
+  test(`picker wrapper forwards authoritative boundary atom images`, () => {
+    const positions = new SharedPositionTexture()
+    const picker = create_replica_picker(positions)
+    const packet = make_packet(0, 1)
+    const images: ImageInstanceTable = {
+      count: 1,
+      base_sites: Uint32Array.from([0]),
+      jimages: Int8Array.from([-1, 0, 0]),
+    }
+    positions.update(packet.frame)
+
+    const scene = picker.sync(fake_renderer(), packet, {
+      boundary_atom_images: images,
+    })
+
+    expect(scene.images).toBe(images)
+    expect(scene.codec?.ghost_count).toBe(1)
     picker.dispose()
     positions.dispose()
   })

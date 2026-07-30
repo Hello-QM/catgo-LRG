@@ -21,13 +21,21 @@ import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
-import type { RenderPacket } from '$lib/structure/scene/render-packet'
+import type {
+  ImageInstanceTable,
+  RenderPacket,
+} from '$lib/structure/scene/render-packet'
 import {
   create_render_packet_builder,
   type PacketBondConnectivity,
 } from '$lib/structure/scene/render-packet-builder'
 import { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
 import { AtomInstancedRenderer } from '$lib/structure/atoms/atom-instanced-renderer'
+import {
+  build_display_radii,
+  build_logical_radii,
+} from '$lib/structure/gpu/radius-lut'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import type { AnyStructure, Site } from '$lib'
 
 function carbon_site(xyz: [number, number, number]): Site {
@@ -97,6 +105,27 @@ function ghost_pages(root: THREE.Mesh): THREE.Mesh[] {
 }
 
 describe(`AtomReplicaRenderer — mesh shape`, () => {
+  test(`converts logical packet radii to the shared final display radii once`, () => {
+    const structure = make_structure(3)
+    const logical = build_logical_radii(structure.sites, { atom_radius: 1.5 })
+    const expected = build_display_radii(structure.sites, { atom_radius: 1.5 })
+    const packet = create_render_packet_builder().build({
+      structure,
+      radii: logical,
+      dims: [1, 1, 1],
+    })
+    const renderer = new AtomReplicaRenderer()
+    renderer.update(packet)
+    expect(packet.topology.radii).toBe(logical)
+    for (let idx = 0; idx < logical.length; idx++) {
+      expect(expected[idx]).toBeCloseTo(logical[idx] * VISUAL_RADIUS_SCALE)
+    }
+    expect(
+      Array.from(attr(renderer.mesh, `instanceRadius`).array as Float32Array),
+    ).toEqual(Array.from(expected))
+    renderer.dispose()
+  })
+
   test(`plain Mesh over InstancedBufferGeometry — no instanceMatrix anywhere`, () => {
     const renderer = new AtomReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))
@@ -312,6 +341,39 @@ describe(`AtomReplicaRenderer — shader contract`, () => {
 })
 
 describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
+  test(`authoritative boundary table replaces graph ghosts and updates without a packet change`, () => {
+    const packet = make_packet([3, 3, 3], `ghost-images`)
+    const first: ImageInstanceTable = {
+      count: 2,
+      base_sites: Uint32Array.from([2, 1]),
+      jimages: Int8Array.from([3, 0, 0, -1, 2, 0]),
+    }
+    const second: ImageInstanceTable = {
+      count: 1,
+      base_sites: Uint32Array.from([0]),
+      jimages: Int8Array.from([0, 0, -1]),
+    }
+    const renderer = new AtomReplicaRenderer()
+    renderer.update(packet, first)
+    expect(geo(renderer.ghost_mesh).instanceCount).toBe(2)
+    expect(Array.from(
+      (attr(renderer.ghost_mesh, `ghostBaseSite`).array as Float32Array)
+        .subarray(0, 2),
+    )).toEqual([2, 1])
+
+    // The async ordinary 19/19 cache can arrive while the RenderPacket
+    // identity stays fixed. Table identity alone must rebuild the sparse draw.
+    renderer.update(packet, second)
+    expect(geo(renderer.ghost_mesh).instanceCount).toBe(1)
+    expect((attr(renderer.ghost_mesh, `ghostBaseSite`).array as Float32Array)[0])
+      .toBe(0)
+    expect(Array.from(
+      (attr(renderer.ghost_mesh, `ghostImage`).array as Float32Array)
+        .subarray(0, 3),
+    )).toEqual([0, 0, -1])
+    renderer.dispose()
+  })
+
   test(`ghost-images policy draws exactly the T1 image-instance table`, () => {
     const packet = make_packet([2, 1, 1], `ghost-images`)
     const renderer = new AtomReplicaRenderer()
@@ -328,6 +390,7 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
 
     const image = attr(renderer.ghost_mesh, `ghostImage`)
     const base_site = attr(renderer.ghost_mesh, `ghostBaseSite`)
+    const ghost_radius = attr(renderer.ghost_mesh, `ghostRadius`)
     expect(image.meshPerAttribute).toBe(1)
     expect(image.count).toBe(table.count)
     for (let idx = 0; idx < table.count; idx++) {
@@ -338,6 +401,10 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
       expect((image.array as Float32Array)[idx * 3 + 2]).toBe(table.jimages[idx * 3 + 2])
       expect((base_site.array as Float32Array)[idx])
         .toBe(table.base_sites[idx])
+      const site = table.base_sites[idx]
+      expect((ghost_radius.array as Float32Array)[idx]).toBeCloseTo(
+        packet.topology.radii[site] * VISUAL_RADIUS_SCALE,
+      )
     }
     renderer.dispose()
   })

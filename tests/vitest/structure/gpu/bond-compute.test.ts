@@ -19,7 +19,7 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     const positions = new Float32Array([0.2, 0, 0, 4.9, 0, 0, 0.2, 1.2, 0])
     const radii = new Float32Array([0.76, 0.76, 0.76])
     const lattice = new Float32Array([5, 0, 0, 0, 5, 0, 0, 0, 5])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 }
     const ref = detect_bonds_reference(positions, lattice, radii, opts)
     const compute = create_bond_compute(device, { capacity: 1024 })
     const gpu = await compute.run({ positions, radii, lattice, periodic: true, ...opts })
@@ -38,7 +38,7 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     const positions = new Float32Array([0.2, 0, 0, 4.9, 0, 0, 0.2, 1.2, 0])
     const radii = new Float32Array([0.76, 0.76, 0.76])
     const lattice = new Float32Array([5, 0, 0, 0, 5, 0, 0, 0, 5])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 }
     const compute = create_bond_compute(device, { capacity: 1024, direct_limit: 0 })
     const gpu = await compute.run({ positions, radii, lattice, periodic: true, ...opts })
     expect(gpu).toEqual({
@@ -57,7 +57,7 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     // across grid cells + PBC faces.
     const lat = 11.2
     const lattice = new Float32Array([lat, 0, 0, 0, lat, 0, 0, 0, lat])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 }
     const coords: number[] = []
     const radii_arr: number[] = []
     for (let i = 0; i < 4; i++) {
@@ -85,7 +85,7 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     // Non-periodic always grids (over the atom AABB); direct_limit 0 forces the
     // grid path for this small cluster. A 3×3×3 cubic blob of atoms at 2.4 Å
     // spacing, jittered, so neighbors bond across AABB cells.
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 }
     const coords: number[] = []
     const radii_arr: number[] = []
     for (let i = 0; i < 3; i++) {
@@ -122,7 +122,7 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     // return the COMPLETE graph (never a clamped one).
     const lat = 11.2
     const lattice = new Float32Array([lat, 0, 0, 0, lat, 0, 0, 0, lat])
-    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_dist: 0.1 }
+    const opts = { tolerance: 0.45, max_bond_dist: 3.0, min_bond_dist: 0.1 }
     const coords: number[] = []
     const radii_arr: number[] = []
     for (let i = 0; i < 4; i++) {

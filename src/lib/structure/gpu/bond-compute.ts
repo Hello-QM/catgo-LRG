@@ -30,9 +30,11 @@ import {
 } from '$lib/structure/workers/bond-backend-policy'
 
 export type BondComputeRun = {
+  /** Fixed additive cutoff on the covalent-radii sum, in Å. */
   tolerance: number
   max_bond_dist: number
-  min_dist: number
+  /** Minimum bond distance in Å (Rust AtomRadiiOptions.min_bond_dist). */
+  min_bond_dist: number
   positions: Float32Array // 3N, xyz interleaved
   radii: Float32Array // N
   lattice: Float32Array // 9, row-major (rows a,b,c)
@@ -103,7 +105,7 @@ export function pack_params(
   u32[3] = 0
   f32[4] = r.tolerance
   f32[5] = r.max_bond_dist
-  f32[6] = r.min_dist
+  f32[6] = r.min_bond_dist
   // u32[7] = rule_count (number of element-pair distance rules). 0 ⇒ no filter.
   u32[7] = r.rules ? r.rules.length / 4 : 0
   const L = r.lattice

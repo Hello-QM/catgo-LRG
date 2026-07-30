@@ -15,7 +15,7 @@ import {
   resolve_replica_pick_action,
   type ReplicaPickAction,
 } from './gpu/webgl2/replica-id-picker'
-import type { RenderPacket } from './scene/render-packet'
+import type { ImageInstanceTable, RenderPacket } from './scene/render-packet'
 import type { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
 import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
 
@@ -81,6 +81,12 @@ export interface GpuPickerDeps {
    * bond GRAPH index through `get_slot_to_filtered_idx`.
    */
   get_render_packet?: () => RenderPacket | null
+  /**
+   * Exact ordinary boundary spheres used by the packet visual layer, already
+   * expanded to packet dims. An empty table is authoritative; null preserves
+   * the picker scene's graph-derived compatibility path.
+   */
+  get_packet_boundary_atom_images?: () => ImageInstanceTable | null
   on_packet_atom_click?: (site_idx: number, event: MouseEvent) => void
   on_packet_bond_click?: (filtered_idx: number, event: MouseEvent) => void
   set_hovered_bond_idx?: (filtered_idx: number | null) => void
@@ -169,6 +175,8 @@ function packet_pick_action(
 ): ReplicaPickAction | null {
   const incomplete_edge = deps.get_incomplete_edge()
   const scene = replica_picker.sync(renderer, packet, {
+    boundary_atom_images:
+      deps.get_packet_boundary_atom_images?.() ?? null,
     bond_radius: deps.get_bond_thickness(),
     stub_scale: incomplete_edge?.mode ? incomplete_edge.scale : 0.5,
     rotation: deps.get_rotation(),

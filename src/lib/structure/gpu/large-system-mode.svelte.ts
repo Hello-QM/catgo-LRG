@@ -37,19 +37,29 @@ export function create_large_system_mode(deps: {
   }
 }
 
-const DEFAULT_MIN_DIST = 0.1
 const DEFAULT_TOLERANCE = 0.45
+const DEFAULT_MIN_BOND_DIST = 0.1
 const DEFAULT_MAX_BOND_DIST = 3.0
 
-/** Map the app's bond options (the same tolerance / max_bond_dist the CPU path
- *  uses, driven by the existing UI sliders) into the GPU compute options. This
- *  is what makes "custom bond distance" live-tunable on the GPU path: the
- *  StructureScene loop re-dispatches compute with these whenever a slider
- *  changes. */
-export function to_compute_options(opts: Record<string, number>): { tolerance: number; max_bond_dist: number; min_dist: number } {
+/** Preserve the original large-system viewer's fixed-pad atom-radii criterion.
+ *
+ * Ordinary CPU/WASM rendering continues to use the app's multiplicative
+ * `scale`. The large-system renderer historically used a fixed 0.45 Å pad,
+ * which is important for coordination contacts such as the sixth Fe–O bond in
+ * LiFePO4. The Rust fallback accepts the same optional `tolerance` field, so
+ * direct GPU, grid GPU, and fallback paths stay exact.
+ */
+export function to_compute_options(opts: Record<string, number>): {
+  tolerance: number
+  max_bond_dist: number
+  min_bond_dist: number
+} {
+  const requested_tolerance = opts.tolerance ?? DEFAULT_TOLERANCE
   return {
-    tolerance: opts.tolerance ?? DEFAULT_TOLERANCE,
+    tolerance: Number.isFinite(requested_tolerance)
+      ? Math.max(0, requested_tolerance)
+      : DEFAULT_TOLERANCE,
     max_bond_dist: opts.max_bond_dist ?? DEFAULT_MAX_BOND_DIST,
-    min_dist: opts.min_dist ?? DEFAULT_MIN_DIST,
+    min_bond_dist: opts.min_bond_dist ?? opts.min_dist ?? DEFAULT_MIN_BOND_DIST,
   }
 }

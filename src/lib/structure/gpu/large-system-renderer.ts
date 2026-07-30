@@ -44,14 +44,37 @@ import type {
   ReplicaPickResult,
 } from '$lib/structure/scene/render-packet'
 import {
+  BOUNDARY_BOND_ANCHOR,
+  BOUNDARY_BOND_MODE,
+  build_boundary_bond_endpoint_layout,
+} from '$lib/structure/scene/periodic-decoration-snapshot'
+import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
+import { BOND_MIDPOINT_SPLIT } from '$lib/structure/rendering/bond-colors'
+import {
+  same_visual_shading,
+  style_pbr,
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
+  type ResolvedVisualShading,
+} from '$lib/structure/rendering/visual-state'
 import type {
   ComputeBondsTypedResult,
   TypedBondInput,
   TypedBondTable,
 } from '$lib/structure/workers/bond-worker-runtime'
+import {
+  GIZMO_AXIS_HEX,
+  GIZMO_NEG_AXIS_HEX,
+  GIZMO_ORIENTATION_WGSL,
+  gizmo_wgsl_color_vectors,
+  resolve_gizmo_layout,
+} from '$lib/structure/rendering/gizmo'
+
+export { GIZMO_AXIS_HEX, GIZMO_NEG_AXIS_HEX }
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -63,6 +86,83 @@ const CAMERA_FULL_BYTES = 144
 /** GPU supercell uniform (Phase 1): dims vec4<u32> (nx,ny,nz,base_count) + base
  *  lattice rows a,b,c as 3×vec4<f32> = 4 vec4 = 64 bytes. */
 const SUPERCELL_BYTES = 64
+
+/** Cell uniform: lattice rows + transformed origin + color, all vec4-aligned. */
+export const CELL_BYTES = 80
+
+/** Lattice-vector uniform: transformed origin + a/b/c colors + arrow style. */
+export const LATTICE_VECTOR_BYTES = 80
+
+/** Pure packing seam for the WebGL-equivalent transformed cell box. */
+export function pack_cell_uniform(
+  lattice: ArrayLike<number>,
+  origin: readonly [number, number, number],
+  color: readonly [number, number, number],
+): Float32Array {
+  const data = new Float32Array(CELL_BYTES / Float32Array.BYTES_PER_ELEMENT)
+  data[0] = lattice[0] ?? 0
+  data[1] = lattice[1] ?? 0
+  data[2] = lattice[2] ?? 0
+  data[4] = lattice[3] ?? 0
+  data[5] = lattice[4] ?? 0
+  data[6] = lattice[5] ?? 0
+  data[8] = lattice[6] ?? 0
+  data[9] = lattice[7] ?? 0
+  data[10] = lattice[8] ?? 0
+  data[12] = origin[0]
+  data[13] = origin[1]
+  data[14] = origin[2]
+  data[16] = color[0]
+  data[17] = color[1]
+  data[18] = color[2]
+  data[19] = 1
+  return data
+}
+
+/** Pure packing seam for Lattice.svelte's three world-space vector arrows.
+ *  Colors are linear RGB. `width_scale` mirrors
+ *  cell_edge_width / DEFAULTS.structure.cell_edge_width. */
+export function pack_lattice_vector_uniform(
+  origin: readonly [number, number, number],
+  colors: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ],
+  width_scale: number,
+): Float32Array {
+  const data = new Float32Array(
+    LATTICE_VECTOR_BYTES / Float32Array.BYTES_PER_ELEMENT,
+  )
+  data[0] = origin[0]
+  data[1] = origin[1]
+  data[2] = origin[2]
+  for (let axis = 0; axis < 3; axis++) {
+    const offset = 4 + axis * 4
+    data[offset] = colors[axis][0]
+    data[offset + 1] = colors[axis][1]
+    data[offset + 2] = colors[axis][2]
+    data[offset + 3] = 1
+  }
+  const scale = Number.isFinite(width_scale) && width_scale > 0
+    ? width_scale
+    : 1
+  data[16] = 0.05 * scale
+  data[17] = 0.175 * scale
+  data[18] = 0.5
+  data[19] = 0.85
+  return data
+}
+
+export type LargeSystemLatticeVectorStyle = {
+  show: boolean
+  width_scale: number
+  colors: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ]
+}
 
 
 /** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
@@ -85,13 +185,71 @@ const SUPERCELL_BYTES = 64
  *  (triangle-strip ⇒ this many verts). */
 const BOND_VERTS_PER_CYLINDER = 6
 
-/** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
- *  bond render shader as part of its uniform so it can be retuned without a
- *  shader edit. */
-const BOND_RADIUS = 0.16
+/** Bond-render uniform: 3 padded lattice rows + 2 style vec4s. The final three
+ *  lanes remain reserved so the established 80-byte ABI does not move; rendered
+ *  endpoint colors come exclusively from the authoritative atom-color buffer. */
+export const BOND_RENDER_BYTES = 80
 
-/** Neutral bond color (linear rgb). Half-A/half-B coloring is a later milestone. */
-const BOND_COLOR: [number, number, number] = [0.7, 0.7, 0.7]
+export type LargeSystemBondStyle = {
+  /** Cylinder radius in Å; fed directly by the viewer's bond_thickness setting. */
+  radius: number
+  /** Shorten incomplete periodic half-edges instead of ending at the midpoint. */
+  incomplete_edge_mode: boolean
+  /** Fraction of the historical midpoint half-edge length, clamped to [0.05, 1]. */
+  incomplete_edge_length_scale: number
+  /** Collapse incomplete boundary edges when no real/ghost partner is drawn. */
+  hide_incomplete_bonds: boolean
+  /** Opacity of incomplete periodic half-edges and ghost-complete boundary edges. */
+  periodic_bond_opacity: number
+}
+
+const DEFAULT_BOND_STYLE: LargeSystemBondStyle = {
+  radius: 0.07,
+  incomplete_edge_mode: false,
+  incomplete_edge_length_scale: 1,
+  hide_incomplete_bonds: false,
+  periodic_bond_opacity: 1,
+}
+
+/** Normalize DOM/settings inputs once at the renderer boundary. */
+export function normalize_bond_style(
+  style: Partial<LargeSystemBondStyle> = {},
+): LargeSystemBondStyle {
+  const radius = Number.isFinite(style.radius) && (style.radius as number) > 0
+    ? style.radius as number
+    : DEFAULT_BOND_STYLE.radius
+  const raw_scale = Number.isFinite(style.incomplete_edge_length_scale)
+    ? style.incomplete_edge_length_scale as number
+    : DEFAULT_BOND_STYLE.incomplete_edge_length_scale
+  const raw_opacity = Number.isFinite(style.periodic_bond_opacity)
+    ? style.periodic_bond_opacity as number
+    : DEFAULT_BOND_STYLE.periodic_bond_opacity
+  return {
+    radius,
+    incomplete_edge_mode: style.incomplete_edge_mode === true,
+    incomplete_edge_length_scale: Math.max(0.05, Math.min(1, raw_scale)),
+    hide_incomplete_bonds: style.hide_incomplete_bonds === true,
+    periodic_bond_opacity: Math.max(0, Math.min(1, raw_opacity)),
+  }
+}
+
+/** Pure std140-compatible packer shared by production uploads and tests. */
+export function pack_bond_render_uniform(
+  lattice: Float32Array,
+  style: LargeSystemBondStyle,
+): Float32Array {
+  const u = new Float32Array(BOND_RENDER_BYTES / 4)
+  u[0] = lattice[0]; u[1] = lattice[1]; u[2] = lattice[2]; u[3] = 0
+  u[4] = lattice[3]; u[5] = lattice[4]; u[6] = lattice[5]; u[7] = 0
+  u[8] = lattice[6]; u[9] = lattice[7]; u[10] = lattice[8]; u[11] = 0
+  u[12] = style.radius
+  u[13] = style.incomplete_edge_mode ? 1 : 0
+  u[14] = style.incomplete_edge_length_scale
+  u[15] = style.hide_incomplete_bonds ? 1 : 0
+  u[16] = style.periodic_bond_opacity
+  // u[17..19] are reserved to retain the 80-byte BondU ABI.
+  return u
+}
 
 /** Default clear color when no background is threaded in: a distinct dark
  *  background (near-black, faint blue tint) so flipping the toggle visibly
@@ -101,21 +259,123 @@ const CLEAR_COLOR: GPUColor = { r: 0.02, g: 0.03, b: 0.05, a: 1 }
 
 const DEPTH_FORMAT: GPUTextureFormat = `depth24plus`
 
-/** MSAA sample count for the overlay. 4× MSAA + alpha-to-coverage gives the
- *  impostor silhouettes (defined by fragment discard / ray-miss) smooth,
- *  analytically-AA'd edges that match the WebGL view's `antialias:true`. Both
- *  the color and depth render targets are multisampled at this count; the color
- *  target resolves into the swapchain texture each frame. */
+/** Shared WGSL: the linear-RGB → sRGB transfer curve, byte-for-byte the same
+ *  piecewise function as `linearTosRGB` in the WebGL atom shader
+ *  (src/lib/structure/atoms/AtomManagerInstances.svelte).
+ *
+ *  Why every fragment shader here MUST end with it: the swapchain is configured
+ *  with `navigator.gpu.getPreferredCanvasFormat()`, which is a NON-sRGB format
+ *  (`bgra8unorm` on every current platform). WebGPU therefore performs no
+ *  automatic encode on write — whatever a shader returns is what the display
+ *  shows, bit for bit. Every colour reaching these shaders is LINEAR (atom
+ *  colours, cell edge, bond grey, depth-cue background), so without this the
+ *  overlay displays linear values as though they were sRGB. That crushes the
+ *  mid-tones toward black — grey #808080 lands on 41/255 instead of 128/255 —
+ *  which is what made the cell box and bonds nearly invisible and flattened
+ *  every sphere's shaded limb into the background. */
+const LINEAR_TO_SRGB_WGSL = `
+fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+`
+
+/** TS twin of LINEAR_TO_SRGB_WGSL, for colours that bypass a shader — i.e. the
+ *  render-pass `clearValue`, which the driver writes into the (non-sRGB) target
+ *  verbatim. */
+function linear_to_srgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(c, 0), 1 / 2.4) - 0.055
+}
+
+/** Atom shading uniform: 6 × vec4 = 96 bytes. Carries the SAME knobs the WebGL
+ *  atom shader takes as uniforms, so the two paths shade identically:
+ *    0: light_dir.xyz (view-space headlamp) | w = 1 when the camera is orthographic
+ *    1: ambient | directional | spec_strength | roughness
+ *    2: metalness | render_style (0 glossy, 1 matte, 2 toon) | outline | depth_cueing
+ *    3: depth_near | depth_far | bond_outline | pad
+ *    4: depth_cue_bg.rgb (LINEAR — the shader encodes it) | pad
+ *    5: toon shadow_threshold | highlight_threshold | shadow_brightness | pad */
+const SHADING_FLOATS = 24
+const SHADING_BYTES = SHADING_FLOATS * Float32Array.BYTES_PER_ELEMENT
+
+/** Neutral defaults, used until the overlay pushes the viewer's real settings.
+ *  Mirrors the `glossy` lighting profile + depth cueing off. */
+const DEFAULT_SHADING: ResolvedVisualShading = {
+  light_dir: [0, 0, 1],
+  is_ortho: false,
+  ambient: 0.6,
+  directional: 2.2,
+  spec_strength: 1,
+  ...style_pbr(`glossy`),
+  render_style: 0,
+  outline: 0,
+  bond_outline: 0,
+  depth_cueing: 0,
+  depth_near: 0,
+  depth_far: 10,
+  depth_bg: [0, 0, 0],
+  toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
+  toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
+  toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
+}
+
+/** Compatibility name for callers migrating to the shared visual-state core.
+ *  The renderer itself consumes ResolvedVisualShading directly. */
+export type LargeSystemShading = ResolvedVisualShading
+
+/** Pack the shared shading snapshot into the six-vec4 WGSL uniform layout. */
+function pack_shading_uniform(state: ResolvedVisualShading): Float32Array {
+  const f = new Float32Array(SHADING_FLOATS)
+  // vec4 0: headlamp xyz + is_ortho flag
+  f[0] = state.light_dir[0]
+  f[1] = state.light_dir[1]
+  f[2] = state.light_dir[2]
+  f[3] = state.is_ortho ? 1 : 0
+  // vec4 1: ambient, directional, spec_strength, roughness
+  f[4] = state.ambient
+  f[5] = state.directional
+  f[6] = state.spec_strength
+  f[7] = state.roughness
+  // vec4 2: metalness, render_style, outline, depth_cueing
+  f[8] = state.metalness
+  f[9] = state.render_style
+  f[10] = state.outline
+  f[11] = state.depth_cueing
+  // vec4 3: depth near/far, bond-only outline (+ 1 zero-initialized pad)
+  f[12] = state.depth_near
+  f[13] = state.depth_far
+  f[14] = state.bond_outline
+  // vec4 4: depth-cue background, LINEAR rgb (+ zero padding)
+  f[16] = state.depth_bg[0]
+  f[17] = state.depth_bg[1]
+  f[18] = state.depth_bg[2]
+  // vec4 5: toon thresholds (+ zero padding)
+  f[20] = state.toon_shadow_threshold
+  f[21] = state.toon_highlight_threshold
+  f[22] = state.toon_shadow_brightness
+  return f
+}
+
+/** Keep the cached comparison snapshot independent of caller-owned tuples. */
+function snapshot_shading(state: ResolvedVisualShading): ResolvedVisualShading {
+  return {
+    ...state,
+    light_dir: [...state.light_dir],
+    depth_bg: [...state.depth_bg],
+  }
+}
+
+/** Match the ordinary antialiased canvas with a 4× target for real geometry.
+ *  Atom/bond impostors use continuous per-pixel fwidth alpha and keep
+ *  alpha-to-coverage disabled, avoiding implementation-dependent stipple. */
 const SAMPLE_COUNT = 4
 
 /** WGSL cell-box line shader. Draws the 12 edges of the parallelepiped spanned
  *  by lattice vectors a,b,c as a `line-list` (24 vertices = 12 edges × 2 ends).
- *  Corners are generated in the vertex shader from a lattice uniform: the cell
- *  spans from origin 0 to a+b+c, in the SAME coordinate space as the atom
- *  positions (atoms render at raw site.xyz; the WebGL Lattice box likewise spans
- *  origin→a+b+c within the shared scene group — see Lattice.svelte's
- *  lattice_center = 0.5·(a+b+c) applied to an origin-centered box), so no extra
- *  centering offset is needed.
+ *  Corners are generated in the vertex shader from transformed lattice vectors
+ *  and the transformed cell origin. This matches the WebGL scene group's
+ *  T(target)·R·T(-target) transform for both atoms and the lattice box.
  *  Lattice convention: lat0/lat1/lat2 are rows a/b/c of the row-major 9-float
  *  matrix (same as the bond render uniform), so corner(i) = bit0·a + bit1·b +
  *  bit2·c. Depth uses the SAME GL→WebGPU clip-z remap as the atom impostor so the
@@ -126,11 +386,12 @@ struct Camera {
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Cell uniform: lattice rows a,b,c (vec3+pad each) + color (rgb + pad).
+// Cell uniform: lattice rows a,b,c + transformed origin + color.
 struct CellU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
+  origin : vec4<f32>,
   color : vec4<f32>,
 };
 
@@ -154,7 +415,8 @@ fn corner(i : u32) -> vec3<f32> {
   let fa = f32(i & 1u);
   let fb = f32((i >> 1u) & 1u);
   let fc = f32((i >> 2u) & 1u);
-  return fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
+  return cell.origin.xyz
+    + fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
 }
 
 @vertex
@@ -174,46 +436,215 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(in.color, 1.0);
+  // cell.color is LINEAR (hex_to_linear_rgb) — encode, or the default #808080
+  // grey box paints at 41/255 instead of 128/255 and all but disappears.
+  return vec4<f32>(linear_to_srgb(in.color), 1.0);
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
-/** WGSL axis-orientation gizmo shader. Draws a small camera-oriented XYZ triad
- *  (X=red, Y=green, Z=blue) pinned to a fixed SCREEN CORNER, sized in constant
- *  pixels, independent of zoom / structure scale. It replaces the WebGL Gizmo
- *  widget (which is gone when WebGL is suspended in overlay mode).
- *
- *  Geometry: a line-list of 22 vertices.
- *    - verts 0..5  = the 3 axis lines (3 axes × 2 endpoints): axis index = vi/2
- *      selects the unit axis (+X/+Y/+Z); the low bit picks origin vs. axis tip.
- *    - verts 6..21 = 16 LETTER-GLYPH endpoints (8 line segments × 2): tiny X/Y/Z
- *      letters drawn at each axis tip, color-matched to the axis. X=2 segments,
- *      Y=3, Z=3. Each glyph vertex offsets from its axis' PROJECTED tip by a 2D
- *      template coordinate scaled to a small constant pixel size — the letters
- *      stay SCREEN-FLAT (no 3D rotation), facing the viewer at the tip.
- *  Orientation of the AXES uses ONLY the camera view ROTATION (upper-3×3 of
- *  camera.view, NOT its translation), so the triad spins with the camera like an
- *  orientation indicator. The rotated axis' XY (screen plane; camera looks down
- *  -Z in view space) is scaled to a small NDC region and offset to the corner.
- *  The corner center + per-pixel NDC scale (aspect-corrected so the region is
- *  square in pixels) come from a uniform the renderer fills from the canvas size.
- *
- *  Depth: the gizmo must ALWAYS be visible (never occluded by atoms/bonds). Its
- *  pipeline runs with depthCompare:`always` + depthWriteEnabled:false, and it is
- *  drawn LAST in the pass, so it overwrites the corner regardless of scene depth. */
-const GIZMO_WGSL = `
+/** Procedural world-space lattice arrows matching Lattice.svelte:
+ *  3 instances (a/b/c), each a closed 16-sided cylinder plus cone. */
+const LATTICE_VECTOR_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Gizmo placement uniform:
-//   center_ndc : corner anchor in clip/NDC space (xy), z/w unused.
-//   scale_ndc  : per-unit-axis NDC half-extent (x,y) — y carries the aspect
-//                correction so the triad is square in pixels.
+struct CellU {
+  lat0 : vec4<f32>,
+  lat1 : vec4<f32>,
+  lat2 : vec4<f32>,
+  origin : vec4<f32>,
+  color : vec4<f32>,
+};
+struct VectorU {
+  origin : vec4<f32>,
+  color_a : vec4<f32>,
+  color_b : vec4<f32>,
+  color_c : vec4<f32>,
+  style : vec4<f32>, // shaft radius, cone radius, cone height, shaft fraction
+};
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var<uniform> cell : CellU;
+@group(0) @binding(2) var<uniform> vectors : VectorU;
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) @interpolate(flat) color : vec3<f32>,
+};
+
+fn ring_offset(
+  basis_u : vec3<f32>,
+  basis_v : vec3<f32>,
+  radius : f32,
+  segment : u32,
+) -> vec3<f32> {
+  let angle = 6.28318530718 * f32(segment % 16u) / 16.0;
+  return radius * (cos(angle) * basis_u + sin(angle) * basis_v);
+}
+
+@vertex
+fn vs_main(
+  @builtin(vertex_index) vi : u32,
+  @builtin(instance_index) axis_index : u32,
+) -> VsOut {
+  var lattice_vec = cell.lat0.xyz;
+  var axis_color = vectors.color_a.xyz;
+  switch axis_index {
+    case 1u: {
+      lattice_vec = cell.lat1.xyz;
+      axis_color = vectors.color_b.xyz;
+    }
+    case 2u: {
+      lattice_vec = cell.lat2.xyz;
+      axis_color = vectors.color_c.xyz;
+    }
+    default: {}
+  }
+
+  let vec_length = length(lattice_vec);
+  if (!(vec_length > 1e-10)) {
+    var collapsed : VsOut;
+    collapsed.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    collapsed.color = axis_color;
+    return collapsed;
+  }
+
+  let dir = lattice_vec / vec_length;
+  let helper = select(
+    vec3<f32>(1.0, 0.0, 0.0),
+    vec3<f32>(0.0, 1.0, 0.0),
+    abs(dir.x) > 0.9,
+  );
+  let basis_u = normalize(cross(dir, helper));
+  let basis_v = cross(dir, basis_u);
+  let origin = vectors.origin.xyz;
+  let shaft_end = origin + dir * (vec_length * vectors.style.w);
+  let shaft_radius = vectors.style.x;
+  let cone_radius = vectors.style.y;
+  let cone_half_height = vectors.style.z * 0.5;
+  let cone_base = shaft_end - dir * cone_half_height;
+  let cone_apex = shaft_end + dir * cone_half_height;
+
+  var world = origin;
+  if (vi < 96u) {
+    // Cylinder side: 16 quads × 2 triangles × 3 vertices.
+    let segment = vi / 6u;
+    let local = vi % 6u;
+    let ring0 = ring_offset(basis_u, basis_v, shaft_radius, segment);
+    let ring1 = ring_offset(basis_u, basis_v, shaft_radius, segment + 1u);
+    switch local {
+      case 0u: { world = origin + ring0; }
+      case 1u: { world = shaft_end + ring0; }
+      case 2u: { world = shaft_end + ring1; }
+      case 3u: { world = origin + ring0; }
+      case 4u: { world = shaft_end + ring1; }
+      default: { world = origin + ring1; }
+    }
+  } else if (vi < 192u) {
+    // Cylinder caps: two triangles per segment.
+    let local_vi = vi - 96u;
+    let segment = local_vi / 6u;
+    let local = local_vi % 6u;
+    let ring0 = ring_offset(basis_u, basis_v, shaft_radius, segment);
+    let ring1 = ring_offset(basis_u, basis_v, shaft_radius, segment + 1u);
+    if (local < 3u) {
+      switch local {
+        case 0u: { world = origin; }
+        case 1u: { world = origin + ring1; }
+        default: { world = origin + ring0; }
+      }
+    } else {
+      switch local - 3u {
+        case 0u: { world = shaft_end; }
+        case 1u: { world = shaft_end + ring0; }
+        default: { world = shaft_end + ring1; }
+      }
+    }
+  } else if (vi < 240u) {
+    // Cone side: 16 triangles.
+    let local_vi = vi - 192u;
+    let segment = local_vi / 3u;
+    let local = local_vi % 3u;
+    let ring0 = ring_offset(basis_u, basis_v, cone_radius, segment);
+    let ring1 = ring_offset(basis_u, basis_v, cone_radius, segment + 1u);
+    switch local {
+      case 0u: { world = cone_base + ring0; }
+      case 1u: { world = cone_apex; }
+      default: { world = cone_base + ring1; }
+    }
+  } else {
+    // Cone base: 16 triangles.
+    let local_vi = vi - 240u;
+    let segment = local_vi / 3u;
+    let local = local_vi % 3u;
+    let ring0 = ring_offset(basis_u, basis_v, cone_radius, segment);
+    let ring1 = ring_offset(basis_u, basis_v, cone_radius, segment + 1u);
+    switch local {
+      case 0u: { world = cone_base; }
+      case 1u: { world = cone_base + ring1; }
+      default: { world = cone_base + ring0; }
+    }
+  }
+
+  var clip = camera.proj * (camera.view * vec4<f32>(world, 1.0));
+  clip.z = (clip.z + clip.w) * 0.5;
+  var out : VsOut;
+  out.clip = clip;
+  out.color = axis_color;
+  return out;
+}
+
+@fragment
+fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  return vec4<f32>(linear_to_srgb(in.color), 1.0);
+}
+` + LINEAR_TO_SRGB_WGSL
+
+/** WGSL axis-orientation gizmo. A WebGPU replica of the WebGL viewer's
+ *  three-viewport-gizmo widget (sphere type, as configured in StructureScene's
+ *  gizmo_props), which is gone while WebGL is suspended in overlay mode. Visual
+ *  spec mirrored from that library's sphere layout:
+ *    - internal ortho frame spans ±1.8 units across the widget; axis heads sit
+ *      at ±1.3 units along each (camera-rotation-projected) axis
+ *    - positive heads: filled circle, radius 0.35 unit, axis-colored, with the
+ *      axis letter inside (labelColor #111) and a line from the center
+ *    - negative heads: smaller filled circle (0.225 unit), darker negative
+ *      color, no letter, no line
+ *    - lines: 4 px wide (lineWidth default), origin → head center
+ *    - opacities: 0.8 positive / 0.9 negative (StructureScene's axis_options)
+ *  Rendered as ONE triangle-strip quad; the fragment shader draws everything
+ *  analytically (SDF circles / round-capped segments, 0.75 px edge ramps) so
+ *  every edge is antialiased — no 1 px line-list aliasing. Elements composite
+ *  back-to-front (painter's algorithm on the rotated z) inside the shader and
+ *  the premultiplied result alpha-blends over the scene.
+ *
+ *  Orientation uses ONLY the camera view ROTATION (upper-3×3 of camera.view),
+ *  so the triad spins with the camera but stays pinned to its corner. A head
+ *  pointing at the viewer projects toward the widget center — same as the
+ *  WebGL gizmo. Shared DISPLAY-space colors from rendering/gizmo.ts are written
+ *  verbatim to the non-sRGB target, with NO linear→sRGB encode — encoding would
+ *  wash them out.
+ *
+ *  Always on top: depthCompare:`always`, no depth write, drawn LAST.
+ *
+ *  Exported so the parity unit test can check the generated WGSL table against
+ *  the shared palette. */
+export const GIZMO_WGSL = `
+struct Camera {
+  view : mat4x4<f32>,
+  proj : mat4x4<f32>,
+  cam_pos : vec4<f32>,
+};
+// Gizmo placement uniform (filled from canvas size + dpr + HUD safe-area):
+//   place : xy = widget center in NDC, z = half-extent R in device px,
+//           w = unit_px (R / 1.8 — the internal ortho unit in device px).
+//   px    : xy = px→NDC scale (2/w, 2/h), z = line half-width in device px,
+//           w unused.
 struct GizmoU {
-  center_ndc : vec4<f32>,
-  scale_ndc : vec4<f32>,
+  place : vec4<f32>,
+  px : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera : Camera;
@@ -221,104 +652,159 @@ struct GizmoU {
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
-  @location(0) color : vec3<f32>,
+  @location(0) p : vec2<f32>, // local coords in device px, y-up, origin at center
 };
 
-// Axis unit vectors and their (linear-ish) colors. X red, Y green, Z blue.
-const AXES = array<vec3<f32>, 3>(
-  vec3<f32>(1.0, 0.0, 0.0),
-  vec3<f32>(0.0, 1.0, 0.0),
-  vec3<f32>(0.0, 0.0, 1.0),
-);
+// Shared axis basis + column-major view projection from rendering/gizmo.ts.
+${GIZMO_ORIENTATION_WGSL}
+// Shared positive-axis palette, generated from rendering/gizmo.ts.
 const AXIS_COLORS = array<vec3<f32>, 3>(
-  vec3<f32>(0.85, 0.10, 0.10),
-  vec3<f32>(0.10, 0.70, 0.10),
-  vec3<f32>(0.10, 0.10, 0.85),
+${gizmo_wgsl_color_vectors(GIZMO_AXIS_HEX)}
 );
+// Shared negative-axis palette, generated from rendering/gizmo.ts.
+const NEG_AXIS_COLORS = array<vec3<f32>, 3>(
+${gizmo_wgsl_color_vectors(GIZMO_NEG_AXIS_HEX)}
+);
+const LABEL_COLOR = vec3<f32>(0.067, 0.067, 0.067); // labelColor #111
+const POS_ALPHA : f32 = 0.8;   // positive-axis opacity (gizmo_props)
+const NEG_ALPHA : f32 = 0.9;   // negative-axis opacity (gizmo_props)
+// Sphere-layout metrics in internal ortho units (×unit_px → device px).
+const HEAD_DIST : f32 = 1.3;    // three-viewport-gizmo sphere endpoint distance
+const POS_R : f32 = 0.35;       // positive head radius (sprite scale 0.7 / 2)
+const NEG_R : f32 = 0.225;      // negative head radius (sprite scale 0.45 / 2)
+const LINE_DIST : f32 = HEAD_DIST - POS_R; // line stops at the head's near edge
+const GLYPH_R : f32 = 0.185;    // letter half-height inside the positive head
+const GLYPH_STROKE : f32 = 0.2; // letter stroke half-width, as a fraction of GLYPH_R
 
-// Letter-glyph templates as 2D line segments on a [-1,1] square, screen-aligned.
-// 8 segments = 16 endpoints (glyph verts 0..15 = gizmo verts 6..21):
-//   X (axis 0): segs 0,1 -> two crossing diagonals.
-//   Y (axis 1): segs 2,3,4 -> two upper arms to center + stem down.
-//   Z (axis 2): segs 5,6,7 -> top bar, diagonal, bottom bar.
-const GLYPH_PTS = array<vec2<f32>, 16>(
-  // X: (-1,-1)->(1,1), (-1,1)->(1,-1)
-  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0),
-  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0),
-  // Y: (-1,1)->(0,0), (1,1)->(0,0), (0,0)->(0,-1)
-  vec2<f32>(-1.0, 1.0), vec2<f32>(0.0, 0.0),
-  vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0),
-  vec2<f32>(0.0, 0.0), vec2<f32>(0.0, -1.0),
-  // Z: (-1,1)->(1,1), (1,1)->(-1,-1), (-1,-1)->(1,-1)
-  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
-  vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0),
-  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0),
+// Letter strokes on a [-1,1] template box (y-up), round-capped segments.
+// (ax, ay, bx, by) per segment. X = segs 0-1, Y = 2-4, Z = 5-7.
+const GLYPH_SEGS = array<vec4<f32>, 8>(
+  vec4<f32>(-0.72, -1.0, 0.72, 1.0),  // X diagonal /
+  vec4<f32>(-0.72, 1.0, 0.72, -1.0),  // X diagonal \\
+  vec4<f32>(-0.72, 1.0, 0.0, 0.05),   // Y left arm
+  vec4<f32>(0.72, 1.0, 0.0, 0.05),    // Y right arm
+  vec4<f32>(0.0, 0.05, 0.0, -1.0),    // Y stem
+  vec4<f32>(-0.62, 1.0, 0.62, 1.0),   // Z top bar
+  vec4<f32>(0.62, 1.0, -0.62, -1.0),  // Z diagonal
+  vec4<f32>(-0.62, -1.0, 0.62, -1.0), // Z bottom bar
 );
-// Which axis (tip + color) each of the 16 glyph endpoints belongs to.
-const GLYPH_AXIS = array<u32, 16>(
-  0u, 0u, 0u, 0u,                 // X: 2 segs
-  1u, 1u, 1u, 1u, 1u, 1u,         // Y: 3 segs
-  2u, 2u, 2u, 2u, 2u, 2u,         // Z: 3 segs
-);
-// Glyph half-size in pixels (the template [-1,1] maps to +-GLYPH_PX). Sat past
-// the axis tip by GLYPH_TIP_SCALE so the letter clears the arrow end.
-const GLYPH_PX : f32 = 9.0;
-const GLYPH_TIP_SCALE : f32 = 1.18;
-// Mirrors the TS-side GIZMO_PX: scale_ndc spans GIZMO_PX pixels per unit axis, so
-// dividing GLYPH_PX by it converts the glyph half-size into the same NDC scale.
-const GIZMO_PX_F : f32 = 120.0;
+const GLYPH_START = array<u32, 3>(0u, 2u, 5u);
+const GLYPH_COUNT = array<u32, 3>(2u, 3u, 3u);
+
+// Signed distance to the segment [a,b] (round caps come from the radius the
+// caller subtracts).
+fn sd_segment(p : vec2<f32>, a : vec2<f32>, b : vec2<f32>) -> f32 {
+  let pa = p - a;
+  let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+// SDF → coverage with a fixed 0.75 px edge ramp (p is in device px, so no
+// fwidth needed — distances ARE pixels).
+fn cov(d : f32) -> f32 {
+  return clamp(0.5 - d / 0.75, 0.0, 1.0);
+}
+
+// src-over: paint (rgb, a) on top of the premultiplied accumulator.
+fn over(acc : vec4<f32>, rgb : vec3<f32>, a : f32) -> vec4<f32> {
+  return vec4<f32>(rgb * a + acc.rgb * (1.0 - a), a + acc.a * (1.0 - a));
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
-  // Camera view ROTATION only (upper-3x3 of camera.view). Drop translation so
-  // the triad rotates with the camera but stays pinned to the corner.
-  let rot = mat3x3<f32>(
-    camera.view[0].xyz,
-    camera.view[1].xyz,
-    camera.view[2].xyz,
-  );
-
-  // The glyph half-size in NDC reuses the per-axis pixel scale (scale_ndc spans
-  // GIZMO_PX), so a GLYPH_PX template is square in pixels and not skewed.
-  let glyph_ndc = vec2<f32>(
-    giz.scale_ndc.x * (GLYPH_PX / GIZMO_PX_F),
-    giz.scale_ndc.y * (GLYPH_PX / GIZMO_PX_F),
-  );
-
+  // Full-widget quad as a 4-vert triangle-strip: (-1,-1) (1,-1) (-1,1) (1,1).
+  let cx = select(-1.0, 1.0, (vi & 1u) == 1u);
+  let cy = select(-1.0, 1.0, (vi & 2u) == 2u);
+  let r_px = giz.place.z;
   var out : VsOut;
-
-  if (vi < 6u) {
-    // --- Axis lines: 3 axes x 2 endpoints (origin -> rotated tip). ---
-    let axis_i = vi / 2u;            // 0=X, 1=Y, 2=Z
-    let is_tip = (vi & 1u) == 1u;    // segment: origin -> tip
-    let dir = rot * AXES[axis_i];    // rotated axis in view space (camera looks -Z)
-    let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
-    let off = select(vec2<f32>(0.0, 0.0), tip_off, is_tip);
-    let pos = giz.center_ndc.xy + off;
-    out.clip = vec4<f32>(pos, 0.0, 1.0);
-    out.color = AXIS_COLORS[axis_i];
-    return out;
-  }
-
-  // --- Letter glyphs: verts 6..21 -> glyph endpoints 0..15. ---
-  let gvi = vi - 6u;
-  let axis_i = GLYPH_AXIS[gvi];
-  // Projected axis tip in NDC, pushed slightly BEYOND the tip so the letter sits
-  // past the arrow end (along the rotated axis' screen direction).
-  let dir = rot * AXES[axis_i];
-  let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
-  let tip_pos = giz.center_ndc.xy + tip_off * GLYPH_TIP_SCALE;
-  // Screen-flat template offset (NO 3D rotation): the letter faces the viewer.
-  let t = GLYPH_PTS[gvi];
-  let pos = tip_pos + vec2<f32>(t.x * glyph_ndc.x, t.y * glyph_ndc.y);
-  out.clip = vec4<f32>(pos, 0.0, 1.0);
-  out.color = AXIS_COLORS[axis_i];
+  out.p = vec2<f32>(cx, cy) * r_px;
+  out.clip = vec4<f32>(giz.place.xy + out.p * giz.px.xy, 0.0, 1.0);
   return out;
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  return vec4<f32>(in.color, 1.0);
+  // Camera view ROTATION only — the triad orients with the camera.
+  let unit = giz.place.w;
+
+  // Rotated axes: screen offset (view-space xy, y-up — matches in.p) + depth.
+  var head : array<vec2<f32>, 3>;
+  var depth : array<f32, 3>;
+  for (var i = 0u; i < 3u; i++) {
+    let d = project_gizmo_axis(camera.view, i);
+    head[i] = d.xy * (HEAD_DIST * unit);
+    depth[i] = d.z;
+  }
+
+  var acc = vec4<f32>(0.0);
+
+  // ── Axis lines: the ordinary widget ends each opaque line at the positive
+  // sprite's near edge: 1.3 - 0.35 = 0.95 internal units. ──
+  for (var i = 0u; i < 3u; i++) {
+    let projected = project_gizmo_axis(camera.view, i);
+    let line_end = projected.xy * (LINE_DIST * unit);
+    let d = sd_segment(in.p, vec2<f32>(0.0), line_end) - giz.px.z;
+    acc = over(acc, AXIS_COLORS[i], cov(d));
+  }
+
+  // ── Heads: 6 balls (±X ±Y ±Z), painter-sorted far → near on rotated z. ──
+  // Encode each as axis index i + sign s; z = s·depth[i].
+  var order = array<u32, 6>(0u, 1u, 2u, 3u, 4u, 5u); // 0-2 = +XYZ, 3-5 = −XYZ
+  var zval : array<f32, 6>;
+  for (var k = 0u; k < 6u; k++) {
+    let i = k % 3u;
+    zval[k] = select(depth[i], -depth[i], k >= 3u);
+  }
+  // Insertion sort ascending (most negative = farthest = painted first).
+  for (var a = 1u; a < 6u; a++) {
+    let key = order[a];
+    let kz = zval[key];
+    var b = a;
+    for (; b > 0u && zval[order[b - 1u]] > kz; b--) {
+      order[b] = order[b - 1u];
+    }
+    order[b] = key;
+  }
+
+  for (var k = 0u; k < 6u; k++) {
+    let id = order[k];
+    let i = id % 3u;
+    let positive = id < 3u;
+    let center = select(-head[i], head[i], positive);
+    let radius = select(NEG_R, POS_R, positive) * unit;
+    let ball_cov = cov(length(in.p - center) - radius);
+    let color = select(NEG_AXIS_COLORS[i], AXIS_COLORS[i], positive);
+    // three-viewport-gizmo halves the back-facing endpoint opacity per axis.
+    let positive_front = depth[i] >= 0.0;
+    let positive_alpha = select(POS_ALPHA * 0.5, POS_ALPHA, positive_front);
+    let negative_alpha = select(NEG_ALPHA, NEG_ALPHA * 0.5, positive_front);
+    let alpha = select(negative_alpha, positive_alpha, positive);
+
+    if (positive) {
+      // Letter inside the head, screen-flat. Union of the letter's stroke
+      // segments. The ordinary widget bakes letter + circle into ONE sprite, so
+      // mix the RGB first and apply the endpoint alpha exactly once.
+      let g = GLYPH_R * unit;
+      let q = (in.p - center) / g;
+      var dmin = 1e9;
+      let s0 = GLYPH_START[i];
+      for (var s = 0u; s < GLYPH_COUNT[i]; s++) {
+        let seg = GLYPH_SEGS[s0 + s];
+        dmin = min(dmin, sd_segment(q, seg.xy, seg.zw));
+      }
+      // Back to px, minus the stroke half-width; clip to the ball so AA fringes
+      // never poke outside it.
+      let letter_cov = min(cov(dmin * g - GLYPH_STROKE * g), ball_cov);
+      let sprite_color = mix(color, LABEL_COLOR, letter_cov);
+      acc = over(acc, sprite_color, alpha * ball_cov);
+    } else {
+      acc = over(acc, color, alpha * ball_cov);
+    }
+  }
+
+  // Premultiplied out; the pipeline blends {one, one-minus-src-alpha}.
+  return acc;
 }
 `
 
@@ -334,8 +820,9 @@ struct Camera {
 };
 
 // GPU supercell uniform (Phase 1). dims = [nx,ny,nz] tiling counts; base_count =
-// atoms in the BASE cell. lat0/lat1/lat2 are the base lattice rows a,b,c (xyz in
-// .xyz, w pad) — the per-cell offset is ix·a + iy·b + iz·c. Default dims (1,1,1)
+// atoms in the BASE cell. lat0/lat1/lat2 are the base lattice rows a,b,c in
+// .xyz; lat0.w carries boundary policy and lat1.w sparse ghost opacity. The
+// per-cell offset is ix·a + iy·b + iz·c. Default dims (1,1,1)
 // + base_count = the instance count ⇒ atom = inst, zero offset ⇒ identical draw.
 struct Supercell {
   dims : vec4<u32>,    // x=nx, y=ny, z=nz, w=base_count
@@ -365,6 +852,18 @@ struct Supercell {
 @group(0) @binding(6) var<storage, read> ghost_sites : array<u32>;
 @group(0) @binding(7) var<storage, read> ghost_images : array<u32>;
 
+// Atom shading uniform — the WebGL atom shader's uniform set, mirrored 1:1 so
+// both renderers produce the same pixels. See ResolvedVisualShading (TS side).
+struct Shading {
+  light_dir : vec4<f32>,  // xyz = view-space headlamp, w = 1 when orthographic
+  params0   : vec4<f32>,  // ambient, directional, spec_strength, roughness
+  params1   : vec4<f32>,  // metalness, render_style, outline, depth_cueing
+  depth_cue : vec4<f32>,  // near, far, bond_outline, pad
+  depth_bg  : vec4<f32>,  // LINEAR rgb fade target + pad
+  toon      : vec4<f32>,  // shadow_thr, highlight_thr, shadow_brightness, pad
+};
+@group(0) @binding(8) var<uniform> shading : Shading;
+
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) vc : vec3<f32>,      // view-space sphere center
@@ -372,6 +871,8 @@ struct VsOut {
   @location(2) color : vec3<f32>,
   @location(3) vpos : vec3<f32>,    // view-space position of this quad corner
   @location(4) @interpolate(flat) sel : u32, // 1 = this atom is selected
+  @location(5) quad : vec2<f32>,    // billboard corner in [-1,1]
+  @location(6) @interpolate(flat) opacity : f32,
 };
 
 struct FsOut {
@@ -384,6 +885,39 @@ fn corner_for(vi : u32) -> vec2<f32> {
   let x = select(-1.0, 1.0, (vi & 1u) == 1u);
   let y = select(-1.0, 1.0, (vi & 2u) == 2u);
   return vec2<f32>(x, y);
+}
+
+// ACES filmic tonemap — rolls off the HDR key light so glossy highlights read
+// soft instead of clipping to white. Same curve as the WebGL atom shader.
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp(
+    (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0),
+  );
+}
+
+// Centered one-pixel radial coverage with a strict proxy-hull bound. fwidth can
+// be NaN/Inf on helper lanes on some drivers; dividing by Inf yields a seemingly
+// valid 0.5 coverage and leaks the whole billboard. Invalid derivatives fall
+// back to an exact inside test. The atom proxy has only 5% radial slack, so the
+// full AA width may not exceed 10% of the radius.
+fn sphere_coverage(radius : f32, distance : f32) -> f32 {
+  let fw_raw = fwidth(distance);
+  let fw_ok =
+    fw_raw == fw_raw &&
+    fw_raw > 0.0 &&
+    fw_raw < 1e20;
+  var coverage = select(0.0, 1.0, distance <= radius);
+  if (fw_ok) {
+    let fw = clamp(
+      fw_raw,
+      1e-8,
+      max(radius * 0.10, 1e-8),
+    );
+    coverage = clamp((radius - distance) / fw + 0.5, 0.0, 1.0);
+  }
+  return coverage;
 }
 
 @vertex
@@ -402,6 +936,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let real_count = base_count * nx * ny * nz;
   var atom : u32;
   var offset : vec3<f32>;
+  var opacity = 1.0;
   if (inst < real_count) {
     atom = inst % base_count;
     let cell = inst / base_count;
@@ -424,6 +959,9 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     offset = jx * supercell.lat0.xyz
            + jy * supercell.lat1.xyz
            + jz * supercell.lat2.xyz;
+    // lat1.w is the spare Supercell lane owned by visual ghost opacity.
+    // Home replicas stay opaque; only sparse image instances consume it.
+    opacity = clamp(supercell.lat1.w, 0.0, 1.0);
   }
 
   let center = vec3<f32>(
@@ -442,8 +980,11 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let vc = vc4.xyz;
 
   let c = corner_for(vi);
-  // Billboard in view space; bump radius slightly so the silhouette isn't clipped.
-  let vpos = vc + vec3<f32>(c * r * 1.5, 0.0);
+  // Billboard in view space, expanded by the SAME 1.05 the WebGL atom shader
+  // uses (enough to clear the silhouette at grazing angles, no more). The
+  // fragment stage reconstructs the ray from this exact factor, so the two must
+  // stay identical — a mismatch skews the analytic edge coverage.
+  let vpos = vc + vec3<f32>(c * r * 1.05, 0.0);
   var clip = camera.proj * vec4<f32>(vpos, 1.0);
   // three.js projectionMatrix uses GL NDC z in [-1,1]; WebGPU clip space needs
   // 0 <= z <= w (NDC z in [0,1]). Remap before returning @builtin(position).
@@ -456,75 +997,178 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.color = col;
   out.vpos = vpos;
   out.sel = selected[atom];
+  out.quad = c;
+  out.opacity = opacity;
   return out;
 }
 
+// Port of the WebGL atom fragment shader
+// (src/lib/structure/atoms/AtomManagerInstances.svelte). Every step below has a
+// twin there — ray-sphere in view space, analytic edge coverage, the three
+// shading branches, the sRGB encode, depth cueing, the outline. Keep them in
+// lockstep: any divergence is a visible regression the moment the user toggles
+// performance mode.
 @fragment
 fn fs_main(in : VsOut) -> FsOut {
-  // Eye at view-space origin; ray through the interpolated view-space position.
-  let ro = vec3<f32>(0.0, 0.0, 0.0);
-  let rd = normalize(in.vpos);
+  let is_ortho = shading.light_dir.w > 0.5;
+  let r = in.radius;
+  let r2 = r * r;
 
-  // Ray-sphere intersection: |ro + t*rd - vc|^2 = radius^2
-  let oc = ro - in.vc;
-  let b = dot(oc, rd);
-  let c = dot(oc, oc) - in.radius * in.radius;
-  let disc = b * b - c;
+  // This fragment's view-space position on the billboard. The quad is expanded
+  // in view XY only, so z is the sphere-center depth — exactly the WebGL
+  // shader's fragViewPos.
+  let offset = in.quad * r * 1.05;
+  let frag_view_pos = vec3<f32>(in.vc.xy + offset, in.vc.z);
+  let ray_dir = normalize(frag_view_pos);
 
-  // ── Analytic silhouette coverage (alpha-to-coverage AA) ────────────────────
-  // disc = r^2 - d_perp^2 where d_perp is the eye-ray's perpendicular distance
-  // to the center: >0 inside the disk, =0 exactly on the silhouette. This is a
-  // SMOOTH varying of the interpolated ray (in.vpos), so fwidth() gives the
-  // screen-space width of the silhouette band. coverage ramps 0->1 across that
-  // ~1px band; output as alpha so alpha-to-coverage turns it into fractional
-  // MSAA sample coverage -> smooth curved edges (plain MSAA can't smooth a
-  // hard discard edge).
-  let fw = fwidth(disc);
-  let coverage = clamp(disc / max(fw, 1e-8) + 0.5, 0.0, 1.0);
-  if (coverage <= 0.0) {
+  // Perpendicular eye-ray→center distance. Cross-product form, NOT the algebraic
+  // b²−c: that one subtracts two ~|vc|² values and loses precision once centers
+  // carry large lattice offsets — i.e. exactly the supercells this mode exists
+  // for — which shows up as concentric banding across each sphere. The WebGL
+  // path made the same switch for the same reason.
+  let d_persp = length(cross(in.vc, ray_dir));
+  let d_ortho = length(offset);
+  let d = select(d_persp, d_ortho, is_ortho);
+
+  // Analytic ~1px silhouette coverage on the radial distance, alpha-blended
+  // directly. fwidth() is evaluated here in uniform control flow.
+  let coverage = sphere_coverage(r, d);
+  // Fail CLOSED without clipping away the OUTER half of the one-pixel AA band.
+  // The positive-form guard also discards NaN (NaN > 0 is false), so invalid
+  // helper-lane derivatives cannot leak the billboard's 1.05r slack.
+  if (!(coverage > 0.0)) {
     discard;
   }
-  // Near hit. In the thin edge band disc may be ~0 (sqrt≈0), so the hit point
-  // sits on the silhouette — its depth is the right value for that band.
-  let t = -b - sqrt(max(disc, 0.0)); // near hit
-  if (t < 0.0) {
-    discard;
+
+  // thc clamped so grazing fragments (d slightly > r, inside the coverage band)
+  // still resolve to a finite hit point to shade.
+  let d2 = d * d;
+  let thc = sqrt(max(r2 - min(d2, r2), 0.0));
+
+  var hit_pos : vec3<f32>;
+  var normal : vec3<f32>;
+  if (is_ortho) {
+    // Orthographic: ray direction is −Z, so the perpendicular offset IS the
+    // fragment's XY offset from the center.
+    hit_pos = vec3<f32>(in.vc.xy + offset, in.vc.z + thc);
+    normal = normalize(vec3<f32>(offset, thc));
+  } else {
+    let tca = dot(in.vc, ray_dir);
+    hit_pos = (tca - thc) * ray_dir;
+    // Normal WITHOUT hit_pos − vc (another large-value subtraction):
+    //   hit_pos − vc = −thc·ray_dir − L_perp,  where L_perp = vc − tca·ray_dir
+    let l_perp = in.vc - tca * ray_dir;
+    normal = normalize(-thc * ray_dir - l_perp);
   }
-  let p = ro + t * rd;            // view-space hit point
-  let n = normalize(p - in.vc);   // surface normal
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(n, light_dir), 0.0);
+  let light_dir_view = normalize(shading.light_dir.xyz);
+  let view_dir = select(normalize(-hit_pos), vec3<f32>(0.0, 0.0, 1.0), is_ortho);
 
-  // Correct depth: project the hit point, apply the same GL->WebGPU z remap as
-  // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
-  let clip_h = camera.proj * vec4<f32>(p, 1.0);
-  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
+  let ambient      = shading.params0.x;
+  let directional  = shading.params0.y;
+  let spec_str     = shading.params0.z;
+  let rough        = shading.params0.w;
+  let metalness    = shading.params1.x;
+  let style        = i32(shading.params1.y + 0.5);
+  let outline      = shading.params1.z;
+  let depth_cueing = shading.params1.w;
 
-  var shaded = in.color * lighting;
+  let base_color = in.color;
+
+  var color : vec3<f32>;
+  if (style == 2) {
+    // ── Toon: 3-band cel shading (the app's DEFAULT render_style) ──
+    let diffuse = dot(normal, light_dir_view);
+    if (diffuse > shading.toon.y) {
+      color = vec3<f32>(1.0, 1.0, 1.0);
+    } else if (diffuse > shading.toon.x) {
+      color = base_color;
+    } else {
+      color = base_color * shading.toon.z;
+    }
+  } else if (style == 1) {
+    // ── Matte / 2.5D / 2D-flat: diffuse-only Lambert, no specular ──
+    let diffuse = max(dot(normal, light_dir_view), 0.0);
+    color = base_color * (ambient + directional * diffuse);
+  } else {
+    // ── Glossy / metallic: Cook-Torrance GGX, lit by ambient fill + an HDR
+    //    near-head-on key, rolled back to display range by ACES. roughness /
+    //    metalness are per-render-style (glossy 0.2/0.0, metallic 0.4/0.4).
+    //    matcap has no branch here and resolves to glossy — see the overlay. ──
+    let a = rough * rough;
+    let a2 = a * a;
+    let n_dot_l = max(dot(normal, light_dir_view), 0.0);
+    let n_dot_v = max(dot(normal, view_dir), 1e-4);
+    let half_dir = normalize(light_dir_view + view_dir);
+    let n_dot_h = max(dot(normal, half_dir), 0.0);
+    let v_dot_h = max(dot(view_dir, half_dir), 0.0);
+    // GGX normal distribution — the tight lobe that makes the small hot spot.
+    let dn = (n_dot_h * n_dot_h) * (a2 - 1.0) + 1.0;
+    let ggx_d = a2 / (3.14159265 * dn * dn);
+    // Smith-Schlick geometry.
+    let k = a * 0.5;
+    let ggx_g = (n_dot_v / (n_dot_v * (1.0 - k) + k)) * (n_dot_l / (n_dot_l * (1.0 - k) + k));
+    // Schlick Fresnel with a metalness-tinted F0: dielectric 0.04, metals
+    // reflect their own (element) colour.
+    let f0 = mix(vec3<f32>(0.04), base_color, metalness);
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
+    let specular = (ggx_d * ggx_g) * fresnel / (4.0 * n_dot_v * n_dot_l + 1e-4);
+    // Metals have little/no diffuse — attenuate by (1 − metalness).
+    let diffuse_color = base_color * (1.0 - metalness);
+    // Energy-conserving Lambert (÷π) on the key, like MeshStandardMaterial;
+    // without it the base×key diffuse blows out.
+    var lit = diffuse_color * (ambient + directional * n_dot_l * 0.31831)
+            + specular * directional * n_dot_l * spec_str;
+    // Soft rim shadow at the grazing silhouette — a little volume / AO feel.
+    lit = lit * mix(0.6, 1.0, smoothstep(0.0, 0.5, n_dot_v));
+    color = aces_tonemap(lit);
+  }
+
   // ── Selection highlight ──────────────────────────────────────────────────
-  // Selected atoms (sel == 1) get a clearly-distinct look: brighten the body and
-  // add a bright cyan-tinted RIM where the eye ray grazes the silhouette (rim is
-  // strong when the surface normal is near-perpendicular to the view direction —
-  // i.e. 1 - |n·view|). This reads as a glowing outline ring on the sphere,
-  // matching the "this atom is selected" affordance of the WebGL view. Non-
-  // selected atoms (sel == 0) are untouched.
+  // Overlay-only affordance (the WebGL view draws separate highlight meshes):
+  // brighten the body and add a cyan rim where the eye ray grazes the
+  // silhouette. Applied in LINEAR space, before the encode below.
   if (in.sel == 1u) {
-    let view_dir = normalize(-p);            // toward the eye (eye at origin)
-    let rim = pow(1.0 - clamp(dot(n, view_dir), 0.0, 1.0), 2.0);
-    let highlight_tint = vec3<f32>(0.25, 0.95, 1.0); // bright cyan
-    // Brighten the body and mix toward the tint at the rim.
-    shaded = mix(shaded * 1.35 + highlight_tint * 0.25, highlight_tint, rim * 0.85);
+    let rim = pow(1.0 - clamp(dot(normal, view_dir), 0.0, 1.0), 2.0);
+    let tint = vec3<f32>(0.25, 0.95, 1.0); // bright cyan
+    color = mix(color * 1.35 + tint * 0.25, tint, rim * 0.85);
   }
+
+  // Linear → sRGB. Everything past this point is in DISPLAY space — which is
+  // why the depth-cue target is encoded too, rather than mixed in linear.
+  var rgb = linear_to_srgb(color);
+
+  // Depth cueing (VESTA / 3Dmol-style fog): fade toward the background with
+  // view-space depth. ON by default (0.4) in the viewer, and the main thing that
+  // gives a dense structure front-to-back separation.
+  if (depth_cueing > 0.0) {
+    let depth_z = -hit_pos.z;
+    let span = max(shading.depth_cue.y - shading.depth_cue.x, 0.01);
+    let fade = clamp((depth_z - shading.depth_cue.x) / span, 0.0, 1.0) * depth_cueing;
+    rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
+  }
+
+  // Silhouette outline: darken pixels at glancing angles.
+  if (outline > 0.0) {
+    let silhouette = smoothstep(0.55, 1.0, 1.0 - max(dot(normal, view_dir), 0.0));
+    rgb = mix(rgb, vec3<f32>(0.0), silhouette * outline);
+  }
+
+  // Correct depth: project the hit point, apply the same GL→WebGPU z remap as
+  // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
+  let clip_h = camera.proj * vec4<f32>(hit_pos, 1.0);
+  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
+  let ndc_depth = remapped_z / clip_h.w;
+  if (!(ndc_depth >= 0.0 && ndc_depth <= 1.0)) { discard; }
 
   var out : FsOut;
-  out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
-  // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
-  // the color target stays opaque.
-  out.color = vec4<f32>(shaded, coverage);
+  out.depth = ndc_depth;
+  let alpha = coverage * in.opacity;
+  if (!(alpha > 0.0)) { discard; }
+  out.color = vec4<f32>(rgb, alpha);
   return out;
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
 /** WGSL atom PICK shader. Re-runs the SAME impostor sphere ray-trace as
  *  IMPOSTOR_WGSL, INCLUDING the identical GPU-supercell instance decode (Phase 4):
@@ -651,8 +1295,17 @@ fn vs_main(@builtin(vertex_index) vi : u32,
 
 @fragment
 fn fs_main(in : VsOut) -> FsOut {
-  let ro = vec3<f32>(0.0, 0.0, 0.0);
-  let rd = normalize(in.vpos);
+  let is_ortho = camera.cam_pos.w > 0.5;
+  let ro = select(
+    vec3<f32>(0.0, 0.0, 0.0),
+    vec3<f32>(in.vpos.xy, 0.0),
+    is_ortho,
+  );
+  let rd = select(
+    normalize(in.vpos),
+    vec3<f32>(0.0, 0.0, -1.0),
+    is_ortho,
+  );
 
   let oc = ro - in.vc;
   let b = dot(oc, rd);
@@ -729,8 +1382,7 @@ fn build_args() {
  *    half 1: cylinder B      -> M1 = (B + partnerA) * 0.5
  *  For CROSS-cell bonds (jimage != 0) this yields the two short stubs above.
  *  For INTRA-cell bonds (jimage = 0) the two halves would be collinear and their
- *  flat midpoint cap planes coincide -> coincident depth -> alpha-to-coverage
- *  z-fight that shows as a faint dotted seam across the cylinder. To avoid it,
+ *  flat midpoint cap planes coincide -> coincident-depth seam. To avoid it,
  *  intra-cell bonds instead draw ONE full cylinder (half 0: A -> B) and collapse
  *  half 1 to a degenerate offscreen billboard (zero fragments). Jimages use
  *  three biased u8 lanes, preserving the full signed Int8 BaseBondGraph range.
@@ -755,17 +1407,29 @@ fn build_args() {
  *  as the sphere impostor, so bonds share the depth buffer and occlude / are
  *  occluded consistently with atoms. Degenerate (zero-length) halves discard cleanly. */
 const BOND_RENDER_WGSL = `
+// Body/cap selection is per-fragment, while ordinary-mode parity requires the
+// matching fwidth ramps. Derivatives remain defined over the 2×2 fragment quad
+// (including helper lanes); relax only this module's static uniformity warning.
+diagnostic(off, derivative_uniformity);
+
+// The same shader module backs two render pipelines. The opaque main pass draws
+// every edge except sparse-ghost completions; the translucent ghost pass draws
+// only those completions.
+override ghost_pass : u32 = 0u;
+
 struct Camera {
   view : mat4x4<f32>,
   proj : mat4x4<f32>,
   cam_pos : vec4<f32>,
 };
-// Bond uniform: lattice columns a,b,c (transposed, vec3+pad each) + radius.
+// Bond uniform: lattice rows a,b,c (vec3+pad each), edge style, opacity +
+// reserved lanes. Endpoint colors are read from binding 7.
 struct BondU {
   lat0 : vec4<f32>,
   lat1 : vec4<f32>,
   lat2 : vec4<f32>,
-  radius_color : vec4<f32>, // x=radius, yzw=color
+  style0 : vec4<f32>, // radius, incomplete mode, length scale, hide incomplete
+  style1 : vec4<f32>, // incomplete opacity, reserved rgb
 };
 
 // GPU supercell uniform (Phase 2). Same layout as the atom impostor's Supercell:
@@ -788,19 +1452,47 @@ struct Supercell {
 @group(0) @binding(4) var<storage, read> bond_meta : array<u32>;
 // GPU supercell instancing params (dims + base lattice). Read ONLY in vs_main.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
+// The SAME shading uniform the atom impostor binds (see the Shading struct
+// there). fs_main reads the view-space headlamp, the specular strength and the
+// depth-cue params, so bonds are lit from the same direction as the atoms and
+// fade into the same fog. Read ONLY in fs_main.
+struct Shading {
+  light_dir : vec4<f32>,
+  params0   : vec4<f32>,
+  params1   : vec4<f32>,
+  depth_cue : vec4<f32>,
+  depth_bg  : vec4<f32>,
+  toon      : vec4<f32>,
+};
+@group(0) @binding(6) var<uniform> shading : Shading;
+// Authoritative base-topology linear RGB buffer. This is the SAME buffer used
+// by the atom impostor; no bond-side resolver or duplicate upload exists.
+@group(0) @binding(7) var<storage, read> colors : array<f32>;
+// Exact ordinary-mode periodic bond decorators. Each visible row is ten u32:
+// start.xyz/end.xyz bitcast from f32, start/end color-site indices, stub flag,
+// and opacity bitcast from f32. Unlike the base graph, this stream preserves
+// every image-anchor instance (including duplicates and ghost-to-ghost rows).
+@group(0) @binding(8) var<storage, read> decorators : array<u32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
-  @location(0) v0 : vec3<f32>,      // view-space cylinder start (flat)
-  @location(1) v1 : vec3<f32>,      // view-space cylinder end   (flat)
-  @location(2) radius : f32,        // cylinder radius (flat)
-  @location(3) color : vec3<f32>,
-  @location(4) vpos : vec3<f32>,    // view-space position of this quad corner
+  @location(0) @interpolate(flat) v0 : vec3<f32>,
+  @location(1) @interpolate(flat) v1 : vec3<f32>,
+  @location(2) @interpolate(flat) radius : f32,
+  @location(3) @interpolate(flat) color_start : vec3<f32>,
+  @location(4) @interpolate(flat) color_end : vec3<f32>,
+  // Ordinary static bonds evaluate one continuous analytic coverage value per
+  // pixel and alpha-blend it. Keep the default perspective interpolation here;
+  // sample-frequency hard hits quantize the silhouette and expose f32 grazing
+  // intersection noise as comb-like pixels.
+  @location(5) vpos : vec3<f32>,
   // 1.0 for CROSS-cell stubs, 0.0 for INTRA-cell full cylinders. Flat-interp.
   // The fragment shader pushes cross-cell stubs slightly BACKWARD in depth so a
   // stub coincident with an intra-cell bond at a shared atom loses the depth tie
-  // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
-  @location(5) is_stub : f32,
+  // (intra always wins) — kills the faint coincident-depth seam.
+  @location(6) @interpolate(flat) is_stub : f32,
+  // Incomplete/ghost-complete periodic opacity. In-cell edges use 1.
+  @location(7) @interpolate(flat) opacity : f32,
 };
 
 struct FsOut {
@@ -810,6 +1502,50 @@ struct FsOut {
 
 fn atom_pos(i : u32) -> vec3<f32> {
   return vec3<f32>(positions[i*3u], positions[i*3u+1u], positions[i*3u+2u]);
+}
+
+fn atom_color(i : u32) -> vec3<f32> {
+  return vec3<f32>(colors[i*3u], colors[i*3u+1u], colors[i*3u+2u]);
+}
+
+fn studio_env(n : vec3<f32>, key_dir : vec3<f32>) -> vec3<f32> {
+  var col = vec3<f32>(0.72);
+  let key = max(dot(n, key_dir), 0.0);
+  col += vec3<f32>(1.00, 0.97, 0.92) * (key * key) * 0.35;
+  let sky = n.y * 0.5 + 0.5;
+  col += vec3<f32>(0.06, 0.06, 0.07) * sky;
+  return col;
+}
+
+fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
+  return clamp(
+    (x * (2.51 * x + vec3<f32>(0.03))) /
+      (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0),
+  );
+}
+
+// Ordinary-mode radial fwidth coverage with finite and proxy-slack guards.
+// The conservative bond hull extends to 1.5r, so a centered AA band may be at
+// most r wide (0.5r outside). Invalid helper-lane derivatives fall back to an
+// exact inside test instead of turning Inf into 0.5 coverage over the full hull.
+fn cylinder_coverage(radius : f32, distance : f32) -> f32 {
+  let fw_raw = fwidth(distance);
+  let fw_ok =
+    fw_raw == fw_raw &&
+    fw_raw > 0.0 &&
+    fw_raw < 1e20;
+  var coverage = select(0.0, 1.0, distance <= radius);
+  if (fw_ok) {
+    let fw = clamp(
+      fw_raw,
+      1e-6,
+      max(radius, 1e-6),
+    );
+    coverage = clamp((radius - distance) / fw + 0.5, 0.0, 1.0);
+  }
+  return coverage;
 }
 
 @vertex
@@ -852,6 +1588,12 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let ji = i32(jp & 255u) - 128;
   let jj = i32((jp >> 8u) & 255u) - 128;
   let jk = i32((jp >> 16u) & 255u) - 128;
+  let boundary_flags = jp >> 24u;
+  let authoritative_boundary = (boundary_flags & 1u) != 0u;
+  let forward_ghost_drawn = !authoritative_boundary
+                           || (boundary_flags & 2u) != 0u;
+  let reverse_ghost_drawn = authoritative_boundary
+                           && (boundary_flags & 4u) != 0u;
   let na = f32(ji);
   let nb = f32(jj);
   let nc = f32(jk);
@@ -874,6 +1616,12 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let inside = px >= 0 && px < i32(nx)
             && py >= 0 && py < i32(ny)
             && pz >= 0 && pz < i32(nz);
+  let rx = i32(ix) - ji;
+  let ry = i32(iy) - jj;
+  let rz = i32(iz) - jk;
+  let reverse_inside = rx >= 0 && rx < i32(nx)
+                    && ry >= 0 && ry < i32(ny)
+                    && rz >= 0 && rz < i32(nz);
   // B_real: atom b in the partner cell = base_pos[b] + (px·a + py·b + pz·c). This
   // equals B + shift (= partnerB) whenever the partner cell is in range — the
   // jimage shift IS one cell step — so reuse partnerB as the real adjacent atom.
@@ -886,28 +1634,74 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   //                     where the sparse ghost instance is drawn
   // This applies for ANY visual-supercell dims — no ncells==1 special case.
   let boundary_policy = u32(round(supercell.lat0.w));
-  let hide_outside = (!inside) && boundary_policy == 1u;
-  let ghost_complete = (!inside) && boundary_policy == 2u;
+  let directed_inside = select(reverse_inside, inside, half == 0u);
+  let directed_ghost_drawn = select(
+    reverse_ghost_drawn,
+    forward_ghost_drawn,
+    half == 0u,
+  );
+  let legacy_ghost_complete = (!inside) && boundary_policy == 2u;
+  let authoritative_ghost_complete = (!directed_inside)
+                                   && boundary_policy == 2u
+                                   && directed_ghost_drawn;
+  let ghost_complete = select(
+    legacy_ghost_complete,
+    authoritative_ghost_complete,
+    authoritative_boundary,
+  );
+  let effective_inside = select(inside, directed_inside, authoritative_boundary);
+  let outside = !effective_inside;
+  let style_hide_outside = outside && bond.style0.w > 0.5 && !ghost_complete;
+  // Pipeline partition: the opaque pass excludes ghost completions, while the
+  // blended pass excludes every ordinary in-cell/stub edge.
+  let wrong_pass = (ghost_pass != 0u) != ghost_complete;
+  let hide_outside = wrong_pass
+                  || (outside && (boundary_policy == 1u || style_hide_outside));
 
   // Render as ONE full cylinder when the partner is a real in-range atom OR a
   // sparse ghost. half 0 spans A→partnerB; half 1 collapses. Stub policy keeps
   // the historical two half-cylinders. Hide collapses both halves below.
-  let is_full = inside || ghost_complete;
+  let legacy_full = inside || ghost_complete;
+  // With an authoritative decorator table, half 0 owns the forward in-range
+  // edge. Half 1 is reserved for the reverse OUTER boundary only, avoiding a
+  // duplicate cylinder when its reverse partner is another real replica.
+  let authoritative_full = ((half == 0u) && inside) || ghost_complete;
+  let is_full = select(legacy_full, authoritative_full, authoritative_boundary);
 
   // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
   // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
   // two short stubs of the single-cell cross-cell path, shifted by cell_offset.
+  let stub_scale = select(
+    1.0,
+    clamp(bond.style0.z, 0.05, 1.0),
+    bond.style0.y > 0.5,
+  );
   let cross_start = select(B, A, half == 0u);
-  let cross_mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
-  let start = select(cross_start, A, is_full);
-  let end = select(cross_mid, B_real, is_full);
+  let cross_end_a = A + (partnerB - A) * (0.5 * stub_scale);
+  let cross_end_b = B + (partnerA - B) * (0.5 * stub_scale);
+  let cross_end = select(cross_end_b, cross_end_a, half == 0u);
+  let full_start = select(B, A, half == 0u);
+  let full_end = select(partnerA, B_real, half == 0u);
+  let start = select(cross_start, full_start, is_full);
+  let end = select(cross_end, full_end, is_full);
+
+  // Full cylinders carry A→B endpoint colors; the fragment shader applies the
+  // same hard midpoint split as WebGL's two monochrome half-bond instances.
+  // True boundary stubs remain monochrome: half 0 is A/A and half 1 is B/B.
+  let color_a = atom_color(a);
+  let color_b = atom_color(b);
+  var color_start = select(color_b, color_a, half == 0u);
+  var color_end = color_start;
+  if (is_full) {
+    color_end = select(color_a, color_b, half == 0u);
+  }
 
   // Keep the downstream variable name the rest of vs_main uses (is_intra) so the
   // degenerate-half collapse + is_stub flag below are untouched: a full cylinder
   // behaves exactly like an intra-cell bond (half 1 redundant, no depth bias).
   let is_intra = is_full;
 
-  let r = bond.radius_color.x;
+  let r = bond.style0.x;
 
   // Endpoints in VIEW space (eye at origin). The impostor ray-trace + depth all
   // happen in this space.
@@ -972,15 +1766,24 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // and hide policy suppresses BOTH outside halves. Collapse all 6 strip
   // vertices to one offscreen point so no fragments rasterize (don't rely on a
   // fragment discard). Stub halves are untouched.
-  if (hide_outside || (is_intra && half == 1u)) {
+  let legacy_redundant = is_intra && half == 1u;
+  let authoritative_redundant = half == 1u && directed_inside;
+  let collapse_redundant = select(
+    legacy_redundant,
+    authoritative_redundant,
+    authoritative_boundary,
+  );
+  if (hide_outside || collapse_redundant) {
     var out_deg : VsOut;
     out_deg.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0); // outside the [-w,w] clip cube
     out_deg.v0 = v0;
     out_deg.v1 = v1;
     out_deg.radius = r;
-    out_deg.color = bond.radius_color.yzw;
+    out_deg.color_start = color_start;
+    out_deg.color_end = color_end;
     out_deg.vpos = vpos;
     out_deg.is_stub = 0.0; // degenerate (discarded) — value irrelevant
+    out_deg.opacity = 0.0;
     return out_deg;
   }
 
@@ -993,10 +1796,80 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.v0 = v0;
   out.v1 = v1;
   out.radius = r;
-  out.color = bond.radius_color.yzw;
+  out.color_start = color_start;
+  out.color_end = color_end;
   out.vpos = vpos;
   // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
   out.is_stub = select(1.0, 0.0, is_intra);
+  // In-cell full cylinders are opaque. Both incomplete stubs and full
+  // ghost-complete boundary cylinders use the viewer's image opacity.
+  out.opacity = select(
+    clamp(bond.style1.x, 0.0, 1.0),
+    1.0,
+    effective_inside,
+  );
+  return out;
+}
+
+// Ordinary StructureScene does not infer boundary bonds from the home graph.
+// It emits one decorator row for every (image atom x incident bond), including
+// B-anchored, self-image, ghost-to-ghost, and duplicate rows. Those resolved
+// rows arrive through binding 8 and use this dedicated vertex entry point.
+@vertex
+fn vs_decorator(@builtin(vertex_index) vi : u32,
+                @builtin(instance_index) inst : u32) -> VsOut {
+  let base = inst * 10u;
+  let start = vec3<f32>(
+    bitcast<f32>(decorators[base + 0u]),
+    bitcast<f32>(decorators[base + 1u]),
+    bitcast<f32>(decorators[base + 2u]),
+  );
+  let end = vec3<f32>(
+    bitcast<f32>(decorators[base + 3u]),
+    bitcast<f32>(decorators[base + 4u]),
+    bitcast<f32>(decorators[base + 5u]),
+  );
+  let color_start = atom_color(decorators[base + 6u]);
+  let color_end = atom_color(decorators[base + 7u]);
+  let is_stub = select(0.0, 1.0, decorators[base + 8u] != 0u);
+  let opacity = bitcast<f32>(decorators[base + 9u]);
+  let r = bond.style0.x;
+
+  let v0 = (camera.view * vec4<f32>(start, 1.0)).xyz;
+  let v1 = (camera.view * vec4<f32>(end, 1.0)).xyz;
+  let w = r * 1.5;
+  let d2 = v1.xy - v0.xy;
+  let d2len = length(d2);
+  let sdir = select(vec2<f32>(1.0, 0.0), d2 / max(d2len, 1e-6), d2len > 1e-6);
+  let sperp = vec2<f32>(-sdir.y, sdir.x);
+  let off_axis = vec3<f32>(sdir * w, 0.0);
+  let off_perp = vec3<f32>(sperp * w, 0.0);
+
+  var anchor = v0;
+  var ax_sign = 0.0;
+  var p_sign = -1.0;
+  switch vi % 6u {
+    case 0u: { anchor = v0; ax_sign = -1.0; p_sign = -1.0; }
+    case 1u: { anchor = v0; ax_sign = -1.0; p_sign =  1.0; }
+    case 2u: { anchor = v1; ax_sign =  0.0; p_sign = -1.0; }
+    case 3u: { anchor = v0; ax_sign =  0.0; p_sign =  1.0; }
+    case 4u: { anchor = v1; ax_sign =  1.0; p_sign = -1.0; }
+    default: { anchor = v1; ax_sign =  1.0; p_sign =  1.0; }
+  }
+  let vpos = anchor + ax_sign * off_axis + p_sign * off_perp;
+  var clip = camera.proj * vec4<f32>(vpos, 1.0);
+  clip.z = (clip.z + clip.w) * 0.5;
+
+  var out : VsOut;
+  out.clip = clip;
+  out.v0 = v0;
+  out.v1 = v1;
+  out.radius = r;
+  out.color_start = color_start;
+  out.color_end = color_end;
+  out.vpos = vpos;
+  out.is_stub = is_stub;
+  out.opacity = clamp(opacity, 0.0, 1.0);
   return out;
 }
 
@@ -1010,146 +1883,163 @@ fn fs_main(in : VsOut) -> FsOut {
   if (clen < 1e-6) { discard; }
   let axis = ca / clen;      // unit axis
 
-  // Eye ray: origin at view-space 0, direction toward the interpolated corner.
-  let rd = normalize(in.vpos);
+  // View-space eye ray. Perspective rays originate at the camera; orthographic
+  // rays originate at each billboard fragment's view XY and run along -Z.
+  // light_dir.w already carries the same camera-kind bit used by atom shading.
+  let is_ortho = shading.light_dir.w > 0.5;
+  let ro = select(
+    vec3<f32>(0.0, 0.0, 0.0),
+    vec3<f32>(in.vpos.xy, 0.0),
+    is_ortho,
+  );
+  let rd = select(
+    normalize(in.vpos),
+    vec3<f32>(0.0, 0.0, -1.0),
+    is_ortho,
+  );
 
-  // Infinite-cylinder intersection. Project ray + origin offset off the axis.
-  // d_perp = rd - (rd·axis)axis ; oc = O - pa = -pa.
-  let oc = -pa;
-  let rd_a = dot(rd, axis);
-  let oc_a = dot(oc, axis);
-  let d_perp = rd - rd_a * axis;
-  let oc_perp = oc - oc_a * axis;
-  let qa = dot(d_perp, d_perp);
-  let qb = 2.0 * dot(d_perp, oc_perp);
-  let qc = dot(oc_perp, oc_perp) - r * r;
+  // Stable ordinary-mode ray/cylinder formulation. The previous quadratic
+  // discriminant b² - 4ac subtracts view-distance-sized f32 values. At
+  // grazing angles and large zoom, both inside and outside rays round to the
+  // same discriminant and flicker between hit/miss across MSAA samples. This
+  // triple-product formulation works with ray-to-axis distance instead and
+  // supplies the same continuous fwidth coverage as BondManagerInstances.
+  let cylinder_axis = ca;
+  let len2 = clen * clen;
+  let rc = ro - pa;
+  let n_raw = cross(rd, cylinder_axis);
+  let ln = length(n_raw);
+  let parallel = ln < 1e-7 * clen;
+  let n = n_raw / max(ln, 1e-20);
+  let side_distance = abs(dot(rc, n));
+  let parallel_radial = rc - axis * dot(rc, axis);
+  let parallel_distance = length(parallel_radial);
+  let body_edge_distance = select(side_distance, parallel_distance, parallel);
+  let body_coverage = cylinder_coverage(r, body_edge_distance);
+  // Positive-form finite guard: false for zero and NaN. Nothing outside the
+  // centered one-pixel analytic band may survive from the conservative 1.5r
+  // proxy hull.
+  if (!(body_coverage > 0.0)) { discard; }
 
-  var best_t = 1e30;
   var hit_p = vec3<f32>(0.0);
   var hit_n = vec3<f32>(0.0);
-  var found = false;
+  var hit_is_cap = false;
 
-  // Body: solve quadratic, take the nearer positive root whose axial projection
-  // lands within [0, clen].
-  if (qa > 1e-12) {
-    let disc = qb * qb - 4.0 * qa * qc;
-    if (disc >= 0.0) {
-      let sq = sqrt(disc);
-      let inv = 1.0 / (2.0 * qa);
-      let t0 = (-qb - sq) * inv;
-      let t1 = (-qb + sq) * inv;
-      // Try the near root, then the far root (we may be inside the cylinder).
-      for (var k = 0; k < 2; k = k + 1) {
-        let t = select(t1, t0, k == 0);
-        if (t > 0.0 && t < best_t) {
-          let p = rd * t;
-          let h = dot(p - pa, axis); // axial coordinate along the cylinder
-          if (h >= 0.0 && h <= clen) {
-            best_t = t;
-            hit_p = p;
-            let axis_point = pa + axis * h;
-            hit_n = normalize(p - axis_point); // radial outward
-            found = true;
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // End-cap disks: planes at pa (normal -axis) and pb (normal +axis), |radial|<=r.
-  // Tested independently so a body miss (or a cap-on view) still reads as solid.
-  let pb = in.v1;
-  for (var c = 0; c < 2; c = c + 1) {
-    let cap_center = select(pa, pb, c == 1);
-    let cap_n = select(-axis, axis, c == 1);
-    let denom = dot(rd, cap_n);
-    if (abs(denom) > 1e-6) {
-      let t = dot(cap_center, cap_n) / denom; // (cap_center - O)·n / (rd·n), O=0
-      if (t > 0.0 && t < best_t) {
-        let p = rd * t;
-        let radial = p - cap_center;
-        if (dot(radial, radial) <= r * r) {
-          best_t = t;
-          hit_p = p;
-          hit_n = cap_n;
-          found = true;
-        }
-      }
-    }
-  }
-
-  // ── Analytic capsule silhouette coverage (alpha-to-coverage AA) ─────────────
-  // The exact body/cap ray-test above sets found (a binary edge); plain MSAA
-  // can't smooth that. We deliberately do NOT discard on !found yet — a fragment
-  // just outside the solid still lies in the thin silhouette band below and must
-  // survive to receive fractional coverage. Build a SMOOTH signed inside-measure
-  // of the finite-capsule silhouette and convert it to fractional coverage so
-  // alpha-to-coverage AAs the body and cap edges.
-  //
-  // For the eye ray (origin 0, dir rd) we measure perpendicular distance to the
-  // axis SEGMENT [pa,pb] and combine with the two cap planes:
-  //   body_inside = r - dist(ray, axis-line)              (radial silhouette)
-  //   cap-axial   = clamp the closest-approach axial coord into [0,clen]
-  // We sample the ray at its closest approach to the axis line, clamp that
-  // point onto the segment, and take measure = r - |closest point on ray to the
-  // segment|. This is the standard ray↔segment capsule distance and is a smooth
-  // varying of the interpolated rd, so fwidth() yields the screen-space edge
-  // width. measure>0 inside the projected capsule, =0 on the silhouette.
-  //
-  // Closest approach between the eye ray (P=rd*t, t>=0) and the axis line
-  // (Q=pa+axis*s): solve the 2x2 least-squares for (t,s) using rd·rd=1.
-  let rda = dot(rd, axis);          // = rd_a, reuse-friendly
-  let denom_cl = 1.0 - rda * rda;   // = |rd x axis|^2 (rd is unit)
-  let w0 = -pa;                     // O - pa, O=0
-  let d_w = dot(rd, w0);
-  let e_w = dot(axis, w0);
-  // t along the ray, s along the axis line, at mutual closest approach.
-  var t_cl = 0.0;
-  var s_cl = 0.0;
-  if (denom_cl > 1e-7) {
-    t_cl = (rda * e_w - d_w) / denom_cl;
-    s_cl = (e_w - rda * d_w) / denom_cl;
+  if (parallel) {
+    // End-on cylinder: the ray enters through one of the two closed cap disks.
+    let enter_base = dot(rd, axis) > 0.0;
+    let cap_center = select(in.v1, pa, enter_base);
+    let cap_n = select(axis, -axis, enter_base);
+    let cap_denom = dot(rd, axis);
+    if (!(abs(cap_denom) > 1e-8)) { discard; }
+    let cap_t = dot(cap_center - ro, axis) / cap_denom;
+    if (!(cap_t > 0.0)) { discard; }
+    hit_p = ro + cap_t * rd;
+    hit_n = cap_n;
+    hit_is_cap = true;
   } else {
-    // Ray ~parallel to axis (end-on): project onto the ray.
-    t_cl = -d_w;
-    s_cl = 0.0;
+    // Closest ray/axis distance determines the tangent roots without the
+    // cancellation-prone quadratic discriminant.
+    let dd = side_distance * side_distance;
+    let dc = min(dd, r * r);
+    let center_t = dot(cross(cylinder_axis, rc), n) / ln;
+    let root_denom = dot(cross(n, cylinder_axis), rd);
+    if (!(abs(root_denom) > 1e-12)) { discard; }
+    let root_span = abs(
+      sqrt(max(r * r - dc, 0.0)) / root_denom * clen,
+    );
+    let near_t = center_t - root_span;
+    let far_t = center_t + root_span;
+    let near_p = ro + near_t * rd;
+    let far_p = ro + far_t * rd;
+    let near_axial = dot(near_p - pa, cylinder_axis) / len2;
+    let far_axial = dot(far_p - pa, cylinder_axis) / len2;
+
+    if (near_axial >= 0.0 && near_axial <= 1.0 && near_t > 0.0) {
+      hit_p = near_p;
+      hit_n = near_p - (pa + near_axial * cylinder_axis);
+    } else if (
+      near_axial < 0.0 &&
+      far_axial > 0.0 &&
+      far_t > 0.0
+    ) {
+      // Closed base cap. Interpolate the two analytic roots to its plane.
+      let cap_mix = near_axial / (near_axial - far_axial);
+      hit_p = mix(near_p, far_p, cap_mix);
+      hit_n = -axis;
+      hit_is_cap = true;
+    } else if (
+      near_axial > 1.0 &&
+      far_axial < 1.0 &&
+      far_t > 0.0
+    ) {
+      // Closed tip cap.
+      let cap_mix = (near_axial - 1.0) / (near_axial - far_axial);
+      hit_p = mix(near_p, far_p, cap_mix);
+      hit_n = axis;
+      hit_is_cap = true;
+    } else {
+      discard;
+    }
   }
-  t_cl = max(t_cl, 0.0);            // ray only extends forward
-  s_cl = clamp(s_cl, 0.0, clen);    // clamp onto the finite axis SEGMENT
-  let p_ray = rd * t_cl;            // closest ray point
-  let p_seg = pa + axis * s_cl;     // closest segment point
-  let gap = length(p_ray - p_seg);  // capsule surface distance proxy
-  let measure = r - gap;            // >0 inside silhouette, =0 on edge
-  let fw = fwidth(measure);
-  let coverage = clamp(measure / max(fw, 1e-8) + 0.5, 0.0, 1.0);
 
-  // Inside the solid (found) → full coverage; only the thin silhouette band gets
-  // fractional coverage. If neither the exact solid test nor the analytic band
-  // covers this fragment, discard.
-  let cov = select(coverage, 1.0, found);
-  if (cov <= 0.0) { discard; }
+  // Ordinary mode uses a second radial fwidth ramp for projected cap disks.
+  // Evaluate it outside divergent control flow, then select it only for cap
+  // hits; this also keeps WGSL derivative-uniformity validation satisfied.
+  let hit_axis_fraction = dot(hit_p - pa, cylinder_axis) / len2;
+  let cap_radial =
+    (hit_p - pa) - cylinder_axis * hit_axis_fraction;
+  let cap_edge_distance = length(cap_radial);
+  let cap_coverage = cylinder_coverage(r, cap_edge_distance);
+  let coverage = select(body_coverage, cap_coverage, hit_is_cap);
+  if (!(coverage > 0.0)) { discard; }
+  hit_n = normalize(hit_n);
 
-  // For the thin AA band where the exact ray-test missed, fall back to the
-  // capsule-surface point for normal + depth so the edge band shades/depths
-  // consistently with the solid body.
-  if (!found) {
-    hit_p = p_ray;
-    hit_n = normalize(p_ray - p_seg);
-  }
+  // Match WebGL's two pure-color half-bond instances: A before the midpoint,
+  // B at and after it. Boundary stubs received identical start/end colors above.
+  let axial = clamp(dot(hit_p - pa, axis) / clen, 0.0, 1.0);
+  let base_color = select(
+    in.color_end,
+    in.color_start,
+    axial < ${BOND_MIDPOINT_SPLIT},
+  );
 
-  let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(hit_n, light_dir), 0.0);
+  // WebGL BondManagerInstances studio lighting, kept literal so the two
+  // backends share env, specular, Fresnel, rim/floor lift, exposure, tonemap,
+  // sRGB encoding, then depth cueing in that order.
+  let view_dir = select(
+    normalize(-hit_p),
+    vec3<f32>(0.0, 0.0, 1.0),
+    is_ortho,
+  );
+  let key_dir = normalize(shading.light_dir.xyz);
+  let env = studio_env(hit_n, key_dir);
+  let half_dir = normalize(key_dir + view_dir);
+  let specular = pow(max(dot(hit_n, half_dir), 0.0), 64.0);
+  let NdotV = max(dot(hit_n, view_dir), 0.0);
+  let fresnel = pow(1.0 - NdotV, 5.0);
+  let rim_mask = smoothstep(0.0, 0.25, NdotV);
+  let floor_lift = mix(0.18, 1.0, rim_mask);
+  let spec_color = mix(vec3<f32>(1.0), base_color, 0.55);
+  let ambient_intensity = 0.8;
+  let directional_intensity = 0.3;
+  let exposure = ambient_intensity + directional_intensity * 0.5; // fixed 0.95
+  var final_color =
+    base_color * env * exposure * floor_lift +
+    spec_color * specular * directional_intensity * 0.5 * rim_mask * shading.params0.z +
+    vec3<f32>(fresnel * 0.08) * rim_mask;
+  final_color = aces_tonemap(final_color);
 
   // Correct depth: project the view-space hit point, apply the SAME GL->WebGPU z
   // remap as the vertex stage, then perspective-divide into NDC z (range 0..1).
   let clip_h = camera.proj * vec4<f32>(hit_p, 1.0);
   let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
-  var depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
+  var depth = remapped_z / clip_h.w;
+  if (!(depth >= 0.0 && depth <= 1.0)) { discard; }
   // Cross-cell stub depth bias: where a stub overlaps the START of an intra-cell
   // full cylinder at a shared atom, the two grey surfaces are coincident -> a
-  // depth tie -> alpha-to-coverage stipple (faint dotted seam). Push the stub
+  // depth tie -> a faint dotted seam. Push the stub
   // slightly BACKWARD (larger depth) so the intra-cell bond consistently wins the
   // depth test there. Epsilon is tiny enough to be invisible elsewhere but breaks
   // the tie at typical near/far. Intra-cell bonds (is_stub == 0) are NOT biased.
@@ -1159,11 +2049,33 @@ fn fs_main(in : VsOut) -> FsOut {
 
   var out : FsOut;
   out.depth = depth;
-  // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
-  out.color = vec4<f32>(in.color * lighting, cov);
+  // Display color remains straight-alpha. Analytic edge coverage supplies the
+  // fractional alpha; periodic ghost/stub opacity multiplies it below.
+  var rgb = linear_to_srgb(final_color);
+
+  // Depth cueing — the SAME fog the atoms use (shading.params1.w = depth_cueing).
+  // Bonds must fade with it too, or they'd float out of the fog the atoms sink
+  // into. Encoded fade target, matching the atom shader.
+  if (shading.params1.w > 0.0) {
+    let depth_z = -hit_p.z;
+    let span = max(shading.depth_cue.y - shading.depth_cue.x, 0.01);
+    let fade = clamp((depth_z - shading.depth_cue.x) / span, 0.0, 1.0) * shading.params1.w;
+    rgb = mix(rgb, linear_to_srgb(shading.depth_bg.xyz), fade);
+  }
+
+  // Bond outline is independent of the atom outline in shading.params1.z.
+  // Match BondManagerInstances' wider silhouette band and gain.
+  if (shading.depth_cue.z > 0.0) {
+    let silhouette = smoothstep(0.0, 0.6, 1.0 - NdotV);
+    rgb = mix(rgb, vec3<f32>(0.0), silhouette * shading.depth_cue.z * 0.85);
+  }
+
+  let alpha = coverage * in.opacity;
+  if (!(alpha > 0.0)) { discard; }
+  out.color = vec4<f32>(rgb, alpha);
   return out;
 }
-`
+` + LINEAR_TO_SRGB_WGSL
 
 /** Deterministic snapshot of the renderer's replica/packet state (design §5 +
  *  §7): what the packet channel last consumed, how many instances the atom
@@ -1264,7 +2176,11 @@ export type LargeSystemRenderer = {
    *  publication derives the sparse ghost stream from the SAME active
    *  BaseBondGraph (packet-supplied or validated GPU-produced). Caller boundary
    *  metadata is never accepted as a substitute topology source. */
-  set_packet(packet: RenderPacket, images: ImageInstanceTable): void
+  set_packet(
+    packet: RenderPacket,
+    images: ImageInstanceTable,
+    decoration_images?: ImageInstanceTable,
+  ): void
   /** Provide bond-detection inputs. `covalent_radii` is the per-atom COVALENT
    *  radius (N entries, from build_atom_radii — distinct from the display radii
    *  used for sphere size). `lattice` is the 9-float row-major detector matrix
@@ -1275,9 +2191,18 @@ export type LargeSystemRenderer = {
   set_bond_data(
     covalent_radii: Float32Array,
     lattice: Float32Array,
-    options: { tolerance: number; max_bond_dist: number; min_dist: number },
+    options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
     periodic: boolean,
   ): void
+  /** Mirror the viewer's bond visual settings without changing packet/legacy
+   *  ownership or invalidating the scientific bond graph. Repeated equal style
+   *  values are a no-op. */
+  set_bond_style(style: Partial<LargeSystemBondStyle>): void
+  /** Mirror the viewer's sparse image-atom opacity. The value is finite-clamped
+   *  to [0,1] and packed into the spare supercell `lat1.w` lane. This is a
+   *  visual-only 64-byte uniform upload: it never changes packet ownership or
+   *  invalidates topology / bond detection. */
+  set_ghost_opacity(opacity: number): void
   /** Provide the per-element-pair bond_distance_rules POST-FILTER inputs (matches
    *  src/lib/structure/scene/visibility.ts). `elem_ids` is the per-atom element id
    *  (N entries) and `rules` is the packed rule buffer (4 floats per rule:
@@ -1290,8 +2215,29 @@ export type LargeSystemRenderer = {
   /** Set the clear (background) color the render pass uses. `rgb` is LINEAR
    *  float [r,g,b] in the SAME space as the atom colors uploaded via set_atoms
    *  (so the background and atoms share one color space — dark atoms keep their
-   *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
+   *  contrast against the viewer's normal background). Alpha stays 1 (opaque).
+   *  The clearValue bypasses every fragment shader, so this is sRGB-encoded on
+   *  the way in — see linear_to_srgb. */
   set_background(rgb: [number, number, number]): void
+  /** Mirror the WebGL viewer's resolved atom-shading state (headlamp, ambient /
+   *  directional intensities, render style, depth cueing, outline). Cheap — a
+   *  96-byte uniform write — so the caller may call it every frame; it only
+   *  uploads when a field actually changed. Returns true when it DID change, so
+   *  the caller can mark the frame dirty (depth-cue near/far track the camera,
+   *  so this fires on every camera move). */
+  set_shading(state: ResolvedVisualShading): boolean
+  /** Mirror the DOM-side inputs the corner gizmo's placement needs: the device
+   *  pixel ratio (the widget spec — size clamp, offsets, line width — is in CSS
+   *  px) and the pane's HUD safe-area insets (the docked-toolbar avoidance the
+   *  WebGL gizmo gets as offset:{left: 5+l, bottom: 5+b}). Re-derives and
+   *  re-uploads the placement uniform; call on dpr / safe-area change (resize
+   *  re-derives on its own). */
+  set_gizmo_layout(opts: {
+    dpr?: number
+    safe_left?: number
+    safe_bottom?: number
+    show?: boolean
+  }): void
   /** Gate bond detection + bond rendering. When `false`, render() skips BOTH the
    *  GPU bond compute pass AND the bond draw (atoms + cell box still render), so
    *  the overlay shows no bonds — mirroring the WebGL view when the viewer's
@@ -1302,14 +2248,17 @@ export type LargeSystemRenderer = {
   /** Provide the unit-cell box. `lattice` is the 9-float row-major matrix (rows
    *  a,b,c — same convention as set_bond_data / pack_lattice); pass null (or an
    *  all-zero lattice) for non-periodic structures. `show` gates drawing; `color`
-   *  is the linear-RGB cell edge color (alpha is forced to 1). When `show` is true
-   *  AND the lattice is non-zero, render() draws the 12 cell edges as thin lines
-   *  (WebGPU core line width is 1px) sharing the atom depth buffer (occluded by
-   *  atoms in front). */
+   *  is the linear-RGB cell edge color (alpha is forced to 1). `origin` is the
+   *  transformed position of the cell's zero corner. `vectors`, when provided,
+   *  mirrors Lattice.svelte's a/b/c arrow visibility, width scale, and linear
+   *  colors. When `show` is true AND the lattice is non-zero, render() draws the
+   *  cell and any enabled vector arrows sharing the atom depth buffer. */
   set_cell(
     lattice: Float32Array | null,
     show: boolean,
     color: [number, number, number],
+    origin?: readonly [number, number, number],
+    vectors?: LargeSystemLatticeVectorStyle,
   ): void
   /** Set which atoms are highlighted as "selected". `indices` is the list of atom
    *  indices (same indexing as the uploaded positions / structure.sites order) to
@@ -1409,6 +2358,22 @@ export function create_large_system_renderer(
     size: SUPERCELL_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+
+  // Shared atom/bond shading uniform. The atom impostor binds it at 8; the bond
+  // renderer binds the same buffer at 6. Seeded with DEFAULT_SHADING so the
+  // first frame is sane before the overlay publishes the viewer's settings.
+  const shading_buffer = device.createBuffer({
+    label: `large-system-shading`,
+    size: SHADING_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  let shading_state = snapshot_shading(DEFAULT_SHADING)
+
+  function upload_shading_uniform(): void {
+    const f = pack_shading_uniform(shading_state)
+    device.queue.writeBuffer(shading_buffer, 0, f.buffer, f.byteOffset, SHADING_BYTES)
+  }
+  upload_shading_uniform()
   // Cached supercell dims; ncells = product. Default [1,1,1] ⇒ ncells 1.
   let supercell_dims: [number, number, number] = [1, 1, 1]
   let supercell_ncells = 1
@@ -1427,6 +2392,14 @@ export function create_large_system_renderer(
   // The active sparse ghost table. It is always derived from the SAME base bond
   // graph the bond draw consumes; the CPU copy also decodes ghost picks.
   let last_images: ImageInstanceTable | null = null
+  // Packet-supplied image metadata is authoritative whenever a packet also
+  // supplies its final bond graph. This is the ordinary WebGL decorator set,
+  // not a graph-derived approximation.
+  let packet_images: ImageInstanceTable | null = null
+  // Keep atom and decorator tables as separate renderer lanes, but the
+  // ordinary producer aligns their final boundary rows. `packet_images` owns
+  // spheres; this table owns the corresponding image-anchor bond rows.
+  let packet_decoration_images: ImageInstanceTable | null = null
   const empty_images: ImageInstanceTable = {
     count: 0,
     base_sites: new Uint32Array(0),
@@ -1465,8 +2438,9 @@ export function create_large_system_renderer(
   // caching from silently sharing stale state. Every legacy mutation clears
   // the packet cache; the next same-version packet is therefore a FULL restore.
   let ownership: 'legacy' | 'packet' = `legacy`
-  // Generation captured by every async GPU candidate dispatch. Packet-graph
-  // enter/exit and legacy↔packet ownership changes bump it; a validation whose
+  // Generation captured by every async GPU/WASM candidate dispatch. Every
+  // detector-input change bumps it (topology/frame/lattice/rules/options), as
+  // do packet-graph and legacy↔packet ownership changes. A completion whose
   // token no longer matches is discarded before bond_run.observe/publication.
   let graph_generation = 0
 
@@ -1476,6 +2450,9 @@ export function create_large_system_renderer(
   let colors_buffer: GPUBuffer | null = null
   let atom_capacity = 0 // instances the current buffers can hold
   let atom_count = 0 // instances to draw this frame
+  // Sparse image atoms mirror the viewer's image opacity. Kept in the spare
+  // Supercell lat1.w lane so no new buffer/binding is needed.
+  let ghost_atom_opacity = 1
   // Initialise the supercell uniform to identity (dims 1,1,1 / zero lattice) so
   // the binding is valid before any set_supercell/set_atoms — ncells 1, zero
   // offset ⇒ the draw is identical to the non-supercell path. Must run AFTER
@@ -1530,6 +2507,16 @@ export function create_large_system_renderer(
   let candidate_pairs_buffer: GPUBuffer | null = null
   let active_pairs_capacity = 0 // pairs the ACTIVE buffer can hold (indirect clamp)
   let candidate_pairs_capacity = 0 // pairs the CANDIDATE buffer can hold
+  // Exact ordinary periodic decorator segments. Visible rows are packed as
+  // ten u32 lanes (40 bytes) and rendered by the dedicated vs_decorator entry
+  // point. The buffer always exists so the shared bond bind group stays valid.
+  let boundary_decorator_buffer = device.createBuffer({
+    label: `large-system-boundary-decorators`,
+    size: 40,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  let boundary_decorator_capacity = 1
+  let boundary_decorator_count = 0
   // ── Uniform-grid (cell-list) buffers (bindings 7/8/9). cell_count tallies atoms
   // per cell (n_cells u32), cell_atoms holds up to cell_stride atom ids per cell
   // (n_cells*stride u32), grid_meta[0] records the max observed per-cell
@@ -1590,16 +2577,21 @@ export function create_large_system_renderer(
     size: PARAMS_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // Bond render uniform: lattice columns (transposed, 3×vec4) + (radius,color).
+  // Bond render uniform: lattice rows (3×vec4) + edge style/opacity/color.
   const bond_render_uniform = device.createBuffer({
     label: `large-system-bond-render-uniform`,
-    size: 64, // 4 × vec4
+    size: BOND_RENDER_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // Cell-box render uniform: lattice rows a,b,c (3×vec4) + color (vec4).
+  // Cell-box render uniform: lattice rows a,b,c + origin + color (5×vec4).
   const cell_uniform = device.createBuffer({
     label: `large-system-cell-uniform`,
-    size: 64, // 4 × vec4
+    size: CELL_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  const lattice_vector_uniform = device.createBuffer({
+    label: `large-system-lattice-vector-uniform`,
+    size: LATTICE_VECTOR_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Gizmo placement uniform: center_ndc (vec4) + scale_ndc (vec4). Filled from
@@ -1613,6 +2605,14 @@ export function create_large_system_renderer(
   let cell_lattice = new Float32Array(9)
   let cell_show = false
   let cell_color: [number, number, number] = [0.5, 0.5, 0.5]
+  let cell_origin: [number, number, number] = [0, 0, 0]
+  let cell_vectors_show = false
+  let cell_vector_width_scale = 1
+  let cell_vector_colors: LargeSystemLatticeVectorStyle[`colors`] = [
+    [1, 0, 0],
+    [0, 0.2158605, 0],
+    [0, 0, 1],
+  ]
   // True once the lattice is non-zero (a periodic structure has been provided).
   let cell_has_lattice = false
 
@@ -1640,7 +2640,8 @@ export function create_large_system_renderer(
   // the packet frame lattice used to shift periodic bond endpoints.
   let bond_detector_lattice = new Float32Array(9)
   let bond_render_lattice = new Float32Array(9)
-  let bond_options = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  let bond_style = normalize_bond_style()
+  let bond_options = { tolerance: 0, max_bond_dist: 0, min_bond_dist: 0 }
   let bond_periodic = false
   let bond_n = 0 // atom count the detection should range over
   // ── Dirty-kind split (design §8.2 items 4-6). `graph_dirty`: the base bond
@@ -1698,12 +2699,35 @@ export function create_large_system_renderer(
     pending_bond_count = 0
   }
 
+  /** A topology owner swap is stronger than an ordinary position update.
+   *
+   * The active graph contains site indices owned by the previous topology.
+   * Keeping it visible while the replacement graph validates can therefore
+   * connect the new positions with old pairs and draw transient cell-spanning
+   * bonds. Replica-only changes deliberately do NOT come through here: their
+   * base topology is unchanged and the right-bottom visual-supercell path must
+   * continue to reuse its published graph.
+   */
+  function clear_active_graph_for_topology_swap(): void {
+    bump_graph_generation()
+    packet_graph = false
+    device.queue.writeBuffer(active_count_buffer, 0, new Uint32Array([0]))
+    active_cpu_graph = null
+    active_bond_count = 0
+    active_graph_revision++
+    sync_active_ghost_table()
+    replica_dirty = true
+  }
+
   /** Switch shared renderer state to the legacy setter channel. Always clear
    *  packet identity caches so a same-object/same-version packet can fully
    *  restore after the legacy mutation. */
   function claim_legacy_ownership(): void {
     last_packet = null
     last_images = null
+    packet_images = null
+    packet_decoration_images = null
+    boundary_decorator_count = 0
     ghost_count = 0
     if (ownership === `legacy`) return
     ownership = `legacy`
@@ -1725,6 +2749,12 @@ export function create_large_system_renderer(
   /** Route a scene-change kind into the dirty flags. `visual` is a no-op. */
   function mark_bond_dirty(kind: BondDirtyKind): void {
     if (kind === `graph`) {
+      // A candidate dispatched from the previous detector inputs must never
+      // publish after positions/lattice/rules/options changed. The old ACTIVE
+      // graph may remain as a coherent fallback for those same-topology edits;
+      // topology swaps clear it explicitly above because its indices have a
+      // different owner.
+      bump_graph_generation()
       graph_dirty = true
       fresh_graph = true
     } else if (kind === `replica`) {
@@ -1773,14 +2803,39 @@ export function create_large_system_renderer(
       // in vs_main (instance decode past the replica range) — VERTEX only.
       { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      // binding 8: atom shading uniform (headlamp, ambient/directional, render
+      // style, depth cue, outline). Read ONLY in fs_main — the vertex stage does
+      // no shading — so FRAGMENT only, per the project's minimal-visibility rule.
+      { binding: 8, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
 
+  const impostor_pipeline_layout = device.createPipelineLayout({
+    bindGroupLayouts: [bind_group_layout],
+  })
   const pipeline = device.createRenderPipeline({
     label: `large-system-impostor-pipeline`,
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bind_group_layout] }),
+    layout: impostor_pipeline_layout,
     vertex: { module: shader, entryPoint: `vs_main` },
-    fragment: { module: shader, entryPoint: `fs_main`, targets: [{ format }] },
+    fragment: {
+      module: shader,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
     // Camera-facing billboards must never be back-face culled — winding flips
     // depending on view, so cull nothing.
     primitive: { topology: `triangle-strip`, cullMode: `none` },
@@ -1789,11 +2844,44 @@ export function create_large_system_renderer(
       depthWriteEnabled: true,
       depthCompare: `less`,
     },
-    // 4× MSAA. alphaToCoverageEnabled turns the fragment's alpha (= analytic
-    // silhouette coverage) into fractional MSAA sample coverage, so the curved
-    // sphere edge — defined by ray-miss discard — gets antialiased. The color
-    // target stays opaque (no blend); alpha is consumed ONLY as coverage.
-    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
+    // Analytic coverage is composited deterministically. A2C quantizes the
+    // continuous edge alpha to an implementation-dependent 4-sample mask; at
+    // extreme zoom that becomes visible black stipple around spheres/bonds.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
+  })
+  const ghost_pipeline = device.createRenderPipeline({
+    label: `large-system-impostor-ghost-pipeline`,
+    layout: impostor_pipeline_layout,
+    vertex: { module: shader, entryPoint: `vs_main` },
+    fragment: {
+      module: shader,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    },
+    // True alpha blending owns the fractional coverage here. A2C would turn
+    // opacity into stochastic sample coverage and still fail to composite the
+    // ghost color correctly.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
   })
 
   // ── Atom PICK pipeline (id-buffer) ───────────────────────────────────────
@@ -1958,13 +3046,48 @@ export function create_large_system_renderer(
       // grant EXACTLY the reading stage — VERTEX only.
       { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 6 = the SAME atom shading uniform. fs_main reads the headlamp,
+      // specular strength and depth-cue params from it, so bonds are lit from the
+      // same direction as the atoms and fade into the same fog. FRAGMENT only.
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // binding 7 = authoritative base atom colors, indexed by bond endpoint in
+      // vs_main and forwarded as endpoint varyings. VERTEX only.
+      { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      // binding 8 = exact ordinary periodic decorator segments, consumed only
+      // by the dedicated vs_decorator vertex entry point.
+      { binding: 8, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
+  })
+  const bond_render_pipeline_layout = device.createPipelineLayout({
+    bindGroupLayouts: [bond_render_bgl],
   })
   const bond_render_pipeline = device.createRenderPipeline({
     label: `large-system-bond-render-pipeline`,
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bond_render_bgl] }),
-    vertex: { module: bond_render_module, entryPoint: `vs_main` },
-    fragment: { module: bond_render_module, entryPoint: `fs_main`, targets: [{ format }] },
+    layout: bond_render_pipeline_layout,
+    vertex: {
+      module: bond_render_module,
+      entryPoint: `vs_main`,
+      constants: { ghost_pass: 0 },
+    },
+    fragment: {
+      module: bond_render_module,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
     // Impostor cylinder is a screen-aligned capsule-bounding billboard (6-vert
     // triangle-STRIP hull, matching BOND_VERTS_PER_CYLINDER); the fragment shader
     // ray-traces the smooth capped finite cylinder. cullMode none — the hull
@@ -1975,10 +3098,83 @@ export function create_large_system_renderer(
       depthWriteEnabled: true,
       depthCompare: `less`,
     },
-    // 4× MSAA + alpha-to-coverage: same as the atom impostor. The capsule
-    // silhouette (body + caps), defined by ray-miss discard, outputs fractional
-    // coverage as alpha so the curved/grazing bond edges are smoothly AA'd.
-    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
+    // Ordinary static-bond semantics: one continuous analytic coverage value is
+    // alpha-blended per pixel. A2C stays disabled to avoid driver-specific masks.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
+  })
+  const bond_render_ghost_pipeline = device.createRenderPipeline({
+    label: `large-system-bond-render-ghost-pipeline`,
+    layout: bond_render_pipeline_layout,
+    vertex: {
+      module: bond_render_module,
+      entryPoint: `vs_main`,
+      constants: { ghost_pass: 1 },
+    },
+    fragment: {
+      module: bond_render_module,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: false,
+      depthCompare: `less`,
+    },
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
+  })
+  const bond_decorator_pipeline = device.createRenderPipeline({
+    label: `large-system-bond-decorator-pipeline`,
+    layout: bond_render_pipeline_layout,
+    vertex: {
+      module: bond_render_module,
+      entryPoint: `vs_decorator`,
+    },
+    fragment: {
+      module: bond_render_module,
+      entryPoint: `fs_main`,
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: `src-alpha`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+          alpha: {
+            srcFactor: `one`,
+            dstFactor: `one-minus-src-alpha`,
+            operation: `add`,
+          },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      // Ordinary BondManagerInstances keeps depth writes enabled for its
+      // image-atom decorator rows. Preserve that here: the ordinary ownership
+      // stream can contain exact duplicate full-bond rows (one per image
+      // anchor), and a writable depth buffer makes the first row authoritative
+      // instead of alpha-blending coincident silhouettes into comb fringes.
+      depthWriteEnabled: true,
+      depthCompare: `less`,
+    },
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: false },
   })
 
   // Cell-box render: 12 edges as a thin line-list. Binds camera + cell uniform.
@@ -2018,6 +3214,47 @@ export function create_large_system_renderer(
     ],
   })
 
+  // World-space lattice vectors: a/b/c arrows matching Lattice.svelte's
+  // cylinder + cone geometry and unlit red/green/blue materials.
+  const lattice_vector_module = device.createShaderModule({
+    label: `large-system-lattice-vectors`,
+    code: LATTICE_VECTOR_WGSL,
+  })
+  const lattice_vector_bgl = device.createBindGroupLayout({
+    label: `large-system-lattice-vector-bgl`,
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+    ],
+  })
+  const lattice_vector_pipeline = device.createRenderPipeline({
+    label: `large-system-lattice-vector-pipeline`,
+    layout: device.createPipelineLayout({ bindGroupLayouts: [lattice_vector_bgl] }),
+    vertex: { module: lattice_vector_module, entryPoint: `vs_main` },
+    fragment: {
+      module: lattice_vector_module,
+      entryPoint: `fs_main`,
+      targets: [{ format }],
+    },
+    primitive: { topology: `triangle-list`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: true,
+      depthCompare: `less`,
+    },
+    multisample: { count: SAMPLE_COUNT },
+  })
+  const lattice_vector_bind_group = device.createBindGroup({
+    label: `large-system-lattice-vector-bg`,
+    layout: lattice_vector_bgl,
+    entries: [
+      { binding: 0, resource: { buffer: camera_buffer } },
+      { binding: 1, resource: { buffer: cell_uniform } },
+      { binding: 2, resource: { buffer: lattice_vector_uniform } },
+    ],
+  })
+
   // Axis-orientation gizmo: a small corner XYZ triad as a line-list (22 verts:
   // 6 axis + 16 letter-glyph endpoints).
   // Binds the camera (for the view rotation) + the gizmo placement uniform. Runs
@@ -2030,16 +3267,35 @@ export function create_large_system_renderer(
   const gizmo_bgl = device.createBindGroupLayout({
     label: `large-system-gizmo-bgl`,
     entries: [
-      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
-      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 0 = camera: the SDF fragment stage extracts the view rotation
+      // (fs_main is where all drawing happens now). VERTEX is OR'd in as the
+      // plausible future reader, per the project's recurrence-proof rule.
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // binding 1 = placement: vs_main positions the quad, fs_main reads the
+      // pixel scales — both stages genuinely read it.
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
     ],
   })
   const gizmo_pipeline = device.createRenderPipeline({
     label: `large-system-gizmo-pipeline`,
     layout: device.createPipelineLayout({ bindGroupLayouts: [gizmo_bgl] }),
     vertex: { module: gizmo_module, entryPoint: `vs_main` },
-    fragment: { module: gizmo_module, entryPoint: `fs_main`, targets: [{ format }] },
-    primitive: { topology: `line-list` },
+    fragment: {
+      module: gizmo_module,
+      entryPoint: `fs_main`,
+      // The quad covers the whole widget box; everything outside the SDF shapes
+      // has alpha 0 and must show the scene through — so this pipeline blends.
+      // The shader composites internally and outputs PREMULTIPLIED color, hence
+      // src factor `one` (not src-alpha).
+      targets: [{
+        format,
+        blend: {
+          color: { srcFactor: `one`, dstFactor: `one-minus-src-alpha`, operation: `add` },
+          alpha: { srcFactor: `one`, dstFactor: `one-minus-src-alpha`, operation: `add` },
+        },
+      }],
+    },
+    primitive: { topology: `triangle-strip` },
     depthStencil: {
       format: DEPTH_FORMAT,
       // Always visible: never write depth, never fail the depth test. The gizmo
@@ -2048,7 +3304,7 @@ export function create_large_system_renderer(
       depthCompare: `always`,
     },
     // Share the multisampled targets (count must match). No alpha-to-coverage —
-    // opaque colored lines.
+    // the SDF coverage feeds alpha BLENDING here, not sample masking.
     multisample: { count: SAMPLE_COUNT },
   })
   const gizmo_bind_group = device.createBindGroup({
@@ -2060,44 +3316,61 @@ export function create_large_system_renderer(
     ],
   })
 
-  /** Fixed pixel geometry of the corner gizmo. The triad region is ~2·GIZMO_PX
-   *  wide (each axis reaches GIZMO_PX from the origin), placed GIZMO_MARGIN_PX in
-   *  from the bottom-left corner — matching the WebGL Gizmo's offset:{left,bottom}. */
-  const GIZMO_PX = 120
-  const GIZMO_MARGIN_PX = 28
+  /** Gizmo layout inputs, mirrored from the DOM side (the renderer only knows
+   *  device pixels). dpr converts the CSS-pixel spec below into device px;
+   *  safe_left/safe_bottom are the pane's HUD safe-area insets (docked-toolbar
+   *  avoidance) — the same hud_safe the WebGL gizmo's offset uses. */
+  const gizmo_layout = { dpr: 1, safe_left: 0, safe_bottom: 0 }
+  let gizmo_show = true
 
-  /** Pack + upload the gizmo placement uniform from the canvas backing size.
-   *  - center_ndc: bottom-left corner anchor in NDC. NDC x∈[-1,1] (right), y∈
-   *    [-1,1] (UP). Pixel→NDC: dx_ndc = 2·px/width, dy_ndc = 2·px/height. We seat
-   *    the triad ORIGIN one (margin + axis reach) in from the bottom-left so the
-   *    whole triad stays on-screen whatever its rotation.
-   *  - scale_ndc: per-unit-axis half-extent. x = 2·GIZMO_PX/width; y =
-   *    2·GIZMO_PX/height (independent per-axis pixel scale ⇒ square in pixels,
-   *    aspect-corrected — a unit axis reaches exactly GIZMO_PX pixels either way). */
+  /** Pack + upload the gizmo placement uniform from the canvas backing size +
+   *  the DOM layout inputs. Replicates the WebGL widget's box: bottom-left
+   *  anchored, responsive size, HUD-safe-area offset. Layout (see GizmoU):
+   *  - place.xy: widget CENTER in NDC (x∈[-1,1] right, y∈[-1,1] UP)
+   *  - place.z:  half-extent R in device px (the quad spans ±R)
+   *  - place.w:  unit_px = R / 1.8 — the widget's internal ortho unit (the
+   *    reference gizmo renders a ±1.8 frustum into its box)
+   *  - px.xy:    device-px → NDC scale (2/w, 2/h)
+   *  - px.z:     axis line HALF-width in device px (lineWidth 4 CSS px / 2) */
   function upload_gizmo_uniform(): void {
-    const w = Math.max(1, canvas.width)
-    const h = Math.max(1, canvas.height)
-    const inset = GIZMO_MARGIN_PX + GIZMO_PX
-    const cx = -1 + (2 * inset) / w // from the LEFT edge
-    const cy = -1 + (2 * inset) / h // from the BOTTOM edge (NDC y up)
-    const sx = (2 * GIZMO_PX) / w
-    const sy = (2 * GIZMO_PX) / h
+    const layout = resolve_gizmo_layout({
+      width_device_px: canvas.width,
+      height_device_px: canvas.height,
+      dpr: gizmo_layout.dpr,
+      safe_left_css_px: gizmo_layout.safe_left,
+      safe_bottom_css_px: gizmo_layout.safe_bottom,
+    })
     const u = new Float32Array(8)
-    u[0] = cx; u[1] = cy; u[2] = 0; u[3] = 0
-    u[4] = sx; u[5] = sy; u[6] = 0; u[7] = 0
+    u[0] = layout.center_ndc[0]
+    u[1] = layout.center_ndc[1]
+    u[2] = layout.radius_device_px
+    u[3] = layout.unit_device_px
+    u[4] = layout.pixel_to_ndc[0]
+    u[5] = layout.pixel_to_ndc[1]
+    u[6] = layout.line_half_width_device_px
+    u[7] = 0
     device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
   }
 
-  /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad)
-   *  then color (rgb + pad). Same row convention as the bond render uniform. */
+  /** Pack + upload lattice rows, transformed origin, then linear-RGB color. */
   function upload_cell_uniform(): void {
-    const u = new Float32Array(16)
-    const L = cell_lattice
-    u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
-    u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
-    u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = cell_color[0]; u[13] = cell_color[1]; u[14] = cell_color[2]; u[15] = 1
-    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, 64)
+    const u = pack_cell_uniform(cell_lattice, cell_origin, cell_color)
+    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, CELL_BYTES)
+  }
+
+  function upload_lattice_vector_uniform(): void {
+    const u = pack_lattice_vector_uniform(
+      cell_origin,
+      cell_vector_colors,
+      cell_vector_width_scale,
+    )
+    device.queue.writeBuffer(
+      lattice_vector_uniform,
+      0,
+      u.buffer,
+      u.byteOffset,
+      LATTICE_VECTOR_BYTES,
+    )
   }
 
   // Indirect-args cfg: (verts_per_cylinder, capacity, ncells). capacity is the
@@ -2207,6 +3480,7 @@ export function create_large_system_renderer(
         // bindings 6/7: sparse ghost instance table (placeholders when empty).
         { binding: 6, resource: { buffer: ghost_sites_buffer as GPUBuffer } },
         { binding: 7, resource: { buffer: ghost_images_buffer as GPUBuffer } },
+        { binding: 8, resource: { buffer: shading_buffer } },
       ],
     })
     // Pick pass reuses camera + positions + radii (no colors/selected) PLUS the
@@ -2275,6 +3549,93 @@ export function create_large_system_renderer(
     return build_image_instance_table(graph, supercell_dims, boundary_policy)
   }
 
+  function upload_boundary_decorators(
+    packet: RenderPacket,
+    graph: BaseBondGraph | undefined,
+    images: ImageInstanceTable | null,
+  ): void {
+    if (!graph || !images || images.count === 0) {
+      boundary_decorator_count = 0
+      return
+    }
+    const layout = build_boundary_bond_endpoint_layout(
+      graph,
+      images,
+      packet.frame.positions,
+      packet.frame.lattice,
+      {
+        dims: packet.replicas.dims,
+        policy: bond_style.hide_incomplete_bonds ? `hide` : `stub`,
+        stub_scale: bond_style.incomplete_edge_length_scale,
+      },
+    )
+    const record_words = 10
+    const packed = new ArrayBuffer(Math.max(layout.visible_count, 1) * record_words * 4)
+    const words = new Uint32Array(packed)
+    const floats = new Float32Array(packed)
+    let visible = 0
+    for (let row = 0; row < layout.count; row++) {
+      const mode = layout.modes[row]
+      if (mode === BOUNDARY_BOND_MODE.HIDDEN) continue
+      const xyz = row * 3
+      const sx = layout.draw_starts[xyz]
+      const sy = layout.draw_starts[xyz + 1]
+      const sz = layout.draw_starts[xyz + 2]
+      const ex = layout.draw_ends[xyz]
+      const ey = layout.draw_ends[xyz + 1]
+      const ez = layout.draw_ends[xyz + 2]
+      const dx = ex - sx
+      const dy = ey - sy
+      const dz = ez - sz
+      if (!(dx * dx + dy * dy + dz * dz > 1e-12)) continue
+
+      const bond_idx = layout.bond_indices[row]
+      const a = graph.pairs[bond_idx * 2]
+      const b = graph.pairs[bond_idx * 2 + 1]
+      const is_stub = mode === BOUNDARY_BOND_MODE.STUB
+      const anchor_is_a =
+        layout.anchor_sides[row] === BOUNDARY_BOND_ANCHOR.A
+      const color_start = is_stub ? (anchor_is_a ? a : b) : a
+      const color_end = is_stub ? color_start : b
+      const base = visible * record_words
+      floats[base] = sx
+      floats[base + 1] = sy
+      floats[base + 2] = sz
+      floats[base + 3] = ex
+      floats[base + 4] = ey
+      floats[base + 5] = ez
+      words[base + 6] = color_start
+      words[base + 7] = color_end
+      words[base + 8] = is_stub ? 1 : 0
+      floats[base + 9] = bond_style.periodic_bond_opacity
+      visible++
+    }
+
+    boundary_decorator_count = visible
+    if (visible === 0) return
+    if (visible > boundary_decorator_capacity) {
+      boundary_decorator_buffer.destroy()
+      boundary_decorator_capacity = Math.max(
+        visible,
+        Math.ceil(boundary_decorator_capacity * 2),
+        1,
+      )
+      boundary_decorator_buffer = device.createBuffer({
+        label: `large-system-boundary-decorators`,
+        size: boundary_decorator_capacity * record_words * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+      rebuild_bond_bind_groups()
+    }
+    device.queue.writeBuffer(
+      boundary_decorator_buffer,
+      0,
+      packed,
+      0,
+      visible * record_words * 4,
+    )
+  }
+
   async function read_gpu_graph(
     source: GPUBuffer,
     count: number,
@@ -2334,6 +3695,11 @@ export function create_large_system_renderer(
   function sync_active_ghost_table(): void {
     if (boundary_policy !== `ghost-images`) {
       upload_ghost_table(empty_images)
+      return
+    }
+    if (packet_graph && packet_images) {
+      upload_ghost_table(packet_images)
+      upload_supercell_uniform()
       return
     }
     if (active_cpu_graph) {
@@ -2495,14 +3861,25 @@ export function create_large_system_renderer(
     // u8 lanes preserve every value the Int8Array contract can represent; no
     // scientific topology is silently clamped.
     const packed = new Uint32Array(Math.max(bond_count * 3, 1))
+    const authoritative_decorators = packet_decoration_images !== null
     for (let bi = 0; bi < bond_count; bi++) {
-      packed[bi * 3] = graph.pairs[bi * 2]
-      packed[bi * 3 + 1] = graph.pairs[bi * 2 + 1]
-      packed[bi * 3 + 2] = pack_jimage(
-        graph.jimages[bi * 3],
-        graph.jimages[bi * 3 + 1],
-        graph.jimages[bi * 3 + 2],
-      )
+      const a = graph.pairs[bi * 2]
+      const b = graph.pairs[bi * 2 + 1]
+      const jx = graph.jimages[bi * 3]
+      const jy = graph.jimages[bi * 3 + 1]
+      const jz = graph.jimages[bi * 3 + 2]
+      packed[bi * 3] = a
+      packed[bi * 3 + 1] = b
+      let packed_jimage = pack_jimage(jx, jy, jz)
+      if (authoritative_decorators && (jx | jy | jz) !== 0) {
+        // High byte is unused by the signed-jimage decoder. Mark cross-cell
+        // base rows as ordinary-decorator-owned, but deliberately set neither
+        // ghost-completion bit: the base pass now emits only ordinary stubs
+        // (or hides them), while the dedicated decorator pass owns every full
+        // image-anchor bond.
+        packed_jimage |= 1 << 24
+      }
+      packed[bi * 3 + 2] = packed_jimage
     }
     if (bond_count > 0) {
       device.queue.writeBuffer(
@@ -2707,7 +4084,7 @@ export function create_large_system_renderer(
     return grew
   }
 
-  /** (Re)build the three bond bind groups. Depends on positions_buffer (atom
+  /** (Re)build the three bond bind groups. Depends on positions/colors buffers (atom
    *  realloc), covalent_buffer, the active/candidate pairs buffers, and the elem-ids / rules buffers
    *  (bindings 5/6) — any of which may reallocate. The elem-ids / rules buffers
    *  are auto-created here (with a placeholder if never set) so the auto-layout
@@ -2718,7 +4095,7 @@ export function create_large_system_renderer(
     indirect_bg = null
     bond_render_bg = null
     if (
-      !positions_buffer || !covalent_buffer || !candidate_pairs_buffer ||
+      !positions_buffer || !colors_buffer || !covalent_buffer || !candidate_pairs_buffer ||
       !active_pairs_buffer
     ) return
     // Bindings 5/6 must exist for the auto-layout bind group; lazily create the
@@ -2800,14 +4177,22 @@ export function create_large_system_renderer(
         // supercell uniform (dims + base lattice) for the per-cell offset.
         { binding: 4, resource: { buffer: bond_meta_buffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        // binding 6: the shared shading uniform — headlamp + specular + fog, so
+        // bonds shade consistently with the atoms.
+        { binding: 6, resource: { buffer: shading_buffer } },
+        // binding 7: the SAME authoritative topology.colors buffer the atom
+        // impostor uses. Rebuilt whenever ensure_atom_capacity reallocates it.
+        { binding: 7, resource: { buffer: colors_buffer } },
+        { binding: 8, resource: { buffer: boundary_decorator_buffer } },
       ],
     })
   }
 
-  /** Pack + upload the bond render uniform: lattice columns (TRANSPOSED to match
-   *  the compute's column layout) + (radius, color). */
+  /** Pack + upload the bond render uniform: lattice rows plus edge style. */
   /** Upload the GPU supercell uniform: dims (nx,ny,nz,base_count) as u32 + base
-   *  lattice rows a,b,c as 3×vec4<f32>. base_count = the current atom_count (the
+   *  lattice rows a,b,c as 3×vec4<f32>. `lat0.w` carries boundary policy and
+   *  the otherwise-spare `lat1.w` carries sparse ghost opacity. base_count =
+   *  the current atom_count (the
    *  BASE cell's atom count, since the CPU stays base-cell when GPU-supercell is
    *  active). Stored as ROWS a/b/c (matching pack_lattice's row convention) — the
    *  vertex offset reads supercell.lat{0,1,2}.xyz directly as a/b/c. Re-called by
@@ -2824,10 +4209,10 @@ export function create_large_system_renderer(
     // decoded as inst % base_count). 0 atoms ⇒ no draw, value is irrelevant.
     u32[3] = Math.max(0, atom_count)
     const L = supercell_lattice
-    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. The lat0.w pad
-    // slot carries the complete boundary policy (stub=0, hide=1,
-    // ghost-images=2); atom/pick impostors read only .xyz, so it never perturbs
-    // replica positions.
+    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. lat0.w carries
+    // complete boundary policy (stub=0, hide=1, ghost-images=2); lat1.w carries
+    // sparse image opacity. Position decode reads only .xyz, so neither visual
+    // lane perturbs replica positions.
     const ghost_graph_ready = active_bond_count === 0 || active_cpu_graph !== null
     const policy_code = boundary_policy === `hide`
       ? 1
@@ -2835,21 +4220,20 @@ export function create_large_system_renderer(
       ? 2
       : 0
     f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = policy_code
-    f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = 0
+    f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = ghost_atom_opacity
     f32[8] = L[6]; f32[9] = L[7]; f32[10] = L[8]; f32[11] = 0
     device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
   }
 
   function upload_bond_render_uniform(): void {
-    const u = new Float32Array(16)
-    const L = bond_render_lattice
-    // Same transpose pack_params uses: column k = lattice row k.
-    u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
-    u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
-    u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
-    u[12] = BOND_RADIUS
-    u[13] = BOND_COLOR[0]; u[14] = BOND_COLOR[1]; u[15] = BOND_COLOR[2]
-    device.queue.writeBuffer(bond_render_uniform, 0, u.buffer, u.byteOffset, 64)
+    const u = pack_bond_render_uniform(bond_render_lattice, bond_style)
+    device.queue.writeBuffer(
+      bond_render_uniform,
+      0,
+      u.buffer,
+      u.byteOffset,
+      BOND_RENDER_BYTES,
+    )
   }
 
   let destroyed = false
@@ -3013,19 +4397,55 @@ export function create_large_system_renderer(
   return {
     set_background(rgb: [number, number, number]): void {
       if (destroyed || device_lost) return
-      clear_color.r = rgb[0]
-      clear_color.g = rgb[1]
-      clear_color.b = rgb[2]
+      // The clearValue is written into the (non-sRGB) target verbatim — it never
+      // passes through a fragment shader — so it must be encoded HERE, or the
+      // overlay's background comes out darker than the WebGL canvas's and dark
+      // atoms lose the contrast this color was picked to give them.
+      clear_color.r = linear_to_srgb(rgb[0])
+      clear_color.g = linear_to_srgb(rgb[1])
+      clear_color.b = linear_to_srgb(rgb[2])
       clear_color.a = 1
+    },
+    set_shading(state: ResolvedVisualShading): boolean {
+      if (destroyed || device_lost) return false
+      if (same_visual_shading(shading_state, state)) return false
+      shading_state = snapshot_shading(state)
+      upload_shading_uniform()
+      return true
+    },
+    set_gizmo_layout(opts: {
+      dpr?: number
+      safe_left?: number
+      safe_bottom?: number
+      show?: boolean
+    }): void {
+      if (destroyed || device_lost) return
+      if (opts.dpr !== undefined) gizmo_layout.dpr = opts.dpr
+      if (opts.safe_left !== undefined) gizmo_layout.safe_left = opts.safe_left
+      if (opts.safe_bottom !== undefined) gizmo_layout.safe_bottom = opts.safe_bottom
+      if (opts.show !== undefined) gizmo_show = opts.show
+      upload_gizmo_uniform()
     },
     set_cell(
       lattice: Float32Array | null,
       show: boolean,
       color: [number, number, number],
+      origin: readonly [number, number, number] = [0, 0, 0],
+      vectors?: LargeSystemLatticeVectorStyle,
     ): void {
       if (destroyed || device_lost) return
       cell_show = show
       cell_color = [color[0], color[1], color[2]]
+      cell_origin = [origin[0], origin[1], origin[2]]
+      if (vectors) {
+        cell_vectors_show = vectors.show
+        cell_vector_width_scale = vectors.width_scale
+        cell_vector_colors = [
+          [...vectors.colors[0]],
+          [...vectors.colors[1]],
+          [...vectors.colors[2]],
+        ] as LargeSystemLatticeVectorStyle[`colors`]
+      }
       // A null lattice (non-periodic structure) ⇒ no box. Otherwise detect a
       // degenerate all-zero lattice (also no box) so molecules never draw one.
       let nonzero = false
@@ -3039,6 +4459,7 @@ export function create_large_system_renderer(
       }
       cell_has_lattice = nonzero
       upload_cell_uniform()
+      upload_lattice_vector_uniform()
     },
     set_camera(uniform: Float32Array): void {
       if (destroyed || device_lost) return
@@ -3115,7 +4536,7 @@ export function create_large_system_renderer(
     set_bond_data(
       covalent_radii: Float32Array,
       lattice: Float32Array,
-      options: { tolerance: number; max_bond_dist: number; min_dist: number },
+      options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
       periodic: boolean,
     ): void {
       if (destroyed || device_lost) return
@@ -3159,6 +4580,37 @@ export function create_large_system_renderer(
       // lattice untouched; the compute Params below still use detector_lattice.
       if (ownership === `legacy`) upload_bond_render_uniform()
       mark_bond_dirty(classify_bond_dirty(`options`))
+    },
+    set_bond_style(style: Partial<LargeSystemBondStyle>): void {
+      if (destroyed || device_lost) return
+      const next = normalize_bond_style(style)
+      if (
+        next.radius === bond_style.radius &&
+        next.incomplete_edge_mode === bond_style.incomplete_edge_mode &&
+        next.incomplete_edge_length_scale === bond_style.incomplete_edge_length_scale &&
+        next.hide_incomplete_bonds === bond_style.hide_incomplete_bonds &&
+        next.periodic_bond_opacity === bond_style.periodic_bond_opacity
+      ) {
+        return
+      }
+      bond_style = next
+      upload_bond_render_uniform()
+      if (last_packet?.topology.bond_graph) {
+        upload_boundary_decorators(
+          last_packet,
+          last_packet.topology.bond_graph,
+          packet_decoration_images,
+        )
+      }
+    },
+    set_ghost_opacity(opacity: number): void {
+      if (destroyed || device_lost || !Number.isFinite(opacity)) return
+      const next = Math.max(0, Math.min(1, opacity))
+      if (next === ghost_atom_opacity) return
+      ghost_atom_opacity = next
+      // Visual-only: preserve packet/legacy ownership and every graph dirty
+      // flag. Reusing the 64-byte Supercell uniform is the sole GPU mutation.
+      upload_supercell_uniform()
     },
     set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
       if (destroyed || device_lost) return
@@ -3240,16 +4692,29 @@ export function create_large_system_renderer(
       sync_active_ghost_table()
       mark_bond_dirty(classify_bond_dirty(`image-policy`))
     },
-    set_packet(packet: RenderPacket, _images: ImageInstanceTable): void {
+    set_packet(
+      packet: RenderPacket,
+      images: ImageInstanceTable,
+      decoration_images: ImageInstanceTable = images,
+    ): void {
       if (destroyed || device_lost) return
       claim_packet_ownership()
       const prev = last_packet
+      const images_changed = packet_images !== images
+      const decoration_images_changed =
+        packet_decoration_images !== decoration_images
+      packet_images = images
+      packet_decoration_images = decoration_images
       const diff: RenderPacketDiff = prev ? diff_render_packet(prev, packet) : {
         topology_changed: true,
         bond_graph_changed: packet.topology.bond_graph !== undefined,
         frame_changed: true,
         replica_changed: true,
       }
+      const topology_owner_changed = prev !== null && (
+        prev.frame.owner !== packet.frame.owner ||
+        prev.topology.atom_count !== packet.topology.atom_count
+      )
       last_packet = packet
       const topo = packet.topology
       const n = topo.atom_count
@@ -3257,6 +4722,14 @@ export function create_large_system_renderer(
 
       // ── Topology version: (re)alloc + upload the base attribute buffers. ──
       if (diff.topology_changed) {
+        if (topology_owner_changed) {
+          // Unlike a visual-supercell dims change, a true Build supercell
+          // publishes a new topology owner. Never draw the previous owner's
+          // index pairs against this packet while its graph is being rebuilt.
+          // Attribute-only topology revisions (colors/display radii) retain
+          // the graph because their index owner did not change.
+          clear_active_graph_for_topology_swap()
+        }
         // atom_count tracks the packet even at 0 (an emptied structure draws
         // nothing — same behaviour as the legacy set_atoms(…, 0) path).
         atom_count = n
@@ -3346,10 +4819,32 @@ export function create_large_system_renderer(
       }
 
       // ── Bond-graph version: a packet-supplied base graph uploads straight
-      // into the active draw buffers (self-image edges retained 1:1). Its ghost
-      // stream is derived from that exact graph, never caller boundary metadata.
-      if (diff.bond_graph_changed) upload_packet_bond_graph(topo.bond_graph)
-      else if (diff.replica_changed) sync_active_ghost_table()
+      // into the active draw buffers (self-image edges retained 1:1). The
+      // packet's boundary table is authoritative for ghost atoms, including an
+      // explicitly empty table; graph-derived ghosts remain a legacy-setter
+      // fallback only.
+      if (
+        diff.topology_changed ||
+        diff.bond_graph_changed ||
+        (images_changed && topo.bond_graph)
+      ) {
+        upload_packet_bond_graph(topo.bond_graph)
+      } else if (diff.replica_changed || images_changed) {
+        sync_active_ghost_table()
+      }
+      if (
+        diff.topology_changed ||
+        diff.bond_graph_changed ||
+        diff.frame_changed ||
+        diff.replica_changed ||
+        decoration_images_changed
+      ) {
+        upload_boundary_decorators(
+          packet,
+          topo.bond_graph,
+          packet_decoration_images,
+        )
+      }
     },
     set_selection(indices: Uint32Array | number[]): void {
       if (destroyed || device_lost) return
@@ -3626,7 +5121,7 @@ export function create_large_system_renderer(
             pack_params(bond_n, candidate_pairs_capacity, {
               tolerance: bond_options.tolerance,
               max_bond_dist: bond_options.max_bond_dist,
-              min_dist: bond_options.min_dist,
+              min_bond_dist: bond_options.min_bond_dist,
               positions: new Float32Array(0), // unused by pack_params
               radii: new Float32Array(0), // unused by pack_params
               lattice: bond_detector_lattice,
@@ -3688,20 +5183,24 @@ export function create_large_system_renderer(
         replica_dirty = false
       }
 
-      // Draw into the multisampled color target, RESOLVE into the swapchain
-      // texture. storeOp:`store` performs the MSAA→single-sample resolve into
-      // resolveTarget at the end of the pass.
       const swapchain_view = context.getCurrentTexture().createView()
+      const scene_color_attachment: GPURenderPassColorAttachment =
+        SAMPLE_COUNT > 1
+          ? {
+              view: msaa_color_view as GPUTextureView,
+              resolveTarget: swapchain_view,
+              clearValue: clear_color,
+              loadOp: `clear`,
+              storeOp: `store`,
+            }
+          : {
+              view: swapchain_view,
+              clearValue: clear_color,
+              loadOp: `clear`,
+              storeOp: `store`,
+            }
       const pass = encoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view: msaa_color_view as GPUTextureView,
-            resolveTarget: swapchain_view,
-            clearValue: clear_color,
-            loadOp: `clear`,
-            storeOp: `store`,
-          },
-        ],
+        colorAttachments: [scene_color_attachment],
         depthStencilAttachment: {
           view: depth_view as GPUTextureView,
           depthClearValue: 1.0,
@@ -3709,23 +5208,38 @@ export function create_large_system_renderer(
           depthStoreOp: `store`,
         },
       })
+      // Opaque bonds draw before opaque atoms. Both now use deterministic
+      // straight-alpha edge coverage with depth writes; drawing atoms second
+      // lets their fractional sphere edge composite over connected cylinders
+      // instead of writing a translucent depth halo that rejects the bond.
+      if (bonds_ready) {
+        pass.setPipeline(bond_render_pipeline)
+        pass.setBindGroup(0, bond_render_bg as GPUBindGroup)
+        pass.drawIndirect(indirect_buffer, 0)
+      }
+      // The ordinary renderer submits image-atom bond decorators as part of
+      // the same depth-writing bond mesh. Draw the exact shared decorator rows
+      // before every atom sphere as well, so both home and image spheres cover
+      // the center-to-center cylinder at their contact instead of exposing a
+      // late translucent bond over the atom surface.
+      if (
+        bonds_ready &&
+        boundary_decorator_count > 0 &&
+        bond_render_bg
+      ) {
+        pass.setPipeline(bond_decorator_pipeline)
+        pass.setBindGroup(0, bond_render_bg)
+        pass.draw(BOND_VERTS_PER_CYLINDER, boundary_decorator_count)
+      }
       if (atom_count > 0 && bind_group) {
         pass.setPipeline(pipeline)
         pass.setBindGroup(0, bind_group)
         // GPU supercell: atom_count × ncells instances (ncells = nx·ny·nz). The
         // vertex decodes inst → atom (inst % base_count) + cell offset. ncells 1
         // ⇒ atom_count instances, identical to the non-supercell draw. Sparse
-        // ghost instances ('ghost-images' packet policy) append past the
-        // replica range — 0 outside that policy, so nothing else changes.
-        pass.draw(4, atom_count * Math.max(1, supercell_ncells) + ghost_draw_count())
-      }
-      // Bonds: instanced procedural cylinders, instance count supplied by the
-      // indirect buffer the compute wrote (this same submit, or last frame's).
-      // Shares the depth attachment with the atom draw ⇒ correct occlusion.
-      if (bonds_ready) {
-        pass.setPipeline(bond_render_pipeline)
-        pass.setBindGroup(0, bond_render_bg as GPUBindGroup)
-        pass.drawIndirect(indirect_buffer, 0)
+        // ghosts are deliberately excluded: they draw later through a truly
+        // translucent pipeline with depth writes disabled.
+        pass.draw(4, atom_count * Math.max(1, supercell_ncells))
       }
       // Cell box: 12 edges as a thin line-list. Drawn only when toggled on AND a
       // non-zero lattice is present (periodic structure). Shares the depth
@@ -3735,14 +5249,42 @@ export function create_large_system_renderer(
         pass.setBindGroup(0, cell_bind_group)
         pass.draw(24) // 12 edges × 2 line endpoints
       }
+      if (cell_show && cell_has_lattice && cell_vectors_show) {
+        pass.setPipeline(lattice_vector_pipeline)
+        pass.setBindGroup(0, lattice_vector_bind_group)
+        pass.draw(288, 3) // closed 16-sided cylinder + cone, one instance per a/b/c
+      }
+      // Sparse ghost bonds do not write depth. Draw them BEFORE translucent
+      // ghost atoms so the sphere surface visually encloses the center-to-center
+      // cylinder instead of a later bond/cap being painted over the atom.
+      const ghosts = ghost_draw_count()
+      // A second drawIndirect reuses the established graph/count buffer. The
+      // shader specialization collapses every edge except ghost-complete
+      // boundary cylinders; no second GPU graph or indirect buffer exists.
+      if (bonds_ready && ghosts > 0 && boundary_policy === `ghost-images`) {
+        pass.setPipeline(bond_render_ghost_pipeline)
+        pass.setBindGroup(0, bond_render_bg as GPUBindGroup)
+        pass.drawIndirect(indirect_buffer, 0)
+      }
+      // Sparse image atoms append after the home replica range in the shared
+      // instance tables. They are the final translucent scene primitive so
+      // their sphere surface covers the connected ghost bond at the contact.
+      if (atom_count > 0 && bind_group && ghosts > 0) {
+        const home_count = atom_count * Math.max(1, supercell_ncells)
+        pass.setPipeline(ghost_pipeline)
+        pass.setBindGroup(0, bind_group)
+        pass.draw(4, ghosts, 0, home_count)
+      }
       // Axis-orientation gizmo: drawn LAST with depthCompare:`always` + no depth
       // write so the corner XYZ triad is ALWAYS visible (atoms/bonds never occlude
       // it). Reuses the camera uniform (the shader extracts the view rotation), so
       // it spins with the camera. Always drawn while the overlay is active — no
       // toggle/prop needed; it lives in the corner away from the structure.
-      pass.setPipeline(gizmo_pipeline)
-      pass.setBindGroup(0, gizmo_bind_group)
-      pass.draw(22) // 6 axis verts (3 axes × 2) + 16 letter-glyph verts (8 segs × 2)
+      if (gizmo_show) {
+        pass.setPipeline(gizmo_pipeline)
+        pass.setBindGroup(0, gizmo_bind_group)
+        pass.draw(4) // one quad; the fragment shader SDF-draws the whole widget
+      }
       pass.end()
       device.queue.submit([encoder.finish()])
       // Kick off the candidate validation AFTER the submit that encoded its
@@ -3788,6 +5330,8 @@ export function create_large_system_renderer(
         // some implementations / already-lost contexts may throw — ignore
       }
       camera_buffer.destroy()
+      supercell_buffer.destroy()
+      shading_buffer.destroy()
       positions_buffer?.destroy()
       radii_buffer?.destroy()
       colors_buffer?.destroy()
@@ -3803,6 +5347,7 @@ export function create_large_system_renderer(
       rules_buffer?.destroy()
       active_pairs_buffer?.destroy()
       candidate_pairs_buffer?.destroy()
+      boundary_decorator_buffer.destroy()
       cell_count_buffer?.destroy()
       cell_atoms_buffer?.destroy()
       ghost_sites_buffer?.destroy()
@@ -3820,6 +5365,7 @@ export function create_large_system_renderer(
       bond_params_buffer.destroy()
       bond_render_uniform.destroy()
       cell_uniform.destroy()
+      lattice_vector_uniform.destroy()
       gizmo_uniform.destroy()
       indirect_cfg_buffer.destroy()
       positions_buffer = null
@@ -3842,6 +5388,9 @@ export function create_large_system_renderer(
       ghost_images_buffer = null
       last_packet = null
       last_images = null
+      packet_images = null
+      packet_decoration_images = null
+      boundary_decorator_count = 0
       last_positions = null
       msaa_color_texture = null
       msaa_color_view = null

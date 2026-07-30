@@ -40,6 +40,14 @@ pub struct AtomRadiiOptions {
     /// pad which is too tight for large atoms / stretched metallic contacts.
     #[serde(default = "default_scale")]
     pub scale: f64,
+    /// Optional fixed additive cutoff in Angstroms.
+    ///
+    /// When present, bond if `distance <= r1 + r2 + tolerance` instead of
+    /// using the multiplicative `scale`. This preserves the legacy
+    /// large-system viewer criterion without changing the default scientific
+    /// atom-radii strategy used by ordinary CPU/WASM callers.
+    #[serde(default)]
+    pub tolerance: Option<f64>,
     /// Minimum bond distance in Angstroms (default: 0.4)
     #[serde(default = "default_min_dist")]
     pub min_bond_dist: f64,
@@ -66,6 +74,7 @@ impl Default for AtomRadiiOptions {
     fn default() -> Self {
         Self {
             scale: default_scale(),
+            tolerance: None,
             min_bond_dist: default_min_dist(),
             max_bond_dist: default_max_dist(),
             include_periodic_images: false,
@@ -167,6 +176,7 @@ struct BondEvalData {
     neighbors: NeighborList,
     entry_offsets: Vec<usize>,
     scale: f64,
+    tolerance: Option<f64>,
     min_dist_sq: f64,
 }
 
@@ -185,6 +195,7 @@ impl BondEvalData {
             neighbors,
             entry_offsets,
             scale: options.scale,
+            tolerance: options.tolerance,
             min_dist_sq: options.min_bond_dist * options.min_bond_dist,
         }
     }
@@ -198,6 +209,7 @@ impl BondEvalData {
             distances: &self.neighbors.distances,
             entry_offsets: &self.entry_offsets,
             scale: self.scale,
+            tolerance: self.tolerance,
             min_dist_sq: self.min_dist_sq,
         }
     }
@@ -220,6 +232,8 @@ struct BondEvalInput<'a> {
     entry_offsets: &'a [usize],
     /// Multiplicative cutoff on the covalent radii sum.
     scale: f64,
+    /// Optional fixed additive cutoff on the covalent radii sum.
+    tolerance: Option<f64>,
     /// Squared minimum bond distance.
     min_dist_sq: f64,
 }
@@ -292,7 +306,11 @@ fn evaluate_bond_center_range_into(
 
         let r1 = input.effective_radii[center_idx];
         let r2 = input.effective_radii[neighbor_idx];
-        let upper_bound = (r1 + r2) * input.scale;
+        let radii_sum = r1 + r2;
+        let upper_bound = match input.tolerance {
+            Some(tolerance) => radii_sum + tolerance.max(0.0),
+            None => radii_sum * input.scale,
+        };
 
         // Only check upper bound: coordination bonds (M-O, M-N) are often
         // significantly shorter than the covalent radii sum. The lower bound
@@ -394,7 +412,7 @@ fn prepare_atom_radii_neighbor_list(
         .map(|species| species.element.covalent_radius().unwrap_or(1.5))
         .collect();
     let max_radius = effective_radii.iter().copied().fold(0.0, f64::max);
-    let cutoff = options.max_bond_dist.min(2.0 * max_radius * options.scale);
+    let cutoff = atom_radii_neighbor_cutoff(max_radius, options);
     let (center_indices, neighbor_indices, images, distances) =
         structure.get_neighbor_list(cutoff, 1e-8, true);
     (
@@ -427,15 +445,26 @@ pub(crate) fn collect_bonds_atom_radii_from_neighbor_list(
         distances: &neighbors.distances,
         entry_offsets: &entry_offsets,
         scale: options.scale,
+        tolerance: options.tolerance,
         min_dist_sq: options.min_bond_dist * options.min_bond_dist,
     };
     collect_bonds_over_centers_into(&input, effective_radii.len(), out);
 }
 
+/// Maximum geometric neighbor-search radius required by the selected
+/// atom-radii criterion.
+pub(crate) fn atom_radii_neighbor_cutoff(max_radius: f64, options: &AtomRadiiOptions) -> f64 {
+    let criterion_cutoff = match options.tolerance {
+        Some(tolerance) => 2.0 * max_radius + tolerance.max(0.0),
+        None => 2.0 * max_radius * options.scale,
+    };
+    options.max_bond_dist.min(criterion_cutoff)
+}
+
 /// Detect bonds using covalent radii sum.
 ///
-/// A bond is detected if the distance between two atoms is at most
-/// `scale` times the sum of their covalent radii.
+/// A bond is detected using either the additive `tolerance` criterion or,
+/// when no tolerance is supplied, `scale` times the covalent-radii sum.
 ///
 /// This is the fastest algorithm, suitable for quick visualization.
 pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
@@ -1081,6 +1110,36 @@ mod tests {
             assert!(bond.bond_length > 2.0 && bond.bond_length < 4.0);
             assert!(bond.strength > 0.0);
         }
+    }
+
+    #[test]
+    fn additive_tolerance_preserves_legacy_large_viewer_contacts() {
+        let structure = Structure::new(
+            Lattice::cubic(10.0),
+            vec![Species::neutral(Element::C), Species::neutral(Element::C)],
+            vec![
+                Vector3::new(0.10, 0.50, 0.50),
+                Vector3::new(0.29, 0.50, 0.50),
+            ],
+        );
+        let scaled = AtomRadiiOptions {
+            scale: 1.2,
+            max_bond_dist: 3.0,
+            min_bond_dist: 0.1,
+            ..Default::default()
+        };
+        assert!(
+            detect_bonds_atom_radii(&structure, &scaled).is_empty(),
+            "1.90 Å C–C exceeds 1.2 × (0.76 + 0.76)"
+        );
+
+        let additive = AtomRadiiOptions {
+            tolerance: Some(0.45),
+            ..scaled
+        };
+        let bonds = detect_bonds_atom_radii(&structure, &additive);
+        assert_eq!(bonds.len(), 1);
+        assert!((bonds[0].bond_length - 1.90).abs() < 1e-10);
     }
 
     #[test]

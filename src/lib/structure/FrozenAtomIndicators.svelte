@@ -2,6 +2,7 @@
   import type { Site } from '$lib'
   import { T } from '@threlte/core'
   import type { SvelteMap } from 'svelte/reactivity'
+  import { VISUAL_RADIUS_SCALE } from './rendering/visual-state'
 
   let {
     sites,
@@ -32,7 +33,7 @@
   {#each sites as site, site_idx (site_idx)}
     {@const sel_dyn = site.properties?.selective_dynamics as [boolean, boolean, boolean] | undefined}
     {#if sel_dyn && (!sel_dyn[0] || !sel_dyn[1] || !sel_dyn[2])}
-      {@const frozen_radius = (all_radii_by_site_idx.get(site_idx) ?? atom_radius) * 0.85}
+      {@const frozen_radius = (all_radii_by_site_idx.get(site_idx) ?? atom_radius) * VISUAL_RADIUS_SCALE * 1.7}
       {#if !sel_dyn[0]}
         <T.Mesh position={site.xyz} rotation={[0, Math.PI / 2, 0]} raycast={noop_raycast}>
           <T.TorusGeometry args={[frozen_radius, 0.06, 8, 32]} />
