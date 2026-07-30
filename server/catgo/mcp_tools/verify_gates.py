@@ -187,6 +187,22 @@ def gate_force_convergence(fmax, ediffg, ibrion=None, nsw=None):
               f"Fmax={fmax} vs crit={crit} (string flags ignored)", "C1")
 
 
+def _energy_code_family(result) -> str | None:
+    """Which per-atom window applies, or None if the result does not say.
+
+    An explicit `code` wins. Failing that, `potcar_titels` is unambiguous: a
+    POTCAR means a PAW/pseudopotential run, i.e. valence-only energies. Anything
+    else is undeterminable and the gate must SKIP rather than judge against
+    physics it was not told.
+    """
+    name = str(result.get("code") or "").strip().lower()
+    if name:
+        return name
+    if result.get("potcar_titels") or result.get("ads_titels"):
+        return "vasp"
+    return None
+
+
 def gate_energy_physical(energy, n_atoms, code=None):
     """Physical-energy guard, the companion to the force gate (C1).
     Catches cached/garbage energies that are finite and thus survive every string check.
@@ -538,7 +554,13 @@ _SPEC = [
     ("gas_thermo_completeness", "A3", ("ladder",),                               lambda r: gate_gas_thermo_completeness(r["ladder"])),
     ("zpe_completeness",        "B",  ("ladder",),                               lambda r: gate_zpe_completeness(r["ladder"])),
     ("force_convergence",       "C1", ("fmax", "ediffg"),                       lambda r: gate_force_convergence(r["fmax"], r["ediffg"], r.get("ibrion"), r.get("nsw"))),
-    ("energy_physical",         "C1", ("energy", "n_atoms", "code"),             lambda r: gate_energy_physical(r["energy"], r["n_atoms"], r["code"])),
+    # SKIP is decided inside the lambda, not by a missing key: a VASP result
+    # rarely carries a literal `code`, but its POTCAR titles already say which
+    # window applies. Requiring `code` outright made every real VASP energy SKIP.
+    ("energy_physical",         "C1", ("energy", "n_atoms"),
+     lambda r: (gate_energy_physical(r["energy"], r["n_atoms"], _energy_code_family(r))
+                if _energy_code_family(r)
+                else _skip("energy_physical", "C1", ("code or potcar_titels",)))),
     ("opt_converged_flag",      "C2", ("opt_conv",),                             lambda r: gate_opt_converged_flag(r["opt_conv"])),
     ("products_exist",          "C3", ("products_found", "products_expected"),   lambda r: gate_products_exist(r["products_found"], r["products_expected"])),
     ("hessian_symmetry",        "D1", ("hessian_max_asym",),                     lambda r: gate_hessian_symmetry(r["hessian_max_asym"])),

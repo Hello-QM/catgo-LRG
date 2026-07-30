@@ -43,7 +43,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test deps
-        run: python -m pip install pytest pytest-asyncio httpx mcp requests numpy PyYAML Jinja2 build
+        # Install what the server DECLARES rather than a hand-written list:
+        # bare `mcp` resolved to 2.0.0, which drops Server.list_tools and
+        # makes catgo/mcp_tools/server.py unimportable. The cap lives in
+        # requirements.txt so a fresh install is protected too.
+        run: |
+          python -m pip install -r server/requirements.txt
+          python -m pip install pytest pytest-asyncio build
       - name: Module self-tests (python <module>.py — PR #546 review found these were never executed in CI)
         working-directory: server/catgo/mcp_tools
         run: |
