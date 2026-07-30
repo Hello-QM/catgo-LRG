@@ -25,8 +25,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install test deps
-        run: python -m pip install pytest pytest-asyncio httpx mcp numpy PyYAML Jinja2
+      - name: Install deps
+        # Install what the SERVER declares, not a hand-written list: the first
+        # version of this job omitted fastapi (every router test failed to
+        # import) and let pip resolve `mcp>=1.0.0` to 2.0.0, which dropped
+        # `Server.list_tools` and broke catgo/mcp_tools/server.py at import.
+        # `mcp<2` reproduces what the code is actually written against (1.28.1
+        # locally); lifting it needs a port, not a looser pin.
+        run: |
+          python -m pip install -r server/requirements.txt "mcp<2"
+          python -m pip install pytest pytest-asyncio
       - name: Module self-tests (python <module>.py)
         working-directory: server
         env:
