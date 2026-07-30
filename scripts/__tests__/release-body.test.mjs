@@ -70,7 +70,7 @@ test('canonical current release body contains every mandatory disclosure', () =>
   assert.match(body, /AGPL-3\.0-or-later/)
   assert.doesNotMatch(body,
     /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i)
-  assert.match(body, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
+  assert.match(body, /This work used CatGo \(https:\/\/app\.catgo-ucsd\.org\)\./)
   assert.match(body, /10\.26434\/chemrxiv\.15002984\/v1/)
   assert.match(body, /please include this acknowledgement/i)
   assert.match(body, /not an additional condition/i)

@@ -22,7 +22,7 @@ import {
 } from '../verify-legal-distributions.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
+const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
 
 const REQUIRED_FILES = [
   ...legalSync.legalBundleSources(),

@@ -102,7 +102,7 @@ and a prominent description of changes. Sublicensing is not permitted.
 Every public output materially produced with CatGo must:
 
 1. visibly acknowledge CatGo with the sentence
-   `This work used CatGo (https://catgo-ucsd.org).`; and
+   `This work used CatGo (https://app.catgo-ucsd.org).`; and
 2. cite the preferred citation in `CITATION.cff`.
 
 Public outputs include papers, preprints, theses, reports, presentations,

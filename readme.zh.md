@@ -382,7 +382,7 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明下列致谢并使用首选的 ChemRxiv 引用。
 
 ```
-This work used CatGo (https://catgo-ucsd.org).
+This work used CatGo (https://app.catgo-ucsd.org).
 ```
 
 首选 ChemRxiv 引用如下：

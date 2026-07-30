@@ -23,7 +23,7 @@ Markdown.
 - The custom identifier is exactly
   `LicenseRef-CatGo-Noncommercial-1.0`.
 - The exact acknowledgement is
-  `This work used CatGo (https://catgo-ucsd.org).`
+  `This work used CatGo (https://app.catgo-ucsd.org).`
 - The required publication DOI is
   `10.26434/chemrxiv.15002984/v1`.
 - Commercial permission requests go to `gul026@ucsd.edu`.
@@ -64,7 +64,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
+const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
 
 test('root license prohibits unauthorized commercial use', () => {
@@ -171,7 +171,7 @@ manifests in Task 2. Set the message exactly to the mandatory acknowledgement
 followed by the CFF citation instruction:
 
 ```yaml
-message: This work used CatGo (https://catgo-ucsd.org). If you use CatGo, you must acknowledge and cite it as described below.
+message: This work used CatGo (https://app.catgo-ucsd.org). If you use CatGo, you must acknowledge and cite it as described below.
 ```
 
 Keep the software record and add `preferred-citation` for the ChemRxiv

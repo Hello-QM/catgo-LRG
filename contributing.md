@@ -154,6 +154,6 @@ Thanks again — happy hacking!
   code.
 - Contributions to CatGo are accepted under AGPL-3.0-or-later.
 - CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
-  please include “This work used CatGo (https://catgo-ucsd.org).” and the
+  please include “This work used CatGo (https://app.catgo-ucsd.org).” and the
   preferred citation in CITATION.cff. This request is not an additional
   condition of the AGPL license.
