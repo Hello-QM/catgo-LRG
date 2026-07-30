@@ -29,6 +29,11 @@ import copy
 import re
 
 ALLOW, PROMPT, FORBIDDEN = "allow", "prompt", "forbidden"
+# NOTE on PROMPT: this layer does NOT block for a human. A spent override lets the
+# call through and the response is stamped so the waiver is visible in the
+# transcript and recorded in `audit`. Actual human-in-the-loop approval belongs to
+# the permission manager / decide_tool_permission layer, which sits above this one
+# (see the module docstring). Do not read PROMPT as "a human approved this".
 _SEVERITY = {ALLOW: 0, PROMPT: 1, FORBIDDEN: 2}
 
 
@@ -151,6 +156,12 @@ def _is_numeric(tool, args):
         return True
     if tool == "catgo_workflow":
         return str((args or {}).get("action", "")).lower() == "batch_results"
+    if tool == "catgo_workflow_engine":
+        # get_result returns the node's actual numbers. Leaving it unarmed let an
+        # agent read a result and submit the next HPC job without verifying it —
+        # the exact bypass this layer exists to close. `status` carries progress,
+        # not results, and stays exempt so diagnosis is still free.
+        return str((args or {}).get("action", "")).lower() == "get_result"
     if not tool.startswith(_NUMERIC_PREFIXES):
         return False
     action = str((args or {}).get("action", ""))

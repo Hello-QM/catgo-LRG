@@ -2529,12 +2529,16 @@ def _handle_verify(args: dict) -> list[TextContent]:
         # so a later intact copy can clear that result only. A bare dict cannot
         # select any digest because supplied_envelope_digest() rejects it.
         result_digest=bound_digest or supplied_envelope_digest,
+        # same key the wrapper armed the result under; on the shared HTTP
+        # transport a default key would clear somebody else's pending state
+        session_key=_verification_session_key(),
     )
 
     ov_lines = []
     if args.get("override"):
         try:
-            ov = _enf.register_override(args["override"], args.get("justification", ""))
+            ov = _enf.register_override(args["override"], args.get("justification", ""),
+                                        session_key=_verification_session_key())
             ov_lines = ["", f"⚠ override registered for {', '.join(ov['gates'])} — "
                             f"one-shot, spent by the next irreversible call, and recorded. "
                             f"justification: {ov['why']}"]
@@ -3712,20 +3716,45 @@ def _response_succeeded(
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
-    T = TextContent
+    return await run_with_verification(name, arguments, _dispatch_tool)
 
-    # verification enforcement (additive): an irreversible call (HPC submit) while
-    # numeric results are pending un-verified is blocked outright — the agent is
-    # told to run catgo_verify first instead of silently skipping the gate.
+
+def _verification_session_key() -> str:
+    """Which verification session this call belongs to.
+
+    The stdio server is one process per client, so "default" was fine. The HTTP
+    transport serves EVERY client from one process: on a shared key one user's
+    unverified result blocks another user's submit, and an override registered by
+    one session can be spent by another. The panel/tab id is the identity the
+    rest of this server already routes by.
+    """
+    try:
+        from .helpers import current_panel_id
+    except ImportError:
+        from helpers import current_panel_id
+    return str(current_panel_id.get() or "default")
+
+
+async def run_with_verification(name: str, arguments: dict, dispatch) -> list[TextContent]:
+    """Wrap ONE tool call in the verification lifecycle.
+
+    Shared by both dispatchers on purpose. This wrapper used to live only in the
+    stdio server, so the HTTP path (`routers/mcp_http.py`, what the desktop app
+    and every HTTP client use) advertised catgo_verify without dispatching it and
+    ran no precheck/postmark at all — the enforcement layer simply did not exist
+    in production. Two copies would drift again; there is one.
+    """
+    T = TextContent
     try:
         from . import verify_enforcement as _enf
     except ImportError:
         import verify_enforcement as _enf  # flat-layout fallback
-    decision, reason = _enf.precheck(name, arguments)
+    session_key = _verification_session_key()
+    decision, reason = _enf.precheck(name, arguments, session_key=session_key)
     if decision == _enf.FORBIDDEN:
         return [T(type="text", text=reason)]
 
-    result = await _dispatch_tool(name, arguments)
+    result = await dispatch(name, arguments)
     ok = _response_succeeded(name, result, arguments)
     # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
     # Single boundary = the same place the ecosystem audit found metadata being
@@ -3766,7 +3795,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
         **({"_numeric_response": True} if v2_result_response else {}),
         **({"_result_records": result_records} if result_records else {}),
     }
-    _enf.postmark(name, postmark_args, ok=ok and not is_empty_batch)
+    _enf.postmark(name, postmark_args, ok=ok and not is_empty_batch,
+                  session_key=session_key)
     if decision == _enf.PROMPT and result:
         # a waived FAIL still went out — stamp the response so the override is
         # visible in the transcript rather than only in the audit list.

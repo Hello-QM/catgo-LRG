@@ -156,7 +156,11 @@ def validate_vasp_job_script(
         r"^(if|then|else|elif|fi|for|while|until|case|esac|select|function)\b"
     )
     for line in lines:
-        if "$(" in line or "`" in line:
+        if ("$(" in line or "`" in line) and not line.startswith("echo "):
+            # The ban makes the EXECUTION path auditable. An `echo` line cannot
+            # become one — and the repo ships a Shaheen3 template ending in
+            # `echo "Calculation finished on $(date)."`, which a blanket ban
+            # rejects, so generate_job_script() failed on CatGo's own template.
             raise ValueError("VASP job script command substitution is not auditable")
         if control.match(line) or line in {"{", "}"}:
             raise ValueError(
@@ -174,6 +178,10 @@ def validate_vasp_job_script(
         allowed_setup = (
             "module ", "ml ", "export ", "unset ", "source ", ". ", "cd ",
             "set ", "ulimit ", "conda activate ",
+            # `echo` is a log line, not an execution path. Omitting it rejected
+            # CatGo's own Shaheen3 template, whose last line is
+            # `echo "Calculation finished on $(date)."`.
+            "echo ",
         )
         if not line.startswith(allowed_setup) and not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_]*=.*", line

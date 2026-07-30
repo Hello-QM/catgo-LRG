@@ -57,6 +57,8 @@ from catgo.mcp_tools.server_claude_code import (
     _handle_skills,
     _handle_campaign,
     _handle_terminal,
+    _handle_verify,
+    _handle_validate_config,
     API_BASE,
 )
 
@@ -205,7 +207,14 @@ async def list_tools() -> list[Tool]:
 
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
-    arguments = arguments or {}
+    # Same verification lifecycle as the stdio server. Without this the HTTP path
+    # — which is what the desktop app and every HTTP client use — advertised
+    # catgo_verify in TOOLS, answered "Unknown tool", and ran no precheck or
+    # postmark, so nothing on this transport was ever gated.
+    return await _mcp_mod.run_with_verification(name, arguments or {}, _dispatch)
+
+
+async def _dispatch(name: str, arguments: dict) -> list[TextContent]:
     T = TextContent
     get_token = _mcp_mod._get_current_structure_override.set(
         _get_current_structure_direct,
@@ -280,6 +289,12 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
                 return await _handle_campaign(arguments)
             elif name == "catgo_terminal":
                 return await _handle_terminal(arguments)
+            elif name == "catgo_verify":
+                return _handle_verify(arguments)
+            elif name == "catgo_validate_config":
+                # advertised in TOOLS with no branch here either — the review
+                # named catgo_verify, the same hole covered two tools
+                return await _handle_validate_config(client, arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

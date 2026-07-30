@@ -30,7 +30,16 @@ PHYS_RANGE = {  # eV, plausible adsorption ΔG windows (ai-screen 物理范围�
 }
 HESSIAN_ASYM_MAX = 1.0   # eV/Å²; clean 0.01-0.37 vs corrupted 4.2-121.7 (D-599)
 FREQ_GEOM_MAXDEV = 0.10  # Å; freq run must sit on the current CONTCAR (D2: E -668.4 vs true -701.9 = 33.5 eV off)
-E_SANE_PER_ATOM = (-15.0, 0.0)  # eV/atom; C1 caught cached E=-90530 eV on a ~100-atom slab
+# eV/atom; C1 caught cached E=-90530 eV on a ~100-atom slab. This window is
+# PSEUDOPOTENTIAL-specific: a PAW/pseudo code reports valence-only energies, an
+# ALL-ELECTRON code (ORCA, Gaussian) reports core electrons too and lands
+# hundreds of eV/atom lower — a legitimate ORCA -2080.5 eV on 3 atoms
+# (-693 eV/atom) was being failed as "unphysical", which then locked HPC
+# submission. Pick the window from the code that produced the number; when the
+# result does not say, the gate cannot judge and must SKIP (see _SPEC).
+E_SANE_PER_ATOM = (-15.0, 0.0)
+E_SANE_PER_ATOM_ALL_ELECTRON = (-5000.0, 0.0)
+_ALL_ELECTRON_CODES = {"orca", "gaussian", "psi4", "nwchem", "qchem", "molpro"}
 GAS_SPECIES = {"N2", "H2", "O2", "NH3", "CH4", "CO", "CO2", "H2O"}  # A3: need full gas thermo, not ZPE-only
 
 
@@ -178,13 +187,22 @@ def gate_force_convergence(fmax, ediffg, ibrion=None, nsw=None):
               f"Fmax={fmax} vs crit={crit} (string flags ignored)", "C1")
 
 
-def gate_energy_physical(energy, n_atoms):
+def gate_energy_physical(energy, n_atoms, code=None):
     """Physical-energy guard, the companion to the force gate (C1).
-    Catches cached/garbage energies that are finite and thus survive every string check."""
-    lo, hi = E_SANE_PER_ATOM
+    Catches cached/garbage energies that are finite and thus survive every string check.
+
+    `code` selects the window: a valence-only (PAW/pseudo) total energy and an
+    all-electron one differ by hundreds of eV/atom, so one window cannot judge
+    both. Without it the gate is not applicable — see the _SPEC entry, which
+    requires `code` so an unlabelled energy SKIPs loudly instead of being failed
+    against the wrong physics."""
+    name = str(code or "").strip().lower()
+    lo, hi = (E_SANE_PER_ATOM_ALL_ELECTRON if name in _ALL_ELECTRON_CODES
+              else E_SANE_PER_ATOM)
     per = energy / n_atoms if n_atoms else float("nan")
     return _v("energy_physical", lo <= per <= hi,
-              f"E/atom={per:.3f} eV vs window [{lo},{hi}] (E={energy}, N={n_atoms})", "C1")
+              f"E/atom={per:.3f} eV vs {name or 'pseudopotential'} window "
+              f"[{lo},{hi}] (E={energy}, N={n_atoms})", "C1")
 
 
 def gate_opt_converged_flag(opt_conv):
@@ -339,7 +357,14 @@ def gate_incar_tag_echo_identity(incar_requested, outcar_param_echo):
     capacitance / PZC / energy had to be recomputed."""
     mismatch = {}
     for tag, want in incar_requested.items():
-        if tag in _VASP_COERCED_TAGS or tag not in outcar_param_echo:
+        if tag in _VASP_COERCED_TAGS:
+            continue
+        if tag not in outcar_param_echo:
+            # ABSENT, not skipped. The cp build silently drops every tag after the
+            # first on a line — so the tag simply never reaches the echo. Skipping
+            # it made this gate blind to the exact failure it was built for, and
+            # the verdict still read "all N requested tags echoed".
+            mismatch[tag] = f"asked {want!r}, absent from OUTCAR echo"
             continue
         got = outcar_param_echo[tag]
         try:
@@ -513,7 +538,7 @@ _SPEC = [
     ("gas_thermo_completeness", "A3", ("ladder",),                               lambda r: gate_gas_thermo_completeness(r["ladder"])),
     ("zpe_completeness",        "B",  ("ladder",),                               lambda r: gate_zpe_completeness(r["ladder"])),
     ("force_convergence",       "C1", ("fmax", "ediffg"),                       lambda r: gate_force_convergence(r["fmax"], r["ediffg"], r.get("ibrion"), r.get("nsw"))),
-    ("energy_physical",         "C1", ("energy", "n_atoms"),                     lambda r: gate_energy_physical(r["energy"], r["n_atoms"])),
+    ("energy_physical",         "C1", ("energy", "n_atoms", "code"),             lambda r: gate_energy_physical(r["energy"], r["n_atoms"], r["code"])),
     ("opt_converged_flag",      "C2", ("opt_conv",),                             lambda r: gate_opt_converged_flag(r["opt_conv"])),
     ("products_exist",          "C3", ("products_found", "products_expected"),   lambda r: gate_products_exist(r["products_found"], r["products_expected"])),
     ("hessian_symmetry",        "D1", ("hessian_max_asym",),                     lambda r: gate_hessian_symmetry(r["hessian_max_asym"])),

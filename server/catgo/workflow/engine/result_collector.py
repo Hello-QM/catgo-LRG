@@ -221,9 +221,23 @@ _VASP_META_MARKERS = {
 _VASP_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?"
 
 
+def _quote_remote_dir(work_dir: str) -> str:
+    """Quote a remote path WITHOUT killing a leading `~`.
+
+    `shlex.quote("~/calculations")` yields `'~/calculations'`, and a quoted tilde
+    is a literal directory name — the default work root then resolves to nothing
+    and no TOTEN/manifest metadata comes back. Quote only the part after the
+    tilde so expansion still happens on the remote shell.
+    """
+    if work_dir == "~" or work_dir.startswith("~/"):
+        rest = work_dir[2:]
+        return "~/" + shlex.quote(rest) if rest else "~"
+    return shlex.quote(work_dir)
+
+
 def _vasp_metadata_command(work_dir: str) -> str:
     """Read realized VASP metadata in two OUTCAR passes and one SSH call."""
-    safe_dir = shlex.quote(work_dir)
+    safe_dir = _quote_remote_dir(work_dir)
     fields = (
         "free  energy|NIONS|ions per type|NELECT|EDIFFG|IBRION|NSW|POTCAR:|TITEL|"
         "LEXCH|GGA|LHFCALC|AEXX|HFSCREEN|LSOL|EB_K|TAU|LAMBDA_D_K|NC_K"
@@ -736,7 +750,7 @@ async def collect_completed_results(
     # Backward-compatible energy fallback if the metadata pass found no TOTEN.
     if engine_key == "vasp" and "energy" not in result:
         try:
-            safe_dir = shlex.quote(work_dir)
+            safe_dir = _quote_remote_dir(work_dir)
             grep_result = await hpc.run_on_owner(lambda: hpc.conn.run(
                 f"grep 'free  energy   TOTEN' {safe_dir}/OUTCAR | tail -1",
                 check=False,
