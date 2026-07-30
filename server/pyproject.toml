@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catgo"
-version = "1.4.7"
+version = "1.4.8"
 description = "CatGo — AI-driven workbench for computational materials science (3D viewer + workflow engine + MCP)"
 readme = "README-pypi.md"
 license = "AGPL-3.0-or-later"

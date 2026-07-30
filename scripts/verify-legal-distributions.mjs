@@ -323,7 +323,7 @@ function verifyReleaseAssets() {
     'the download mirror must validate assets against legal material from the target tag',
   )
   requireMatch(
-    '.github/release-notes/v1.4.7.md',
+    '.github/release-notes/v1.4.8.md',
     /AGPL-3\.0-or-later[\s\S]*This work used CatGo \(https:\/\/catgo-ucsd\.org\)\.[\s\S]*10\.26434\/chemrxiv\.15002984\/v1[\s\S]*not an additional condition/i,
     'release body must prominently disclose AGPL, the requested acknowledgement, DOI, and its non-binding status',
   )

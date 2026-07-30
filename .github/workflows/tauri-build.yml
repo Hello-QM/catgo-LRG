@@ -332,7 +332,7 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License and citation
-            CatGo 1.4.7 distributions use **AGPL-3.0-or-later**.
+            CatGo 1.4.8 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
@@ -362,10 +362,10 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.7
-            - **Windows desktop app closes normally again** — guarded shutdown can destroy the Tauri window and clean up bundled backend processes after Exit is confirmed.
-            - **VS Code structure generation consistently loads compatible WASM** — threaded builds that import shared memory are rejected, so the scalar runtime is selected regardless of directory order.
-            - **More reliable multi-platform releases** — draft validation, artifact paths, signatures, provenance, updater metadata, and the Cloudflare R2 mirror are aligned across release jobs.
+            ### New in 1.4.8
+            - **Consistent periodic structures in both rendering modes** — standard WebGL and Large System Performance Mode now share atom, bond, boundary, camera, and visual-state data.
+            - **Database search works again across the app and VS Code** — Materials Project, OPTIMADE, and PubChem now use current provider APIs, pagination, and extension-host routing.
+            - **Large System Performance Mode remains WebGPU-accelerated** — the shared rendering contract removes visual drift while retaining the fast path and live interaction updates.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
@@ -525,8 +525,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-v1.4.6-release-body.sh "$CATGO_RELEASE_TAG"
 
-      - name: Finalize canonical release body
+      - name: Finalize canonical v1.4.7 release body
         if: env.CATGO_RELEASE_TAG == 'v1.4.7'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Finalize canonical release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.8'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
