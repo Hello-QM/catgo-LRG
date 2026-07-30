@@ -149,7 +149,10 @@ async def submit_batch_tasks(
             potcar_root, potcar_func = _resolve_potcar_settings(config)
             if potcar_root:
                 await _generate_potcar(hpc, work_dir, potcar_root, potcar_func)
-            await write_vasp_input_manifest(hpc, work_dir, vasp_resolution)
+            await write_vasp_input_manifest(
+                hpc, work_dir, vasp_resolution,
+                use_custodian=resolve_vasp_use_custodian(task_params, config),
+            )
 
         db.update_task(task["id"], status=TaskState.UPLOADING.value)
 

@@ -6,12 +6,15 @@ from dataclasses import dataclass
 import json
 import posixpath
 import re
+import logging
 import shlex
 from typing import Any
 
 
 VASP_FALLBACK_COMMAND = "srun vasp_std"
 VASP_INPUT_MANIFEST = "catgo_vasp_input_manifest.json"
+logger = logging.getLogger(__name__)
+
 VASP_MANDATORY_INPUTS = ("INCAR", "POSCAR", "POTCAR", "KPOINTS")
 
 
@@ -261,12 +264,18 @@ def _quote_remote_work_dir(work_dir: str) -> str:
 def build_vasp_input_manifest_command(
     work_dir: str,
     resolution: VaspCommandResolution,
+    use_custodian: bool = False,
 ) -> str:
     """Build a POSIX-shell preflight that writes JSON, then rejects missing inputs."""
     run_command_json = shlex.quote(json.dumps(resolution.command, ensure_ascii=True))
     binary_token_json = shlex.quote(json.dumps(resolution.binary_token, ensure_ascii=True))
     source_json = shlex.quote(json.dumps(resolution.source, ensure_ascii=True))
     binary_declared = "true" if resolution.binary_token is not None else "false"
+    # Recorded so the collector can tell a legitimate custodian correction from
+    # tampering: custodian rewrites INCAR/KPOINTS/POSCAR while self-healing, and
+    # demanding byte-identical hashes turned a successfully healed run into an
+    # unverifiable one.
+    custodian_declared = "true" if use_custodian else "false"
     remote_dir = _quote_remote_work_dir(work_dir)
 
     return f"""cd {remote_dir} && /bin/sh <<'CATGO_VASP_PREFLIGHT'
@@ -291,14 +300,21 @@ catgo_sha256() {{
 
 catgo_emit_input() {{
     catgo_name=$1
+    # $2 = "true" when this input is optional for THIS job (KPOINTS under
+    # KSPACING). The collector reads `mandatory` rather than assuming.
+    if [ "$2" = true ]; then
+        catgo_mandatory=false
+    else
+        catgo_mandatory=true
+    fi
     if [ -f "$catgo_name" ]; then
         if catgo_hash=$(catgo_sha256 "$catgo_name" 2>/dev/null); then
-            printf '{{"mandatory":true,"exists":true,"sha256":"%s"}}' "$catgo_hash"
+            printf '{{"mandatory":%s,"exists":true,"sha256":"%s"}}' "$catgo_mandatory" "$catgo_hash"
         else
-            printf '{{"mandatory":true,"exists":true,"sha256":null}}'
+            printf '{{"mandatory":%s,"exists":true,"sha256":null}}' "$catgo_mandatory"
         fi
     else
-        printf '{{"mandatory":true,"exists":false,"sha256":null}}'
+        printf '{{"mandatory":%s,"exists":false,"sha256":null}}' "$catgo_mandatory"
     fi
 }}
 
@@ -309,7 +325,17 @@ if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || 
 else
     catgo_hash_available=false
 fi
+# KPOINTS is mandatory only when INCAR does not set KSPACING: with KSPACING the
+# mesh comes from the INCAR and VASP ignores (and does not need) a KPOINTS file.
+# Demanding it unconditionally rejected perfectly valid jobs at submit time.
+catgo_kspacing=false
+if [ -f INCAR ] && grep -qiE '^[[:space:]]*KSPACING[[:space:]]*=' INCAR; then
+    catgo_kspacing=true
+fi
 for catgo_name in {" ".join(VASP_MANDATORY_INPUTS)}; do
+    if [ "$catgo_name" = KPOINTS ] && [ "$catgo_kspacing" = true ]; then
+        continue
+    fi
     if [ ! -f "$catgo_name" ]; then
         if [ -n "$catgo_missing_json" ]; then
             catgo_missing_json="$catgo_missing_json,"
@@ -335,11 +361,12 @@ fi
     printf '  "hash_algorithm": "sha256",\\n'
     printf '  "hash_available": %s,\\n' "$catgo_hash_available"
     printf '  "command_source": %s,\\n' "$catgo_command_source_json"
+    printf '  "use_custodian": %s,\\n' "{custodian_declared}"
     printf '  "inputs": {{\\n'
     printf '    "INCAR": '; catgo_emit_input INCAR; printf ',\\n'
     printf '    "POSCAR": '; catgo_emit_input POSCAR; printf ',\\n'
     printf '    "POTCAR": '; catgo_emit_input POTCAR; printf ',\\n'
-    printf '    "KPOINTS": '; catgo_emit_input KPOINTS; printf '\\n'
+    printf '    "KPOINTS": '; catgo_emit_input KPOINTS "$catgo_kspacing"; printf '\\n'
     printf '  }},\\n'
     printf '  "missing_mandatory_inputs": [%s],\\n' "$catgo_missing_json"
     printf '  "ready": %s\\n' "$catgo_ready"
@@ -372,7 +399,54 @@ async def write_vasp_input_manifest(
     hpc,
     work_dir: str,
     resolution: VaspCommandResolution,
+    use_custodian: bool = False,
 ) -> None:
     """Write and validate the manifest on the connection owner's event loop."""
-    command = build_vasp_input_manifest_command(work_dir, resolution)
+    command = build_vasp_input_manifest_command(
+        work_dir, resolution, use_custodian=use_custodian
+    )
     await hpc.run_on_owner(lambda: hpc.conn.run(command, check=True))
+    await _audit_vasp_inputs(hpc, work_dir, resolution)
+
+
+async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResolution) -> None:
+    """Run the input-side gates on what is about to be submitted.
+
+    `verify_gates.precheck_inputs` existed but was only ever called from tests —
+    an input audit nothing runs is not an audit. Reading the two files back costs
+    one SSH call on a path that is already doing several, and a FAIL here is
+    worth far more than the same finding after the job burns its allocation.
+    Advisory by design: it logs, it does not block, because the output-side
+    enforcement layer is what owns "refuse to proceed".
+    """
+    try:
+        from catgo.mcp_tools import verify_gates
+    except Exception:  # pragma: no cover - the audit must never break a submit
+        return
+    remote = _quote_remote_work_dir(work_dir)
+    read = (
+        "cd " + remote + " && for f in INCAR KPOINTS; do "
+        "printf '<<<CATGO_%s>>>\n' \"$f\"; "
+        "if [ -f \"$f\" ]; then cat \"$f\"; fi; done"
+    )
+    try:
+        res = await hpc.run_on_owner(lambda: hpc.conn.run(read, check=False))
+        text = res.stdout or ""
+        incar = text.split("<<<CATGO_INCAR>>>", 1)[-1].split("<<<CATGO_KPOINTS>>>")[0]
+        kpoints = text.split("<<<CATGO_KPOINTS>>>", 1)[-1] if "<<<CATGO_KPOINTS>>>" in text else ""
+        verdicts = verify_gates.precheck_inputs(
+            incar, kpoints_text=kpoints or None, binary=resolution.binary_token,
+        )
+        failed = [v for v in verdicts if v.get("status") == "FAIL"]
+        if failed:
+            logger.warning(
+                "VASP input precheck FAILED for %s: %s", work_dir,
+                "; ".join(f"{v['gate']}: {v['detail']}" for v in failed),
+            )
+        else:
+            logger.info(
+                "VASP input precheck clean for %s (%d gates ran)",
+                work_dir, sum(1 for v in verdicts if v.get("status") != "SKIP"),
+            )
+    except Exception:  # pragma: no cover
+        logger.debug("VASP input precheck could not run for %s", work_dir, exc_info=True)

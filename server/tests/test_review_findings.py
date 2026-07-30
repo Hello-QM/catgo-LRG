@@ -151,3 +151,122 @@ def test_the_test_extra_declares_the_http_client_the_code_imports():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def _drive_collector(use_custodian, *, incar_live="a"*64, potcar_live="c"*64,
+                     kpoints_entry=None, kpoints_live="d"*64, poscar_exists=True):
+    """Drive the REAL parser, not a reimplementation of its rules.
+
+    A test that re-derives the comparison it is checking proves only that the
+    test agrees with itself.
+    """
+    import json as _json
+    inputs = {
+        "INCAR": {"mandatory": True, "exists": True, "sha256": "a"*64},
+        "POSCAR": {"mandatory": True, "exists": poscar_exists,
+                   "sha256": "b"*64 if poscar_exists else None},
+        "POTCAR": {"mandatory": True, "exists": True, "sha256": "c"*64},
+        "KPOINTS": kpoints_entry or {"mandatory": True, "exists": True, "sha256": "d"*64},
+    }
+    manifest = {
+        "schema_version": 1, "engine": "vasp", "ready": True,
+        "hash_algorithm": "sha256", "hash_available": True,
+        "resolved_run_command": "srun vasp_std", "binary_token": "vasp_std",
+        "binary": "vasp_std", "command_source": "test",
+        "use_custodian": use_custodian, "inputs": inputs,
+    }
+    hashes = [f"INCAR {incar_live}", "POSCAR " + "b"*64, f"POTCAR {potcar_live}"]
+    if kpoints_live:
+        hashes.append(f"KPOINTS {kpoints_live}")
+    raw = (
+        "__CATGO_INPUT_MANIFEST__\n" + _json.dumps(manifest) + "\n"
+        "__CATGO_INPUT_HASHES__\n" + "\n".join(hashes) + "\n"
+    )
+    return rc._parse_vasp_metadata(raw)
+
+
+def _errors_of(res):
+    return res.get("input_manifest_errors") or []
+
+
+# ---- custodian self-healing is recorded provenance, not tampering ---------
+def test_custodian_rewriting_the_incar_is_not_an_error():
+    # Custodian corrects INCAR/KPOINTS while self-healing. Demanding identical
+    # hashes turned a successfully healed run into an unverifiable one.
+    res = _drive_collector(True, incar_live="9" * 64)
+    assert not _errors_of(res), _errors_of(res)
+    assert res["custodian_rewritten_inputs"]["INCAR"] == {
+        "submitted": "a" * 64, "ran": "9" * 64,
+    }
+
+
+def test_the_same_rewrite_without_custodian_is_still_an_error():
+    res = _drive_collector(False, incar_live="9" * 64)
+    assert "inputs.INCAR.live_hash" in _errors_of(res)
+
+
+def test_a_changed_potcar_is_an_error_even_under_custodian():
+    # Custodian never rewrites POTCAR; a change there is not self-healing.
+    res = _drive_collector(True, potcar_live="9" * 64)
+    assert "inputs.POTCAR.live_hash" in _errors_of(res)
+
+
+def test_an_optional_missing_kpoints_is_accepted():
+    # KSPACING jobs legitimately have no KPOINTS file.
+    res = _drive_collector(
+        False,
+        kpoints_entry={"mandatory": False, "exists": False, "sha256": None},
+        kpoints_live=None,
+    )
+    assert not _errors_of(res), _errors_of(res)
+
+
+def test_a_mandatory_missing_input_is_still_an_error():
+    res = _drive_collector(False, poscar_exists=False)
+    assert "inputs.POSCAR.exists" in _errors_of(res)
+
+
+# ---- KSPACING jobs must survive the submit-side preflight -----------------
+def test_the_preflight_exempts_kpoints_when_kspacing_is_set():
+    cmd = vsub.build_vasp_input_manifest_command(
+        "/scratch/run",
+        vsub.VaspCommandResolution(command="srun vasp_std", binary_token="vasp_std",
+                                   source="test"),
+    )
+    assert "KSPACING" in cmd, "the preflight cannot tell a KSPACING job apart"
+    assert 'catgo_name" = KPOINTS' in cmd
+
+
+def test_the_manifest_records_whether_custodian_may_rewrite():
+    res = vsub.VaspCommandResolution(command="srun vasp_std", binary_token="vasp_std",
+                                     source="test")
+    on = vsub.build_vasp_input_manifest_command("/w", res, use_custodian=True)
+    off = vsub.build_vasp_input_manifest_command("/w", res, use_custodian=False)
+    assert '"use_custodian": %s' in on
+    assert '"true"' in on and '"false"' in off
+
+
+# ---- the input audit must actually run -----------------------------------
+def test_the_input_precheck_is_called_from_the_submit_path():
+    import inspect
+    src = inspect.getsource(vsub.write_vasp_input_manifest)
+    assert "_audit_vasp_inputs" in src, "precheck_inputs was dead code"
+    assert "precheck_inputs" in inspect.getsource(vsub._audit_vasp_inputs)
+
+
+# ---- a slow numeric call must not leave a race window --------------------
+def test_a_numeric_call_blocks_submits_while_still_in_flight():
+    key = "t-inflight"
+    enf._sessions.pop(key, None)
+    enf.arm_pending("catgo_analyze", session_key=key)
+    assert enf.precheck("catgo_workflow", {"action": "submit"},
+                        session_key=key)[0] == enf.FORBIDDEN
+
+
+def test_a_failed_in_flight_call_does_not_wedge_the_session():
+    key = "t-inflight-fail"
+    enf._sessions.pop(key, None)
+    enf.arm_pending("catgo_analyze", session_key=key)
+    enf.postmark("catgo_analyze", {"action": "dos"}, ok=False, session_key=key)
+    assert enf.precheck("catgo_workflow", {"action": "submit"},
+                        session_key=key)[0] == enf.ALLOW

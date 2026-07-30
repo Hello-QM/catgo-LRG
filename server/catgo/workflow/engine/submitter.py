@@ -374,7 +374,10 @@ async def _submit_one(
                 "submission unless the work directory already contains one",
                 task_id,
             )
-        await write_vasp_input_manifest(hpc, work_dir, vasp_resolution)
+        await write_vasp_input_manifest(
+            hpc, work_dir, vasp_resolution,
+            use_custodian=resolve_vasp_use_custodian(params, config),
+        )
 
     success, message, job_id = await _submit_job(
         hpc, work_dir, resolved_type, job_script, params, config,

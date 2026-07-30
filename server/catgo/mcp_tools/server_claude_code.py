@@ -3754,7 +3754,17 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
     if decision == _enf.FORBIDDEN:
         return [T(type="text", text=reason)]
 
-    result = await dispatch(name, arguments)
+    # Arm BEFORE dispatch: an HPC-backed numeric call takes seconds, and a
+    # concurrent submit arriving in that window used to see a clean session.
+    armed = _enf._is_numeric(name, arguments)
+    if armed:
+        _enf.arm_pending(name, session_key=session_key)
+    try:
+        result = await dispatch(name, arguments)
+    except BaseException:
+        if armed:
+            _enf.postmark(name, arguments, ok=False, session_key=session_key)
+        raise
     ok = _response_succeeded(name, result, arguments)
     # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
     # Single boundary = the same place the ecosystem audit found metadata being

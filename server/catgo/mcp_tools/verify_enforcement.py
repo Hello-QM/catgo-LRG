@@ -104,6 +104,7 @@ def _st(session_key="default"):
     """
     return _sessions.setdefault(session_key, {
         "unverified": 0,
+        "in_flight": 0,
         "legacy_unverified": 0,
         "pending_digests": {},
         "identity_digests": {},
@@ -125,7 +126,8 @@ def _valid_digest(value):
 
 def _refresh(st):
     """Project digest-scoped bookkeeping onto the legacy aggregate interface."""
-    st["unverified"] = st["legacy_unverified"] + len(st["pending_digests"])
+    st["unverified"] = (st["legacy_unverified"] + len(st["pending_digests"])
+                        + st.get("in_flight", 0))
     failed = set(st["legacy_failed"])
     taxa = set(st["legacy_failed_taxa"])
     for record in st["failed_by_digest"].values():
@@ -223,6 +225,21 @@ def precheck(tool, args, session_key="default"):
     return (ALLOW, "")
 
 
+def arm_pending(tool, session_key="default"):
+    """Mark a numeric call as in-flight BEFORE it is dispatched.
+
+    postmark runs after dispatch, which for an HPC-backed tool is seconds. A
+    concurrent submit arriving inside that window saw a clean session and went
+    through — the result it should have waited for was still being computed.
+    The in-flight count blocks releases the same way a produced result does; it
+    is cleared by postmark whether the call succeeded or failed, so a failed
+    tool cannot leave the session wedged.
+    """
+    st = _st(session_key)
+    st["in_flight"] = st.get("in_flight", 0) + 1
+    _refresh(st)
+
+
 def postmark(tool, args, ok=True, session_key="default"):
     """Call AFTER a tool ran. Tracks pending-verification state.
 
@@ -232,7 +249,10 @@ def postmark(tool, args, ok=True, session_key="default"):
     the pending state and bypass enforcement.
     """
     st = _st(session_key)
+    if st.get("in_flight"):
+        st["in_flight"] -= 1
     if not ok:
+        _refresh(st)
         return
     if _is_numeric(tool, args):
         records = []

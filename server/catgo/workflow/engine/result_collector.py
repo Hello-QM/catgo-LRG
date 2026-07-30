@@ -435,6 +435,16 @@ def _parse_vasp_metadata(raw: str) -> dict:
         if not isinstance(manifest_inputs, dict):
             manifest_errors.append("inputs")
         else:
+            # Custodian self-heals by REWRITING inputs. Demanding byte-identical
+            # hashes turned a successfully corrected run into an unverifiable
+            # one. Semantics chosen: the manifest records what was SUBMITTED;
+            # under custodian a divergence in a file custodian may rewrite is
+            # recorded provenance ("submitted X, ran Y"), not tampering. POTCAR
+            # is never rewritten, so it stays strict either way — and without
+            # custodian nothing may change.
+            under_custodian = manifest.get("use_custodian") is True
+            rewritable = {"INCAR", "KPOINTS", "POSCAR"} if under_custodian else set()
+            rewritten: dict[str, dict[str, str]] = {}
             for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS"):
                 entry = manifest_inputs.get(name)
                 if not isinstance(entry, dict):
@@ -442,10 +452,17 @@ def _parse_vasp_metadata(raw: str) -> dict:
                     continue
                 recorded_hash = entry.get("sha256")
                 live_hash = live_hashes.get(name)
-                if entry.get("mandatory") is not True:
+                # `mandatory` is declared per job by the preflight: KPOINTS is
+                # optional when the INCAR sets KSPACING, and an absent optional
+                # input is not an error.
+                declared_mandatory = entry.get("mandatory")
+                if declared_mandatory not in (True, False):
                     manifest_errors.append(f"inputs.{name}.mandatory")
-                if entry.get("exists") is not True:
+                    declared_mandatory = True
+                if declared_mandatory and entry.get("exists") is not True:
                     manifest_errors.append(f"inputs.{name}.exists")
+                if not declared_mandatory and entry.get("exists") is not True:
+                    continue
                 if not isinstance(recorded_hash, str) or not re.fullmatch(
                     r"[0-9a-f]{64}", recorded_hash
                 ):
@@ -453,9 +470,15 @@ def _parse_vasp_metadata(raw: str) -> dict:
                 elif (
                     not isinstance(live_hash, str)
                     or not re.fullmatch(r"[0-9a-f]{64}", live_hash)
-                    or not hmac.compare_digest(recorded_hash, live_hash)
                 ):
                     manifest_errors.append(f"inputs.{name}.live_hash")
+                elif not hmac.compare_digest(recorded_hash, live_hash):
+                    if name in rewritable:
+                        rewritten[name] = {"submitted": recorded_hash, "ran": live_hash}
+                    else:
+                        manifest_errors.append(f"inputs.{name}.live_hash")
+            if rewritten:
+                result["custodian_rewritten_inputs"] = rewritten
 
         if not manifest_errors:
             canonical = json.dumps(
