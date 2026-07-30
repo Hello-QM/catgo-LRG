@@ -1109,6 +1109,11 @@ def harvest_consistency(rows, key_fields, value_field, tol=1e-6):
 # ===========================================================================
 
 _TAG_RE = None  # set lazily; stdlib re imported at call site to keep the module import-light
+_INCAR_KEY_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
+_VASP_FLOAT_RE = re.compile(
+    r"[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[EeDd][-+]?[0-9]+)?"
+)
+_KPOINTS_POLICIES = {"vasp_default", "explicit_regular_mesh"}
 
 
 def _incar_tags(text):
@@ -1119,26 +1124,163 @@ def _incar_tags(text):
         line = raw.split("#")[0].split("!")[0].strip()
         if not line:
             continue
-        pairs = re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=]*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*\s*=|$)",
-                           line)
+        pairs = re.findall(
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)"
+            r"(?=(?:\s*;\s*|\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|$)",
+            line,
+        )
         if len(pairs) > 1:
             multi.append((raw.strip(), [k.upper() for k, _ in pairs]))
         for k, v in pairs:
-            tags[k.upper()] = v.strip()
+            tags[k.upper()] = v.strip().rstrip(";").rstrip()
     return tags, multi
+
+
+def _nonblank_incar_value(value):
+    """Match the submit-shell definition of a usable final assignment value."""
+    value = str(value).strip()
+    return bool(value) and not value.startswith((";", "=")) and not re.match(
+        r"[A-Za-z_][A-Za-z0-9_]*\s*=", value
+    )
+
+
+def _strict_vasp_float(token):
+    """Parse one finite VASP numeric token with shell-identical ASCII grammar."""
+    value = str(token).strip()
+    if not _VASP_FLOAT_RE.fullmatch(value):
+        return None
+    parsed = float(value.replace("D", "E").replace("d", "e"))
+    return parsed if math.isfinite(parsed) else None
+
+
+def normalize_required_keys(required_keys):
+    """Canonicalize a declared P17 contract without inventing one.
+
+    ``None`` means no workflow contract was declared. An explicit empty iterable
+    is preserved so P17 can reject the vacuous contract rather than report PASS.
+    """
+    if required_keys is None:
+        return None
+    if isinstance(required_keys, (str, bytes)) or not isinstance(
+        required_keys, (list, tuple)
+    ):
+        raise ValueError("required_keys must be None or an ordered list/tuple of INCAR tags")
+    normalized = []
+    seen = set()
+    for raw in required_keys:
+        if not isinstance(raw, str):
+            raise ValueError("required_keys entries must be strings")
+        key = raw.strip().upper()
+        if not _INCAR_KEY_RE.fullmatch(key):
+            raise ValueError(f"invalid required INCAR key: {raw!r}")
+        if key in seen:
+            raise ValueError(f"duplicate required INCAR key after normalization: {key}")
+        seen.add(key)
+        normalized.append(key)
+    return tuple(normalized)
+
+
+def materialize_incar(base_incar_text, overlays, *, strategy):
+    """Materialize a declared base+overlay contract in caller-specified order.
+
+    Only literal append semantics are supported. Project launchers that extract
+    selected values from an overlay must materialize their own final INCAR and
+    pass that exact text instead. ``None`` base means unresolved, so callers feed
+    the returned ``None`` to :func:`precheck_inputs` and receive SKIP, never a
+    false verdict over the fragment alone.
+    """
+    if strategy != "append":
+        raise ValueError(f"unsupported INCAR materialization strategy: {strategy!r}")
+    if isinstance(overlays, (str, bytes)) or not isinstance(overlays, (list, tuple)):
+        raise ValueError("overlays must be an ordered list/tuple of INCAR text fragments")
+    for overlay in overlays:
+        if not isinstance(overlay, str):
+            raise ValueError("every INCAR overlay must be text")
+    if base_incar_text is None:
+        return None
+    if not isinstance(base_incar_text, str):
+        raise ValueError("base_incar_text must be text or None")
+    materialized = base_incar_text
+    for overlay in overlays:
+        if materialized and not materialized.endswith("\n"):
+            materialized += "\n"
+        materialized += overlay
+    return materialized
+
+
+def _regular_mesh_kpoints(kpoints_text):
+    """Validate the project's strict 4/5-physical-line regular-mesh form."""
+    if not isinstance(kpoints_text, str):
+        return False, "KPOINTS file absent"
+    lines = kpoints_text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) not in {4, 5}:
+        return False, f"KPOINTS has {len(lines)} physical lines; expected 4 or 5"
+
+    def field(index):
+        return lines[index].split("#", 1)[0].split("!", 1)[0].strip()
+
+    count_tokens = field(1).split()
+    if len(count_tokens) != 1 or not re.fullmatch(r"[-+]?0+", count_tokens[0]):
+        return False, "KPOINTS line 2 must be the integer 0"
+    if not re.match(r"^[GM]", field(2), re.IGNORECASE):
+        return False, "KPOINTS line 3 must start with G/g or M/m"
+    mesh_tokens = field(3).split()
+    if (
+        len(mesh_tokens) != 3
+        or any(not re.fullmatch(r"[+]?[0-9]+", token) for token in mesh_tokens)
+        or any(int(token) <= 0 for token in mesh_tokens)
+    ):
+        return False, "KPOINTS line 4 must contain exactly three positive integers"
+    if len(lines) == 5:
+        shift_tokens = field(4).split()
+        if len(shift_tokens) != 3:
+            return False, "KPOINTS line 5 must contain exactly three finite shifts"
+        if any(_strict_vasp_float(token) is None for token in shift_tokens):
+            return False, "KPOINTS line 5 must contain exactly three finite shifts"
+    return True, f"valid {len(lines)}-line explicit regular mesh"
 
 
 def _as_float(tags, key):
     try:
-        return float(str(tags[key]).split()[0])
-    except (KeyError, ValueError, IndexError):
+        return _strict_vasp_float(str(tags[key]).split()[0])
+    except (KeyError, IndexError):
         return None
 
 
-def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
-    """Pre-submission audit. Returns verdicts in the same shape as audit()."""
+def precheck_inputs(
+    incar_text,
+    kpoints_text=None,
+    titels=None,
+    binary=None,
+    *,
+    required_keys=None,
+    kpoints_policy="vasp_default",
+):
+    """Pre-submission audit over the final materialized input contract.
+
+    ``incar_text=None`` means the final INCAR is unresolved (for example, an
+    overlay without its declared base); every INCAR-derived gate reports SKIP.
+    ``kpoints_text=None`` means the file is absent, while ``""`` means a present
+    but empty file. P17 never invents required keys.
+    """
+    if kpoints_policy not in _KPOINTS_POLICIES:
+        raise ValueError(
+            f"unknown kpoints_policy={kpoints_policy!r}; "
+            f"expected one of {sorted(_KPOINTS_POLICIES)}"
+        )
+    required = normalize_required_keys(required_keys)
+    if kpoints_text is not None and not isinstance(kpoints_text, str):
+        raise ValueError("kpoints_text must be text or None")
     out = []
-    tags, multi = _incar_tags(incar_text)
+    materialized = incar_text is not None
+    if materialized:
+        if not isinstance(incar_text, str):
+            raise ValueError("incar_text must be text or None")
+        tags, multi = _incar_tags(incar_text)
+    else:
+        tags, multi = {}, []
 
     # P1 — one assignment per line, but ONLY on the build where it matters. The
     # vasp.6.4.2-cp build parses only the FIRST tag on a line and drops the rest to
@@ -1149,7 +1291,9 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
     # Undeclared binary is therefore a SKIP naming what is missing — the same
     # "no provenance, no verdict" rule the output-side layer uses.
     cp_build = binary is not None and ("cp" in str(binary).lower())
-    if not multi:
+    if not materialized:
+        out.append(_skip("in_one_tag_per_line", "P1", ("final materialized INCAR",)))
+    elif not multi:
         out.append(_v("in_one_tag_per_line", True, f"{len(tags)} tags, one per line", "P1"))
     elif binary is None:
         out.append(_skip("in_one_tag_per_line", "P1", ("binary",)))
@@ -1161,22 +1305,81 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
         out.append(_na("in_one_tag_per_line", "P1",
                        f"{len(multi)} multi-tag line(s), but binary={binary!r} parses them"))
 
-    # P4 — an explicit KPOINTS file is authoritative; VASP ignores KSPACING.
-    if "KSPACING" in tags and kpoints_text:
+    # P4 — KPOINTS is authoritative whenever the file exists. Strict policy is
+    # opt-in: generic VASP jobs may legitimately use positive KSPACING alone.
+    kpoints_present = kpoints_text is not None
+    kpoints_nonempty = isinstance(kpoints_text, str) and bool(kpoints_text.strip())
+    kspacing = _as_float(tags, "KSPACING") if materialized else None
+    redundant = [key for key in ("KSPACING", "KGAMMA") if key in tags]
+    if not materialized:
+        out.append(_skip(
+            "in_kspacing_vs_kpoints", "P4", ("final materialized INCAR",)
+        ))
+    elif kpoints_policy == "explicit_regular_mesh":
+        valid, mesh_detail = _regular_mesh_kpoints(kpoints_text)
+        if not valid:
+            fallback = (
+                f"; positive KSPACING={kspacing:g} is valid VASP semantics but "
+                "does not satisfy this declared project policy"
+                if (
+                    kspacing is not None
+                    and math.isfinite(kspacing)
+                    and kspacing > 0
+                )
+                else ""
+            )
+            out.append(_v(
+                "in_kspacing_vs_kpoints", False,
+                f"explicit_regular_mesh requires a valid KPOINTS file: {mesh_detail}{fallback}",
+                "P4",
+            ))
+        else:
+            detail = mesh_detail
+            if redundant:
+                detail += (
+                    f"; KPOINTS is authoritative and {redundant} are ignored/redundant "
+                    "policy ambiguity, not a physics override"
+                )
+            out.append(_v("in_kspacing_vs_kpoints", True, detail, "P4"))
+    elif kpoints_present and not kpoints_nonempty:
+        out.append(_v(
+            "in_kspacing_vs_kpoints", False,
+            "KPOINTS file exists but is empty; its presence is authoritative, so "
+            "KSPACING cannot rescue it",
+            "P4",
+        ))
+    elif kpoints_present:
+        detail = "explicit KPOINTS file is authoritative"
+        if redundant:
+            detail += f"; VASP ignores redundant {redundant}"
+        out.append(_v("in_kspacing_vs_kpoints", True, detail, "P4"))
+    elif (
+        "KSPACING" in tags
+        and kspacing is not None
+        and math.isfinite(kspacing)
+        and kspacing > 0
+    ):
         out.append(_v("in_kspacing_vs_kpoints", True,
-                      f"KSPACING={tags['KSPACING']} present AND a KPOINTS file exists — "
-                      f"VASP uses the file and ignores KSPACING", "P4"))
+                      f"KSPACING={tags['KSPACING']}, no KPOINTS file (valid VASP semantics)",
+                      "P4"))
     elif "KSPACING" in tags:
-        out.append(_v("in_kspacing_vs_kpoints", True,
-                      f"KSPACING={tags['KSPACING']}, no KPOINTS file (consistent)", "P4"))
+        out.append(_v("in_kspacing_vs_kpoints", False,
+                      f"KSPACING={tags['KSPACING']!r} is not a positive finite value "
+                      "and no KPOINTS file exists", "P4"))
     else:
-        out.append(_skip("in_kspacing_vs_kpoints", "P4", ("KSPACING",)))
+        out.append(_skip(
+            "in_kspacing_vs_kpoints",
+            "P4",
+            ("explicit KPOINTS or declared KSPACING; VASP default KSPACING=0.5 unverified",),
+        ))
 
     # P19 — an optimiser with no step budget optimises nothing and exits COMPLETED
     # (ai-strain D-131: VTST NEB with IBRION=3 POTIM=0 IOPT=3 and no NSW line -> every
     # image frozen at its IDPP start, barriers 3-5 eV too high).
     ibrion, nsw = _as_float(tags, "IBRION"), _as_float(tags, "NSW")
-    if ibrion is None:
+    if not materialized:
+        out.append(_skip("in_nsw_for_optimizer", "P19", ("final materialized INCAR",)))
+    elif ibrion is None:
         out.append(_skip("in_nsw_for_optimizer", "P19", ("IBRION",)))
     elif ibrion < 0:
         out.append(_na("in_nsw_for_optimizer", "P19", f"IBRION={ibrion:g} is a single point"))
@@ -1188,7 +1391,9 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
     # P2 — LMAXMIX must reach the valence l (d -> 4, f -> 6), else the d/f density is
     # not fully mixed and SCF settles in a spurious spin state that still reports
     # convergence (ai-plasma D-41: false PDS +0.85 eV).
-    if titels:
+    if not materialized:
+        out.append(_skip("lmaxmix_covers_valence", "P2", ("final materialized INCAR",)))
+    elif titels:
         out.append(gate_lmaxmix_covers_valence(titels, _as_float(tags, "LMAXMIX")))
     else:
         out.append(_skip("lmaxmix_covers_valence", "P2", ("titels",)))
@@ -1197,7 +1402,11 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
     # state (ai-xmat D-27: MAGMOM=64*1.0 on Cu with AMIX_MAG=0.8 -> 49.06 eV above the
     # true ground state). Only decidable when the species list is known.
     nonmag = {"Cu", "Ag", "Au", "Zn", "Cd", "Sn", "Pd", "Al", "Mg", "Ca", "Si", "Ga"}
-    if titels and "MAGMOM" in tags:
+    if not materialized:
+        out.append(_skip(
+            "in_nonmagnetic_magmom_zero", "P21", ("final materialized INCAR",)
+        ))
+    elif titels and "MAGMOM" in tags:
         els = {t.split()[1].split("_")[0] for t in titels if len(t.split()) >= 2}
         magnetic_possible = els - nonmag
         # MAGMOM uses `N*value` repeat syntax — the multiplicity is a COUNT, not a
@@ -1217,11 +1426,32 @@ def precheck_inputs(incar_text, kpoints_text=None, titels=None, binary=None):
     else:
         out.append(_skip("in_nonmagnetic_magmom_zero", "P21", ("titels", "MAGMOM")))
 
-    # P17 — an INCAR patched by sed/awk can end up with no ALGO line at all, which
-    # deadlocks or crawls on submit (ai-screen D-086).
-    missing = [k for k in ("ALGO", "ENCUT", "EDIFF") if k not in tags]
-    out.append(_v("in_required_keys_present", not missing,
-                  f"INCAR missing {missing}" if missing else "ALGO/ENCUT/EDIFF present", "P17"))
+    # P17 — check only the workflow manifest's declared contract, on the final
+    # materialized INCAR. An absent contract or unresolved overlay is not evidence.
+    if required is None:
+        out.append(_skip("in_required_keys_present", "P17", ("required_keys contract",)))
+    elif not required:
+        out.append(_v(
+            "in_required_keys_present", False,
+            "required_keys was explicitly empty; a vacuous declared contract is invalid",
+            "P17",
+        ))
+    elif not materialized:
+        out.append(_skip(
+            "in_required_keys_present", "P17", ("final materialized INCAR",)
+        ))
+    else:
+        missing = [
+            key for key in required
+            if not _nonblank_incar_value(tags.get(key, ""))
+        ]
+        out.append(_v(
+            "in_required_keys_present", not missing,
+            f"final INCAR missing or blank {missing}"
+            if missing
+            else f"final INCAR satisfies required_keys={list(required)}",
+            "P17",
+        ))
     return out
 
 

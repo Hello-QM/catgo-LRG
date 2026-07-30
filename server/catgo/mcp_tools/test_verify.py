@@ -41,7 +41,101 @@ def test_explicit_kpoints_precedence_is_consistent_with_vasp():
     )
     verdict = next(v for v in verdicts if v["gate"] == "in_kspacing_vs_kpoints")
     assert verdict["status"] == "PASS"
-    assert "uses the file and ignores KSPACING" in verdict["detail"]
+    assert "authoritative" in verdict["detail"]
+    assert "KSPACING" in verdict["detail"]
+
+
+def test_required_key_contract_is_tristate_and_checks_final_nonblank_values():
+    def p17(text, required):
+        return next(
+            v for v in vg.precheck_inputs(text, required_keys=required)
+            if v["gate"] == "in_required_keys_present"
+        )
+
+    assert p17("ENCUT=520\n", None)["status"] == "SKIP"
+    assert p17("ENCUT=520\n", [])["status"] == "FAIL"
+    assert p17("ENCUT=520\n", ["encut", "ediff"])["status"] == "FAIL"
+    assert p17("ENCUT=520;EDIFF=1E-5\n", ["encut", "ediff"])["status"] == "PASS"
+    assert p17("EDIFF=1E-5\nEDIFF=\n", ["EDIFF"])["status"] == "FAIL"
+    assert p17("EDIFF==\n", ["EDIFF"])["status"] == "FAIL"
+    assert p17("EDIFF=1E-5\nEDIFF==\n", ["EDIFF"])["status"] == "FAIL"
+
+    for invalid in ("ENCUT", {"ENCUT": True}, ["ENCUT", "encut"], ["BAD-TAG"]):
+        try:
+            p17("ENCUT=520\n", invalid)
+        except ValueError:
+            pass
+        else:
+            assert False, f"invalid contract accepted: {invalid!r}"
+
+
+def test_unresolved_overlay_is_skip_and_append_materialization_is_last_wins():
+    unresolved = vg.materialize_incar(
+        None, ["EDIFF=1E-5\n"], strategy="append",
+    )
+    verdicts = vg.precheck_inputs(
+        unresolved,
+        required_keys=["ENCUT", "EDIFF"],
+        kpoints_policy="explicit_regular_mesh",
+    )
+    statuses = {v["gate"]: v["status"] for v in verdicts}
+    assert statuses["in_required_keys_present"] == "SKIP"
+    assert statuses["in_kspacing_vs_kpoints"] == "SKIP"
+
+    final = vg.materialize_incar(
+        "ENCUT=400\nEDIFF=1E-4",
+        ["ENCUT=520; EDIFF=1E-5\n"],
+        strategy="append",
+    )
+    assert vg._incar_tags(final)[0]["ENCUT"] == "520"
+    assert next(
+        v for v in vg.precheck_inputs(
+            final, required_keys=["ENCUT", "EDIFF"],
+        ) if v["gate"] == "in_required_keys_present"
+    )["status"] == "PASS"
+
+
+def test_explicit_regular_mesh_policy_fails_missing_or_malformed_file_only():
+    def p4(text, kpoints, policy):
+        return next(
+            v for v in vg.precheck_inputs(
+                text, kpoints_text=kpoints, kpoints_policy=policy,
+            ) if v["gate"] == "in_kspacing_vs_kpoints"
+        )
+
+    assert p4("KSPACING=0.25\n", None, "vasp_default")["status"] == "PASS"
+    assert p4("KSPACING=1_0\n", None, "vasp_default")["status"] == "FAIL"
+    assert p4("KSPACING=0.25\n", "", "vasp_default")["status"] == "FAIL"
+    assert p4(
+        "KSPACING=0.25\nKGAMMA=.TRUE.\n",
+        None,
+        "explicit_regular_mesh",
+    )["status"] == "FAIL"
+    valid = "mesh\n0\nG\n4 4 1\n0 0 0\n"
+    invalid_shift = "mesh\n0\nG\n4 4 1\n1_0 0 0\n"
+    assert p4(
+        "ENCUT=520\n", invalid_shift, "explicit_regular_mesh",
+    )["status"] == "FAIL"
+    unicode_mesh = "mesh\n0\nG\n٤ ٤ ١\n0 0 0\n"
+    assert p4(
+        "ENCUT=520\n", unicode_mesh, "explicit_regular_mesh",
+    )["status"] == "FAIL"
+    coexist = p4(
+        "KSPACING=0.25\nKGAMMA=.TRUE.\n",
+        valid,
+        "explicit_regular_mesh",
+    )
+    assert coexist["status"] == "PASS"
+    assert "not a physics override" in coexist["detail"]
+    assert p4("ENCUT=520\n", "mesh\n1\nG\n4 4 1\n", "explicit_regular_mesh")[
+        "status"
+    ] == "FAIL"
+    try:
+        p4("ENCUT=520\n", valid, "unknown")
+    except ValueError:
+        pass
+    else:
+        assert False, "unknown kpoints policy accepted"
 
 
 def test_absent_inputs_are_skip_not_dropped():

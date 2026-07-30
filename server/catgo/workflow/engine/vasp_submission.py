@@ -16,6 +16,8 @@ VASP_INPUT_MANIFEST = "catgo_vasp_input_manifest.json"
 logger = logging.getLogger(__name__)
 
 VASP_MANDATORY_INPUTS = ("INCAR", "POSCAR", "POTCAR", "KPOINTS")
+VASP_KPOINTS_POLICIES = {"vasp_default", "explicit_regular_mesh"}
+_INCAR_TAG_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,50 @@ class VaspCommandResolution:
     command: str
     binary_token: str | None
     source: str
+
+
+def _normalize_required_incar_tags(value: Any) -> tuple[str, ...] | None:
+    """Normalize a nullable, non-vacuous P17 workflow contract."""
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ValueError(
+            "required_incar_tags must be null or a nonempty ordered list/tuple"
+        )
+    if not value:
+        raise ValueError("required_incar_tags cannot be an empty declared contract")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, str):
+            raise ValueError("required_incar_tags entries must be strings")
+        key = raw.strip().upper()
+        if not _INCAR_TAG_RE.fullmatch(key):
+            raise ValueError(f"invalid required INCAR tag: {raw!r}")
+        if key in seen:
+            raise ValueError(
+                f"duplicate required INCAR tag after normalization: {key}"
+            )
+        seen.add(key)
+        normalized.append(key)
+    return tuple(normalized)
+
+
+@dataclass(frozen=True)
+class VaspInputPolicy:
+    """Submission-time P17/P4 contract; null required_keys preserves legacy jobs."""
+
+    required_keys: tuple[str, ...] | None = None
+    kpoints_policy: str = "vasp_default"
+
+    def __post_init__(self) -> None:
+        normalized = _normalize_required_incar_tags(self.required_keys)
+        if self.kpoints_policy not in VASP_KPOINTS_POLICIES:
+            raise ValueError(
+                f"unknown kpoints_policy={self.kpoints_policy!r}; "
+                f"expected one of {sorted(VASP_KPOINTS_POLICIES)}"
+            )
+        object.__setattr__(self, "required_keys", normalized)
 
 
 def _nonempty(value: Any) -> str:
@@ -134,6 +180,33 @@ def _extract_vasp_binary_token(command: str) -> str | None:
 def resolve_vasp_use_custodian(params: dict, config: dict) -> bool:
     hpc_cfg = config.get("hpc", {}) or {}
     return bool(params.get("use_custodian", hpc_cfg.get("use_custodian", False)))
+
+
+def resolve_vasp_input_policy(params: dict, config: dict) -> VaspInputPolicy:
+    """Resolve per-field policy: task params > job defaults > VASP defaults."""
+    hpc_cfg = config.get("hpc", {}) or {}
+    job_defaults = hpc_cfg.get("job_defaults", {}) or {}
+    defaults = config.get("defaults", {}) or {}
+    vasp_defaults = defaults.get("vasp", {}) if isinstance(defaults, dict) else {}
+    if not isinstance(vasp_defaults, dict):
+        vasp_defaults = {}
+    sources = (params, job_defaults, vasp_defaults)
+    sentinel = object()
+
+    def resolve_field(name: str, fallback: Any) -> Any:
+        for source in sources:
+            if isinstance(source, dict) and name in source:
+                return source[name]
+        return fallback
+
+    required = resolve_field("required_incar_tags", sentinel)
+    if required is sentinel:
+        required = None
+    kpoints_policy = resolve_field("kpoints_policy", "vasp_default")
+    return VaspInputPolicy(
+        required_keys=required,
+        kpoints_policy=kpoints_policy,
+    )
 
 
 def validate_vasp_job_script(
@@ -265,11 +338,21 @@ def build_vasp_input_manifest_command(
     work_dir: str,
     resolution: VaspCommandResolution,
     use_custodian: bool = False,
+    *,
+    input_policy: VaspInputPolicy | None = None,
 ) -> str:
     """Build a POSIX-shell preflight that writes JSON, then rejects missing inputs."""
+    policy = input_policy or VaspInputPolicy()
     run_command_json = shlex.quote(json.dumps(resolution.command, ensure_ascii=True))
     binary_token_json = shlex.quote(json.dumps(resolution.binary_token, ensure_ascii=True))
     source_json = shlex.quote(json.dumps(resolution.source, ensure_ascii=True))
+    required_keys_json = shlex.quote(json.dumps(
+        list(policy.required_keys) if policy.required_keys is not None else None,
+        ensure_ascii=True,
+    ))
+    required_keys_shell = shlex.quote(" ".join(policy.required_keys or ()))
+    kpoints_policy_json = shlex.quote(json.dumps(policy.kpoints_policy))
+    strict_kpoints = "true" if policy.kpoints_policy == "explicit_regular_mesh" else "false"
     binary_declared = "true" if resolution.binary_token is not None else "false"
     # Recorded diagnostically. It does not authorize hash divergence: until an
     # independent submit-time correction ledger exists, the collector records a
@@ -284,6 +367,10 @@ catgo_run_command_json={run_command_json}
 catgo_binary_token_json={binary_token_json}
 catgo_command_source_json={source_json}
 catgo_binary_declared={binary_declared}
+catgo_required_keys_json={required_keys_json}
+catgo_required_keys_shell={required_keys_shell}
+catgo_kpoints_policy_json={kpoints_policy_json}
+catgo_strict_kpoints={strict_kpoints}
 
 catgo_sha256() {{
     if command -v sha256sum >/dev/null 2>&1; then
@@ -329,7 +416,9 @@ catgo_has_positive_kspacing() {{
             split(value, fields, /[;[:space:]]/)
             value=fields[1]
             gsub(/[Dd]/, "E", value)
-            if (value ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([Ee][-+]?[0-9]+)?$/ && value + 0 > 0) {{
+            rendered=tolower(sprintf("%g", value + 0))
+            if (value ~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([Ee][-+]?[0-9]+)?$/ &&
+                rendered !~ /inf|nan/ && value + 0 > 0) {{
                 found=1
             }} else {{
                 found=0
@@ -343,22 +432,168 @@ catgo_has_positive_kspacing() {{
     ' "$1"
 }}
 
+catgo_has_nonblank_incar_key() {{
+    awk -v wanted="$2" '
+    {{
+        line=$0
+        sub(/[#!].*$/, "", line)
+        upper=toupper(line)
+        pattern="(^|[;[:space:]])" wanted "[[:space:]]*="
+        while (match(upper, pattern)) {{
+            value=substr(line, RSTART + RLENGTH)
+            sub(/^[[:space:]]*/, "", value)
+            if (value == "" || value ~ /^[;=]/ ||
+                value ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {{
+                found=0
+            }} else {{
+                found=1
+            }}
+            offset=RSTART + RLENGTH
+            line=substr(line, offset)
+            upper=substr(upper, offset)
+        }}
+    }}
+    END {{ exit(found ? 0 : 1) }}
+    ' "$1"
+}}
+
+catgo_has_incar_key() {{
+    awk -v wanted="$2" '
+    {{
+        line=$0
+        sub(/[#!].*$/, "", line)
+        upper=toupper(line)
+        pattern="(^|[;[:space:]])" wanted "[[:space:]]*="
+        while (match(upper, pattern)) {{
+            found=1
+            offset=RSTART + RLENGTH
+            line=substr(line, offset)
+            upper=substr(upper, offset)
+        }}
+    }}
+    END {{ exit(found ? 0 : 1) }}
+    ' "$1"
+}}
+
+catgo_regular_kpoints_valid() {{
+    awk '
+    function clean(value) {{
+        sub(/[#!].*$/, "", value)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        return value
+    }}
+    {{
+        physical[++n]=$0
+    }}
+    END {{
+        while (n > 0 && physical[n] ~ /^[[:space:]]*$/) n--
+        if (n != 4 && n != 5) exit 1
+        line=clean(physical[2])
+        if (line !~ /^[-+]?0+$/) exit 1
+        line=clean(physical[3])
+        first=toupper(substr(line, 1, 1))
+        if (first != "G" && first != "M") exit 1
+        line=clean(physical[4])
+        count=split(line, field, /[[:space:]]+/)
+        if (count != 3) exit 1
+        for (i=1; i<=3; i++) {{
+            if (field[i] !~ /^[+]?[0-9]+$/ || field[i] + 0 <= 0) exit 1
+        }}
+        if (n == 5) {{
+            line=clean(physical[5])
+            count=split(line, field, /[[:space:]]+/)
+            if (count != 3) exit 1
+            for (i=1; i<=3; i++) {{
+                value=field[i]
+                gsub(/[Dd]/, "E", value)
+                if (value !~ /^[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([Ee][-+]?[0-9]+)?$/) exit 1
+                rendered=tolower(sprintf("%g", value + 0))
+                if (rendered ~ /inf|nan/) exit 1
+            }}
+        }}
+        exit 0
+    }}
+    ' "$1"
+}}
+
+catgo_kpoints_nonblank() {{
+    grep -q '[^[:space:]]' "$1"
+}}
+
+catgo_add_policy_violation() {{
+    if [ -n "$catgo_policy_violations_json" ]; then
+        catgo_policy_violations_json="$catgo_policy_violations_json,"
+    fi
+    catgo_policy_violations_json="$catgo_policy_violations_json\\"$1\\""
+    catgo_policy_violation_text="$catgo_policy_violation_text $1"
+}}
+
 catgo_missing_json=
 catgo_missing_text=
+catgo_policy_violations_json=
+catgo_policy_violation_text=
+catgo_p4_verdict=SKIP
+catgo_p17_verdict=SKIP
 if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; then
     catgo_hash_available=true
 else
     catgo_hash_available=false
 fi
-# KPOINTS is mandatory only when INCAR does not set KSPACING: with KSPACING the
-# mesh comes from the INCAR and VASP ignores (and does not need) a KPOINTS file.
-# Demanding it unconditionally rejected perfectly valid jobs at submit time.
+
 catgo_kspacing=false
 if [ -f INCAR ] && catgo_has_positive_kspacing INCAR; then
     catgo_kspacing=true
 fi
+catgo_kspacing_declared=false
+if [ -f INCAR ] && catgo_has_incar_key INCAR KSPACING; then
+    catgo_kspacing_declared=true
+fi
+catgo_kpoints_optional=false
+if [ ! -f KPOINTS ] && [ "$catgo_kspacing" = true ] && [ "$catgo_strict_kpoints" != true ]; then
+    catgo_kpoints_optional=true
+fi
+
+if [ "$catgo_strict_kpoints" = true ]; then
+    if [ ! -f KPOINTS ]; then
+        catgo_p4_verdict=FAIL
+        catgo_add_policy_violation "P4:explicit_kpoints_missing"
+    elif ! catgo_regular_kpoints_valid KPOINTS; then
+        catgo_p4_verdict=FAIL
+        catgo_add_policy_violation "P4:explicit_regular_mesh_malformed"
+    else
+        catgo_p4_verdict=PASS
+    fi
+elif [ -f KPOINTS ]; then
+    if catgo_kpoints_nonblank KPOINTS; then
+        catgo_p4_verdict=PASS
+    else
+        catgo_p4_verdict=FAIL
+        catgo_add_policy_violation "P4:kpoints_present_empty"
+    fi
+elif [ "$catgo_kspacing" = true ]; then
+    catgo_p4_verdict=PASS
+elif [ "$catgo_kspacing_declared" = true ]; then
+    catgo_p4_verdict=FAIL
+    catgo_add_policy_violation "P4:kspacing_not_positive_finite"
+fi
+
+catgo_required_missing=false
+for catgo_key in $catgo_required_keys_shell; do
+    if [ ! -f INCAR ] || ! catgo_has_nonblank_incar_key INCAR "$catgo_key"; then
+        catgo_required_missing=true
+        catgo_add_policy_violation "P17:required_key_missing_or_blank:$catgo_key"
+    fi
+done
+if [ -n "$catgo_required_keys_shell" ]; then
+    if [ "$catgo_required_missing" = true ]; then
+        catgo_p17_verdict=FAIL
+    else
+        catgo_p17_verdict=PASS
+    fi
+fi
+
 for catgo_name in {" ".join(VASP_MANDATORY_INPUTS)}; do
-    if [ "$catgo_name" = KPOINTS ] && [ "$catgo_kspacing" = true ]; then
+    if [ "$catgo_name" = KPOINTS ] && [ "$catgo_kpoints_optional" = true ]; then
         continue
     fi
     if [ ! -f "$catgo_name" ]; then
@@ -369,7 +604,11 @@ for catgo_name in {" ".join(VASP_MANDATORY_INPUTS)}; do
         catgo_missing_text="$catgo_missing_text $catgo_name"
     fi
 done
-if [ -n "$catgo_missing_text" ] || [ "$catgo_binary_declared" != true ] || [ "$catgo_hash_available" != true ]; then
+catgo_incar_hash_json=null
+if [ -f INCAR ] && catgo_incar_hash=$(catgo_sha256 INCAR 2>/dev/null); then
+    catgo_incar_hash_json="\\"$catgo_incar_hash\\""
+fi
+if [ -n "$catgo_missing_text" ] || [ -n "$catgo_policy_violation_text" ] || [ "$catgo_binary_declared" != true ] || [ "$catgo_hash_available" != true ]; then
     catgo_ready=false
 else
     catgo_ready=true
@@ -391,7 +630,23 @@ fi
     printf '    "INCAR": '; catgo_emit_input INCAR; printf ',\\n'
     printf '    "POSCAR": '; catgo_emit_input POSCAR; printf ',\\n'
     printf '    "POTCAR": '; catgo_emit_input POTCAR; printf ',\\n'
-    printf '    "KPOINTS": '; catgo_emit_input KPOINTS "$catgo_kspacing"; printf '\\n'
+    printf '    "KPOINTS": '; catgo_emit_input KPOINTS "$catgo_kpoints_optional"; printf '\\n'
+    printf '  }},\\n'
+    printf '  "input_policy": {{\\n'
+    printf '    "schema_version": 1,\\n'
+    printf '    "required_keys": %s,\\n' "$catgo_required_keys_json"
+    printf '    "kpoints_policy": %s,\\n' "$catgo_kpoints_policy_json"
+    printf '    "artifact_kind": "exact",\\n'
+    printf '    "materialization": {{\\n'
+    printf '      "strategy": "exact",\\n'
+    printf '      "resolved": true,\\n'
+    printf '      "base_sha256": null,\\n'
+    printf '      "overlay_sha256": [],\\n'
+    printf '      "materialized_sha256": %s\\n' "$catgo_incar_hash_json"
+    printf '    }},\\n'
+    printf '    "checked": true,\\n'
+    printf '    "verdicts": {{"P4":"%s","P17":"%s"}},\\n' "$catgo_p4_verdict" "$catgo_p17_verdict"
+    printf '    "violations": [%s]\\n' "$catgo_policy_violations_json"
     printf '  }},\\n'
     printf '  "missing_mandatory_inputs": [%s],\\n' "$catgo_missing_json"
     printf '  "ready": %s\\n' "$catgo_ready"
@@ -406,6 +661,10 @@ if ! mv "$catgo_manifest_tmp" "$catgo_manifest"; then
 fi
 
 if [ "$catgo_ready" != true ]; then
+    if [ -n "$catgo_policy_violation_text" ]; then
+        printf '%s\\n' "CatGo VASP input-policy failed:$catgo_policy_violation_text (manifest: $catgo_manifest)" >&2
+        exit 68
+    fi
     if [ -n "$catgo_missing_text" ]; then
         printf '%s\\n' "CatGo VASP preflight failed: missing mandatory inputs:$catgo_missing_text (manifest: $catgo_manifest)" >&2
         exit 66
@@ -425,33 +684,50 @@ async def write_vasp_input_manifest(
     work_dir: str,
     resolution: VaspCommandResolution,
     use_custodian: bool = False,
+    *,
+    input_policy: VaspInputPolicy | None = None,
 ) -> None:
     """Write and validate the manifest on the connection owner's event loop."""
+    policy = input_policy or VaspInputPolicy()
     command = build_vasp_input_manifest_command(
-        work_dir, resolution, use_custodian=use_custodian
+        work_dir,
+        resolution,
+        use_custodian=use_custodian,
+        input_policy=policy,
     )
     await hpc.run_on_owner(lambda: hpc.conn.run(command, check=True))
-    await _audit_vasp_inputs(hpc, work_dir, resolution)
+    await _audit_vasp_inputs(hpc, work_dir, resolution, input_policy=policy)
 
 
-async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResolution) -> None:
+async def _audit_vasp_inputs(
+    hpc,
+    work_dir: str,
+    resolution: VaspCommandResolution,
+    *,
+    input_policy: VaspInputPolicy | None = None,
+) -> None:
     """Run the input-side gates on what is about to be submitted.
 
     `verify_gates.precheck_inputs` existed but was only ever called from tests —
     an input audit nothing runs is not an audit. Reading the two files back costs
     one SSH call on a path that is already doing several, and a FAIL here is
     worth far more than the same finding after the job burns its allocation.
-    Advisory by the D-057 policy: it logs, it does not block submission.
+    Non-contract findings remain advisory under D-057. P17/P4 disagreement
+    after the shell already certified the same declared policy is parser drift,
+    so it blocks before submission.
     """
+    policy = input_policy or VaspInputPolicy()
     try:
         from catgo.mcp_tools import verify_gates
-    except Exception:  # pragma: no cover - the audit must never break a submit
+    except Exception:  # pragma: no cover - shell policy enforcement remains active
         return
     remote = _quote_remote_work_dir(work_dir)
     read = (
         "cd " + remote + " && for f in INCAR KPOINTS; do "
         "printf '<<<CATGO_%s>>>\n' \"$f\"; "
         "if [ -f \"$f\" ]; then cat \"$f\"; fi; done; "
+        "printf '<<<CATGO_KPOINTS_EXISTS>>>\\n'; "
+        "if [ -f KPOINTS ]; then printf 'true\\n'; else printf 'false\\n'; fi; "
         "printf '<<<CATGO_POTCAR_TITELS>>>\\n'; "
         "if [ -f POTCAR ]; then "
         "grep -E '^[[:space:]]*TITEL[[:space:]]*=' POTCAR || true; fi"
@@ -461,7 +737,17 @@ async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResoluti
         text = res.stdout or ""
         incar = text.split("<<<CATGO_INCAR>>>", 1)[-1].split("<<<CATGO_KPOINTS>>>")[0]
         kpoints_block = text.split("<<<CATGO_KPOINTS>>>", 1)[-1] if "<<<CATGO_KPOINTS>>>" in text else ""
-        kpoints = kpoints_block.split("<<<CATGO_POTCAR_TITELS>>>", 1)[0]
+        if "<<<CATGO_KPOINTS_EXISTS>>>" in text:
+            kpoints = kpoints_block.split("<<<CATGO_KPOINTS_EXISTS>>>", 1)[0]
+            exists_block = text.split("<<<CATGO_KPOINTS_EXISTS>>>", 1)[-1]
+            kpoints_exists = (
+                exists_block.split("<<<CATGO_POTCAR_TITELS>>>", 1)[0].strip()
+                == "true"
+            )
+        else:
+            # Backward-compatible test/fake transport; production emits the marker.
+            kpoints = kpoints_block.split("<<<CATGO_POTCAR_TITELS>>>", 1)[0]
+            kpoints_exists = bool(kpoints.strip())
         titel_block = (
             text.split("<<<CATGO_POTCAR_TITELS>>>", 1)[-1]
             if "<<<CATGO_POTCAR_TITELS>>>" in text else ""
@@ -473,20 +759,40 @@ async def _audit_vasp_inputs(hpc, work_dir: str, resolution: VaspCommandResoluti
         ]
         verdicts = verify_gates.precheck_inputs(
             incar,
-            kpoints_text=kpoints or None,
+            kpoints_text=kpoints if kpoints_exists else None,
             titels=titels or None,
             binary=resolution.binary_token,
+            required_keys=(
+                list(policy.required_keys)
+                if policy.required_keys is not None
+                else None
+            ),
+            kpoints_policy=policy.kpoints_policy,
         )
-        failed = [v for v in verdicts if v.get("status") == "FAIL"]
-        if failed:
-            logger.warning(
-                "VASP input precheck FAILED for %s: %s", work_dir,
-                "; ".join(f"{v['gate']}: {v['detail']}" for v in failed),
-            )
-        else:
-            logger.info(
-                "VASP input precheck clean for %s (%d gates ran)",
-                work_dir, sum(1 for v in verdicts if v.get("status") != "SKIP"),
-            )
     except Exception:  # pragma: no cover
         logger.debug("VASP input precheck could not run for %s", work_dir, exc_info=True)
+        return
+
+    failed = [v for v in verdicts if v.get("status") == "FAIL"]
+    contract_failed = [
+        v for v in failed
+        if v.get("gate") in {"in_kspacing_vs_kpoints", "in_required_keys_present"}
+    ]
+    if contract_failed:
+        detail = "; ".join(
+            f"{v['gate']}: {v['detail']}" for v in contract_failed
+        )
+        raise RuntimeError(
+            f"VASP input-policy parser drift after shell preflight for {work_dir}: "
+            f"{detail}"
+        )
+    if failed:
+        logger.warning(
+            "VASP input precheck FAILED for %s: %s", work_dir,
+            "; ".join(f"{v['gate']}: {v['detail']}" for v in failed),
+        )
+    else:
+        logger.info(
+            "VASP input precheck clean for %s (%d gates ran)",
+            work_dir, sum(1 for v in verdicts if v.get("status") != "SKIP"),
+        )

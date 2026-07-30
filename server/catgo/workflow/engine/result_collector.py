@@ -404,6 +404,7 @@ def _parse_vasp_metadata(raw: str) -> dict:
 
     manifest_errors = []
     manifest = None
+    validated_input_policy = None
     try:
         manifest = json.loads(manifest_text) if manifest_text else None
     except (ValueError, TypeError):
@@ -450,6 +451,78 @@ def _parse_vasp_metadata(raw: str) -> dict:
             "command_source"
         ].strip():
             manifest_errors.append("command_source")
+
+        input_policy = manifest.get("input_policy")
+        policy_materialized_hash = None
+        policy_kpoints = None
+        if "input_policy" in manifest and input_policy is None:
+            manifest_errors.append("input_policy")
+        elif input_policy is not None:
+            if not isinstance(input_policy, dict):
+                manifest_errors.append("input_policy")
+            else:
+                if input_policy.get("schema_version") != 1:
+                    manifest_errors.append("input_policy.schema_version")
+                required_keys = input_policy.get("required_keys")
+                if required_keys is not None:
+                    if not isinstance(required_keys, list) or not required_keys:
+                        manifest_errors.append("input_policy.required_keys")
+                    elif any(
+                        not isinstance(key, str)
+                        or key != key.strip().upper()
+                        or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key)
+                        for key in required_keys
+                    ) or len(set(required_keys)) != len(required_keys):
+                        manifest_errors.append("input_policy.required_keys")
+                policy_kpoints = input_policy.get("kpoints_policy")
+                if policy_kpoints not in {
+                    "vasp_default", "explicit_regular_mesh",
+                }:
+                    manifest_errors.append("input_policy.kpoints_policy")
+                if input_policy.get("artifact_kind") != "exact":
+                    manifest_errors.append("input_policy.artifact_kind")
+                materialization = input_policy.get("materialization")
+                if not isinstance(materialization, dict):
+                    manifest_errors.append("input_policy.materialization")
+                else:
+                    if materialization.get("strategy") != "exact":
+                        manifest_errors.append(
+                            "input_policy.materialization.strategy"
+                        )
+                    if materialization.get("resolved") is not True:
+                        manifest_errors.append(
+                            "input_policy.materialization.resolved"
+                        )
+                    if materialization.get("base_sha256") is not None:
+                        manifest_errors.append(
+                            "input_policy.materialization.base_sha256"
+                        )
+                    if materialization.get("overlay_sha256") != []:
+                        manifest_errors.append(
+                            "input_policy.materialization.overlay_sha256"
+                        )
+                    policy_materialized_hash = materialization.get(
+                        "materialized_sha256"
+                    )
+                    if (
+                        not isinstance(policy_materialized_hash, str)
+                        or not re.fullmatch(
+                            r"[0-9a-f]{64}", policy_materialized_hash
+                        )
+                    ):
+                        manifest_errors.append(
+                            "input_policy.materialization.materialized_sha256"
+                        )
+                if input_policy.get("checked") is not True:
+                    manifest_errors.append("input_policy.checked")
+                expected_p17 = "SKIP" if required_keys is None else "PASS"
+                if input_policy.get("verdicts") != {
+                    "P4": "PASS", "P17": expected_p17,
+                }:
+                    manifest_errors.append("input_policy.verdicts")
+                if input_policy.get("violations") != []:
+                    manifest_errors.append("input_policy.violations")
+                validated_input_policy = input_policy
 
         live_hashes = {}
         for line in sections["input_hashes"]:
@@ -538,6 +611,29 @@ def _parse_vasp_metadata(raw: str) -> dict:
                         manifest_errors.append(f"inputs.{name}.live_hash")
             if rewritten:
                 result["custodian_rewritten_inputs"] = rewritten
+            if validated_input_policy is not None:
+                incar_entry = manifest_inputs.get("INCAR")
+                incar_hash = (
+                    incar_entry.get("sha256")
+                    if isinstance(incar_entry, dict)
+                    else None
+                )
+                if policy_materialized_hash != incar_hash:
+                    manifest_errors.append(
+                        "input_policy.materialization.incar_hash_mismatch"
+                    )
+                kpoints_entry = manifest_inputs.get("KPOINTS")
+                if (
+                    policy_kpoints == "explicit_regular_mesh"
+                    and (
+                        not isinstance(kpoints_entry, dict)
+                        or kpoints_entry.get("mandatory") is not True
+                        or kpoints_entry.get("exists") is not True
+                    )
+                ):
+                    manifest_errors.append(
+                        "input_policy.explicit_kpoints_not_mandatory"
+                    )
 
         if not manifest_errors:
             canonical = json.dumps(
@@ -559,6 +655,8 @@ def _parse_vasp_metadata(raw: str) -> dict:
             result["command_source"] = manifest["command_source"]
             result["input_manifest_schema_version"] = manifest["schema_version"]
             result["input_manifest_validated"] = True
+            if validated_input_policy is not None:
+                result["input_policy"] = validated_input_policy
             field_sources.update({
                 "submission_manifest_digest": (
                     "catgo_vasp_input_manifest.json:canonical_sha256"
@@ -572,6 +670,10 @@ def _parse_vasp_metadata(raw: str) -> dict:
                     "catgo_vasp_input_manifest.json:resolved_run_command"
                 ),
             })
+            if validated_input_policy is not None:
+                field_sources["input_policy"] = (
+                    "catgo_vasp_input_manifest.json:input_policy"
+                )
     if manifest_errors:
         result["input_manifest_validated"] = False
         result["input_manifest_errors"] = sorted(set(manifest_errors))
@@ -757,7 +859,7 @@ def _parse_vasp_metadata(raw: str) -> dict:
     if field_sources:
         result["field_sources"] = field_sources
         result["metadata_parser"] = (
-            "catgo.workflow.engine.result_collector._parse_vasp_metadata@5"
+            "catgo.workflow.engine.result_collector._parse_vasp_metadata@6"
         )
     return result
 

@@ -257,6 +257,7 @@ def _drive_collector(
     input_overrides=None,
     live_overrides=None,
     omit_live_status=(),
+    input_policy=None,
 ):
     """Drive the REAL parser, not a reimplementation of its rules.
 
@@ -280,6 +281,8 @@ def _drive_collector(
         "binary": "vasp_std", "command_source": "test",
         "use_custodian": use_custodian, "inputs": inputs,
     }
+    if input_policy is not None:
+        manifest["input_policy"] = input_policy
     live = {
         "INCAR": incar_live,
         "POSCAR": "b" * 64,
@@ -336,6 +339,78 @@ def test_an_optional_missing_kpoints_is_accepted():
         incar_text="KSPACING = 0.25",
     )
     assert not _errors_of(res), _errors_of(res)
+
+
+def _valid_input_policy(kpoints_policy="vasp_default", required_keys=None):
+    return {
+        "schema_version": 1,
+        "required_keys": required_keys,
+        "kpoints_policy": kpoints_policy,
+        "artifact_kind": "exact",
+        "materialization": {
+            "strategy": "exact",
+            "resolved": True,
+            "base_sha256": None,
+            "overlay_sha256": [],
+            "materialized_sha256": "a" * 64,
+        },
+        "checked": True,
+        "verdicts": {
+            "P4": "PASS",
+            "P17": "SKIP" if required_keys is None else "PASS",
+        },
+        "violations": [],
+    }
+
+
+def test_collector_accepts_legacy_v1_and_valid_input_policy_extension():
+    legacy = _drive_collector(False)
+    assert not _errors_of(legacy), _errors_of(legacy)
+    assert "input_policy" not in legacy
+
+    policy = _valid_input_policy(
+        kpoints_policy="explicit_regular_mesh",
+        required_keys=["ENCUT", "EDIFF"],
+    )
+    extended = _drive_collector(False, input_policy=policy)
+    assert not _errors_of(extended), _errors_of(extended)
+    assert extended["input_policy"] == policy
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda p: p.update({"schema_version": 2}), "input_policy.schema_version"),
+        (lambda p: p.update({"required_keys": []}), "input_policy.required_keys"),
+        (lambda p: p.update({"required_keys": ["encut"]}), "input_policy.required_keys"),
+        (lambda p: p.update({"kpoints_policy": "unknown"}), "input_policy.kpoints_policy"),
+        (lambda p: p.update({"checked": False}), "input_policy.checked"),
+        (lambda p: p.update({"violations": ["P4:x"]}), "input_policy.violations"),
+        (
+            lambda p: p["materialization"].update(
+                {"materialized_sha256": "9" * 64}
+            ),
+            "input_policy.materialization.incar_hash_mismatch",
+        ),
+    ],
+)
+def test_collector_rejects_malformed_input_policy_extension(mutate, expected):
+    policy = _valid_input_policy()
+    mutate(policy)
+    res = _drive_collector(False, input_policy=policy)
+    assert expected in _errors_of(res), _errors_of(res)
+
+
+def test_collector_strict_policy_cannot_mark_kpoints_optional():
+    policy = _valid_input_policy(kpoints_policy="explicit_regular_mesh")
+    res = _drive_collector(
+        False,
+        input_policy=policy,
+        kpoints_entry={"mandatory": False, "exists": False, "sha256": None},
+        kpoints_live=None,
+        incar_text="KSPACING=0.25",
+    )
+    assert "input_policy.explicit_kpoints_not_mandatory" in _errors_of(res)
 
 
 def test_an_optional_kpoints_appearing_without_custodian_is_rejected():
@@ -513,15 +588,18 @@ def test_preflight_accepts_active_multitag_kspacing(tmp_path, incar):
     assert completed.returncode == 0, completed.stderr
 
 
-@pytest.mark.parametrize("incar", [
-    "# KSPACING = 0.25",
-    "KSPACING =",
-    "KSPACING = 0",
-    "KSPACING = -0.25",
-    "KSPACING = nope",
-    "KSPACING = 0.25; KSPACING = -1",
+@pytest.mark.parametrize("incar,expected_code,expected_p4", [
+    ("# KSPACING = 0.25", 66, "SKIP"),
+    ("KSPACING =", 68, "FAIL"),
+    ("KSPACING = 0", 68, "FAIL"),
+    ("KSPACING = -0.25", 68, "FAIL"),
+    ("KSPACING = nope", 68, "FAIL"),
+    ("KSPACING = 1_0", 68, "FAIL"),
+    ("KSPACING = 0.25; KSPACING = -1", 68, "FAIL"),
 ])
-def test_preflight_rejects_invalid_or_inactive_kspacing(tmp_path, incar):
+def test_preflight_rejects_invalid_or_inactive_kspacing(
+    tmp_path, incar, expected_code, expected_p4,
+):
     for name, content in {
         "INCAR": incar + "\n",
         "POSCAR": "structure\n",
@@ -539,7 +617,14 @@ def test_preflight_rejects_invalid_or_inactive_kspacing(tmp_path, incar):
         capture_output=True,
         check=False,
     )
-    assert completed.returncode == 66
+    assert completed.returncode == expected_code
+    manifest = json.loads(
+        (tmp_path / vsub.VASP_INPUT_MANIFEST).read_text(encoding="utf-8")
+    )
+    assert manifest["input_policy"]["verdicts"]["P4"] == expected_p4
+    assert manifest["input_policy"]["violations"] == (
+        ["P4:kspacing_not_positive_finite"] if expected_p4 == "FAIL" else []
+    )
 
 
 def test_the_manifest_records_whether_custodian_may_rewrite():
@@ -590,11 +675,52 @@ def test_input_precheck_receives_potcar_titels(monkeypatch):
     resolution = vsub.VaspCommandResolution(
         command="srun vasp_std", binary_token="vasp_std", source="test",
     )
-    asyncio.run(vsub._audit_vasp_inputs(HPC(), "/work", resolution))
+    policy = vsub.VaspInputPolicy(required_keys=("ENCUT",))
+    asyncio.run(
+        vsub._audit_vasp_inputs(
+            HPC(), "/work", resolution, input_policy=policy,
+        )
+    )
     assert seen["titels"] == [
         "PAW_PBE Fe_pv 06Sep2000",
         "PAW_PBE O 08Apr2002",
     ]
+    assert seen["required_keys"] == ["ENCUT"]
+    assert seen["kpoints_policy"] == "vasp_default"
+
+
+def test_input_precheck_preserves_present_empty_kpoints(monkeypatch):
+    seen = {}
+
+    def fake_precheck(incar, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(vg, "precheck_inputs", fake_precheck)
+
+    class Connection:
+        async def run(self, command, check=False):
+            return type("Response", (), {
+                "stdout": (
+                    "<<<CATGO_INCAR>>>\nENCUT=520\n"
+                    "<<<CATGO_KPOINTS>>>\n"
+                    "<<<CATGO_KPOINTS_EXISTS>>>\ntrue\n"
+                    "<<<CATGO_POTCAR_TITELS>>>\n"
+                ),
+            })()
+
+    class HPC:
+        conn = Connection()
+
+        async def run_on_owner(self, factory):
+            return await factory()
+
+    resolution = vsub.VaspCommandResolution(
+        command="srun vasp_std", binary_token="vasp_std", source="test",
+    )
+    asyncio.run(vsub._audit_vasp_inputs(HPC(), "/work", resolution))
+    assert seen["kpoints_text"] is not None
+    assert not seen["kpoints_text"].strip()
 
 
 # ---- a slow numeric call must not leave a race window --------------------

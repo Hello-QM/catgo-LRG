@@ -17,8 +17,10 @@ from catgo.workflow.engine.submitter import (
 )
 from catgo.workflow.engine.vasp_submission import (
     VASP_INPUT_MANIFEST,
+    VaspInputPolicy,
     build_vasp_input_manifest_command,
     resolve_vasp_command,
+    resolve_vasp_input_policy,
     validate_vasp_job_script,
 )
 from catgo.workflow.states import TaskState
@@ -85,6 +87,18 @@ def test_manifest_shell_records_inputs_hashes_and_declared_binary(tmp_path):
     assert manifest["hash_available"] is True
     assert manifest["ready"] is True
     assert manifest["missing_mandatory_inputs"] == []
+    policy = manifest["input_policy"]
+    assert policy["schema_version"] == 1
+    assert policy["required_keys"] is None
+    assert policy["kpoints_policy"] == "vasp_default"
+    assert policy["artifact_kind"] == "exact"
+    assert policy["checked"] is True
+    assert policy["verdicts"] == {"P4": "PASS", "P17": "SKIP"}
+    assert policy["violations"] == []
+    assert (
+        policy["materialization"]["materialized_sha256"]
+        == manifest["inputs"]["INCAR"]["sha256"]
+    )
     for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS"):
         entry = manifest["inputs"][name]
         assert entry["mandatory"] is True
@@ -96,6 +110,202 @@ def test_manifest_shell_records_inputs_hashes_and_declared_binary(tmp_path):
     # Module-loaded binaries are declared only; preflight must not resolve them.
     assert "command -v vasp_ncl" not in command
     assert "which" not in command
+
+
+def test_input_policy_resolver_is_tristate_normalized_and_precedence_aware():
+    config = {
+        "defaults": {
+            "vasp": {
+                "required_incar_tags": ["algo"],
+                "kpoints_policy": "explicit_regular_mesh",
+            },
+        },
+        "hpc": {
+            "job_defaults": {
+                "required_incar_tags": ["encut", "ediff"],
+                "kpoints_policy": "vasp_default",
+            },
+        },
+    }
+    policy = resolve_vasp_input_policy({}, config)
+    assert policy == VaspInputPolicy(
+        required_keys=("ENCUT", "EDIFF"),
+        kpoints_policy="vasp_default",
+    )
+    policy = resolve_vasp_input_policy(
+        {
+            "required_incar_tags": None,
+            "kpoints_policy": "explicit_regular_mesh",
+        },
+        config,
+    )
+    assert policy == VaspInputPolicy(
+        required_keys=None,
+        kpoints_policy="explicit_regular_mesh",
+    )
+    for invalid in (
+        {"required_incar_tags": []},
+        {"required_incar_tags": ["ENCUT", "encut"]},
+        {"required_incar_tags": "ENCUT"},
+        {"kpoints_policy": "unknown"},
+    ):
+        with pytest.raises(ValueError):
+            resolve_vasp_input_policy(invalid, {})
+
+
+def test_manifest_enforces_nonblank_required_keys_on_final_incar(tmp_path):
+    for name, content in {
+        "INCAR": "ENCUT=520;EDIFF=1E-5\nEDIFF=\n",
+        "POSCAR": "structure\n",
+        "POTCAR": "potential\n",
+        "KPOINTS": "mesh\n0\nG\n4 4 1\n",
+    }.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    resolution = resolve_vasp_command({}, {})
+    policy = VaspInputPolicy(required_keys=("encut", "ediff"))
+    command = build_vasp_input_manifest_command(
+        str(tmp_path), resolution, input_policy=policy,
+    )
+    failed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["ready"] is False
+    assert manifest["input_policy"]["required_keys"] == ["ENCUT", "EDIFF"]
+    assert manifest["input_policy"]["verdicts"]["P17"] == "FAIL"
+    assert manifest["input_policy"]["violations"] == [
+        "P17:required_key_missing_or_blank:EDIFF",
+    ]
+
+    (tmp_path / "INCAR").write_text(
+        "ENCUT=520;EDIFF=1E-5\n", encoding="utf-8",
+    )
+    passed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert passed.returncode == 0, passed.stderr
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["verdicts"]["P17"] == "PASS"
+    assert manifest["input_policy"]["violations"] == []
+
+
+def test_manifest_rejects_malformed_final_required_value(tmp_path):
+    for name, content in {
+        "INCAR": "ENCUT=520\nEDIFF=1E-5\nEDIFF==\n",
+        "POSCAR": "structure\n",
+        "POTCAR": "potential\n",
+        "KPOINTS": "mesh\n0\nG\n4 4 1\n",
+    }.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    command = build_vasp_input_manifest_command(
+        str(tmp_path),
+        resolve_vasp_command({}, {}),
+        input_policy=VaspInputPolicy(required_keys=("ENCUT", "EDIFF")),
+    )
+    failed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["verdicts"]["P17"] == "FAIL"
+    assert manifest["input_policy"]["violations"] == [
+        "P17:required_key_missing_or_blank:EDIFF",
+    ]
+
+
+def test_explicit_regular_mesh_policy_blocks_fallback_but_allows_redundant_tags(
+    tmp_path,
+):
+    for name, content in {
+        "INCAR": "ENCUT=520\nKSPACING=0.25\nKGAMMA=.TRUE.\n",
+        "POSCAR": "structure\n",
+        "POTCAR": "potential\n",
+    }.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    resolution = resolve_vasp_command({}, {})
+    policy = VaspInputPolicy(kpoints_policy="explicit_regular_mesh")
+    command = build_vasp_input_manifest_command(
+        str(tmp_path), resolution, input_policy=policy,
+    )
+    missing = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["inputs"]["KPOINTS"]["mandatory"] is True
+    assert manifest["input_policy"]["violations"] == [
+        "P4:explicit_kpoints_missing",
+    ]
+
+    (tmp_path / "KPOINTS").write_text(
+        "\n0\nM\n4 4 1\n0 0 0\n", encoding="utf-8",
+    )
+    passed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert passed.returncode == 0, passed.stderr
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["verdicts"]["P4"] == "PASS"
+    assert manifest["input_policy"]["violations"] == []
+
+    (tmp_path / "KPOINTS").write_text("   \n", encoding="utf-8")
+    malformed = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert malformed.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["violations"] == [
+        "P4:explicit_regular_mesh_malformed",
+    ]
+
+    (tmp_path / "KPOINTS").write_text(
+        "mesh\n0\nM\n٤ ٤ ١\n0 0 0\n", encoding="utf-8",
+    )
+    malformed_unicode = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert malformed_unicode.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["violations"] == [
+        "P4:explicit_regular_mesh_malformed",
+    ]
+
+    (tmp_path / "KPOINTS").write_text(
+        "mesh\n0\nM\n4 4 1\n1_0 0 0\n", encoding="utf-8",
+    )
+    malformed_numeric = subprocess.run(
+        ["/bin/sh", "-c", command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert malformed_numeric.returncode == 68
+    manifest = json.loads((tmp_path / VASP_INPUT_MANIFEST).read_text())
+    assert manifest["input_policy"]["violations"] == [
+        "P4:explicit_regular_mesh_malformed",
+    ]
 
 
 def test_manifest_shell_writes_audit_then_fails_closed_on_missing_input(tmp_path):
@@ -194,6 +404,8 @@ def test_single_submit_uses_resolver_for_custodian_and_preflight_before_submit()
     params = {
         "software": "vasp",
         "use_custodian": True,
+        "required_incar_tags": ["encut", "ediff"],
+        "kpoints_policy": "explicit_regular_mesh",
         "job_script": (
             "#!/bin/bash\n"
             "#SBATCH --time=01:00:00\n"
@@ -276,7 +488,13 @@ def test_single_submit_uses_resolver_for_custodian_and_preflight_before_submit()
     assert resolution.command == "srun --hint=nomultithread vasp_ncl"
     assert resolution.binary_token == "vasp_ncl"
     assert resolution.source == "hpc.job_defaults.vasp_command"
-    assert write_manifest.await_args.kwargs == {"use_custodian": True}
+    assert write_manifest.await_args.kwargs == {
+        "use_custodian": True,
+        "input_policy": VaspInputPolicy(
+            required_keys=("ENCUT", "EDIFF"),
+            kpoints_policy="explicit_regular_mesh",
+        ),
+    }
 
     custodian_uploads = [
         str(call.args[0])

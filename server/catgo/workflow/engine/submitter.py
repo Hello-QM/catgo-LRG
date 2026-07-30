@@ -19,6 +19,7 @@ from catgo.workflow.engine.batch_submitter import ARRAY_JOB_THRESHOLD
 from catgo.workflow.engine.vasp_submission import (
     VaspCommandResolution,
     resolve_vasp_command,
+    resolve_vasp_input_policy,
     resolve_vasp_use_custodian,
     write_vasp_input_manifest,
 )
@@ -314,6 +315,11 @@ async def _submit_one(
     session_id = task.get("hpc_session_id") or ""
     from catgo.workflow.engine.job_script import generate_job_script, generate_custodian_script
     vasp_resolution = resolve_vasp_command(params, config) if engine_key == "vasp" else None
+    vasp_input_policy = (
+        resolve_vasp_input_policy(params, config)
+        if engine_key == "vasp"
+        else None
+    )
 
     # Pick a template source. If a previous Run-dialog click stamped
     # params.job_script with a raw cluster template (still contains
@@ -377,6 +383,7 @@ async def _submit_one(
         await write_vasp_input_manifest(
             hpc, work_dir, vasp_resolution,
             use_custodian=resolve_vasp_use_custodian(params, config),
+            input_policy=vasp_input_policy,
         )
 
     success, message, job_id = await _submit_job(

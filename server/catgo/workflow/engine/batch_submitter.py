@@ -27,6 +27,7 @@ from catgo.workflow.engine.job_script import generate_job_script
 from catgo.workflow.engine.engine_registry import get_engine_generator
 from catgo.workflow.engine.vasp_submission import (
     resolve_vasp_command,
+    resolve_vasp_input_policy,
     resolve_vasp_use_custodian,
     write_vasp_input_manifest,
 )
@@ -67,9 +68,14 @@ async def submit_batch_tasks(
     # One array script executes one command in every directory. Mixed VASP
     # command/binary/custodian fingerprints would make manifests lie.
     vasp_resolutions = []
+    vasp_input_policies = []
     if engine_key == "vasp":
         vasp_resolutions = [
             resolve_vasp_command(task_params, config)
+            for task_params in task_params_list
+        ]
+        vasp_input_policies = [
+            resolve_vasp_input_policy(task_params, config)
             for task_params in task_params_list
         ]
         fingerprints = {
@@ -152,6 +158,7 @@ async def submit_batch_tasks(
             await write_vasp_input_manifest(
                 hpc, work_dir, vasp_resolution,
                 use_custodian=resolve_vasp_use_custodian(task_params, config),
+                input_policy=vasp_input_policies[i],
             )
 
         db.update_task(task["id"], status=TaskState.UPLOADING.value)

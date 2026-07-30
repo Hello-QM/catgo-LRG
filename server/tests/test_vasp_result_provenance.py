@@ -150,7 +150,11 @@ def test_manifest_is_bound_to_live_inputs_and_result(tmp_path):
     }
     assert parsed["vasp_binary"] == "vasp_std"
     assert parsed["resolved_run_command"] == "srun vasp_std"
-    assert parsed["metadata_parser"].endswith("@5")
+    assert parsed["input_policy"] == manifest["input_policy"]
+    assert parsed["field_sources"]["input_policy"] == (
+        "catgo_vasp_input_manifest.json:input_policy"
+    )
+    assert parsed["metadata_parser"].endswith("@6")
 
     wrapped = json.loads(provenance.wrap_payload(
         json.dumps(parsed),

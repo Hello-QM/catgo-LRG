@@ -148,7 +148,11 @@ def test_batch_uses_resolved_command_manifest_and_job_default_potcar(
         db,
         workflow_id,
         n=3,
-        params={"run_command": "srun --hint=nomultithread vasp_ncl"},
+        params={
+            "run_command": "srun --hint=nomultithread vasp_ncl",
+            "required_incar_tags": ["ENCUT", "EDIFF"],
+            "kpoints_policy": "explicit_regular_mesh",
+        },
     )
     hpc = _mock_hpc()
 
@@ -168,11 +172,15 @@ def test_batch_uses_resolved_command_manifest_and_job_default_potcar(
     ), patch(
         "catgo.workflow.engine.submitter._generate_potcar",
         new_callable=AsyncMock,
-    ) as generate_potcar:
+    ) as generate_potcar, patch(
+        "catgo.workflow.engine.vasp_submission._audit_vasp_inputs",
+        new_callable=AsyncMock,
+    ) as audit_inputs:
         job_id = _run(submit_batch_tasks(db, task_ids, workflow_id, config))
 
     assert job_id == "99887766"
     assert generate_potcar.await_count == 3
+    assert audit_inputs.await_count == 3
     generate_potcar.assert_any_await(
         hpc, f"/scratch/catgo/{workflow_id}/batch_geo_opt/000000",
         "/opt/potcars", "potpaw_PBE_54",
@@ -191,6 +199,8 @@ def test_batch_uses_resolved_command_manifest_and_job_default_potcar(
     assert len(manifests) == 3
     assert len(custodians) == 3
     assert all("srun --hint=nomultithread vasp_ncl" in cmd for cmd in manifests)
+    assert all("ENCUT" in cmd and "EDIFF" in cmd for cmd in manifests)
+    assert all("explicit_regular_mesh" in cmd for cmd in manifests)
     assert all("vasp_ncl" in cmd for cmd in custodians)
     assert all("which" not in cmd for cmd in manifests)
     sbatch_index = next(
@@ -241,6 +251,28 @@ def test_batch_returns_none_on_empty(db, workflow_id, config):
     """Empty task list returns None without errors."""
     result = _run(submit_batch_tasks(db, [], workflow_id, config))
     assert result is None
+
+
+def test_batch_rejects_vacuous_input_policy_before_hpc(
+    db, workflow_id, config,
+):
+    task_ids = _make_tasks(
+        db,
+        workflow_id,
+        n=3,
+        params={"required_incar_tags": []},
+    )
+    get_hpc = AsyncMock()
+    with patch(
+        "catgo.workflow.engine.batch_submitter.get_hpc_connection",
+        get_hpc,
+    ), patch(
+        "catgo.workflow.engine.batch_submitter.map_task_type_to_engine",
+        return_value=("vasp_relax", "vasp"),
+    ):
+        with pytest.raises(ValueError, match="empty declared contract"):
+            _run(submit_batch_tasks(db, task_ids, workflow_id, config))
+    get_hpc.assert_not_awaited()
 
 
 def test_batch_returns_none_when_no_hpc(db, workflow_id, config):
