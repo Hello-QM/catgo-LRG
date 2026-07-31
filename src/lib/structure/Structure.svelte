@@ -115,6 +115,7 @@
   import { create_settings_controller } from './controllers/settings.svelte'
   import { create_transform_controller } from './controllers/transform-controller.svelte'
   import { create_viewer_controller } from './controllers/viewer-controller.svelte'
+  import { resolve_render_dpr } from './render-quality'
 
   load_i18n_module(`structure`)
   load_i18n_module(`common`)
@@ -898,6 +899,7 @@
     // (rows = a,b,c). Identity-stable across frames for fixed cells.
     trajectory_frame_lattice = null as number[][] | null,
     trajectory_step_idx = -1,
+    trajectory_is_playing = false,
     trajectory_positions_version = { v: 0, all: false },
     get_trajectory_frame_positions = null as ((i: number) => Float32Array | null) | null,
     trajectory_frame_count = 0,
@@ -1099,6 +1101,9 @@
       trajectory_frame_lattice?: number[][] | null
       // Active trajectory frame index (for per-frame bond cache).
       trajectory_step_idx?: number
+      // Dynamic render-quality gate: paused frames supersample atom/bond
+      // junctions; active playback stays at native DPR for throughput.
+      trajectory_is_playing?: boolean
       // Bumps when the current trajectory frame's positions change in place
       // (atom edit). Drives a bond recompute the step-idx guard would skip.
       trajectory_positions_version?: { v: number; all: boolean }
@@ -2225,6 +2230,15 @@
   // Task 9: experimental WebGPU large-system render path. Default OFF — when
   // off the overlay renders nothing and the WebGL viewer is unchanged.
   let large_system_mode = $state(false)
+  let interactive_render_dpr = $derived.by(() => resolve_render_dpr({
+    device_dpr: typeof window === `undefined` ? 1 : window.devicePixelRatio,
+    width,
+    height,
+    quality: performance_mode === `quality`,
+    moving: camera_is_moving,
+    playing: trajectory_is_playing,
+    suspended: large_system_mode,
+  }))
   // Whether WebGPU can actually run here (a real adapter is obtainable, not just
   // navigator.gpu existing). Optimistic until the async probe resolves; gates the
   // toolbar toggle so it can't be enabled when the overlay would fail to render.
@@ -4598,6 +4612,7 @@
         -->
         <Canvas
           autoRender={!large_system_mode}
+          dpr={interactive_render_dpr}
           toneMapping={ACESFilmicToneMapping}
           {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}
         >

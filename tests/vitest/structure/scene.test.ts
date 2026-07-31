@@ -23,6 +23,7 @@ import {
   clean_measured_sites,
   is_atom_pickable,
   build_highlight_entries,
+  resolve_packet_bond,
 } from '$lib/structure/scene/picking'
 
 // --- render-data.ts ---
@@ -402,6 +403,57 @@ describe(`toggle_site_selection`, () => {
     const result = toggle_site_selection(50, sites)
     expect(result).not.toBeNull()
     expect(result).toHaveLength(99)
+  })
+})
+
+describe(`resolve_packet_bond`, () => {
+  const packet = {
+    topology: {
+      version: 1,
+      atom_count: 2,
+      site_ids: Uint32Array.from([9, 4]),
+      atomic_numbers: Uint8Array.from([6, 8]),
+      radii: Float32Array.from([0.7, 0.6]),
+      colors: Float32Array.from([1, 0, 0, 0, 1, 0]),
+      bond_graph: {
+        version: 2,
+        pairs: Uint32Array.from([0, 1]),
+        jimages: Int8Array.from([1, 0, 0]),
+        kinds: Uint8Array.from([1]),
+        strengths: Float32Array.from([1]),
+      },
+    },
+    frame: {
+      owner: {},
+      frame_idx: 3,
+      positions_version: 0,
+      positions: Float32Array.from([1, 2, 3, 4, 5, 6]),
+      lattice: Float32Array.from([10, 0, 0, 0, 11, 0, 0, 0, 12]),
+    },
+    replicas: {
+      version: 1,
+      dims: [1, 1, 1] as const,
+      boundary_policy: `stub` as const,
+      semantics: `visual-shared-base` as const,
+    },
+  }
+
+  test(`maps exact graph endpoints to site ids and periodic positions`, () => {
+    expect(resolve_packet_bond(packet, 0)).toEqual({
+      graph_idx: 0,
+      base_idx_1: 0,
+      base_idx_2: 1,
+      site_idx_1: 9,
+      site_idx_2: 4,
+      kind: 1,
+      jimage: [1, 0, 0],
+      pos_1: [1, 2, 3],
+      pos_2: [14, 5, 6],
+    })
+  })
+
+  test(`rejects an out-of-range graph slot`, () => {
+    expect(resolve_packet_bond(packet, 1)).toBeNull()
   })
 })
 

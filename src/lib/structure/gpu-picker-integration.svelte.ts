@@ -85,7 +85,15 @@ export interface GpuPickerDeps {
    *  Some embedded webviews consume pointerup before TrackballControls sees it. */
   finish_packet_pointer_gesture?: (event: PointerEvent) => void
   on_packet_atom_click?: (site_idx: number, event: MouseEvent) => void
-  on_packet_bond_click?: (filtered_idx: number, event: MouseEvent) => void
+  on_packet_bond_click?: (
+    graph_idx: number,
+    filtered_idx: number | null,
+    event: MouseEvent,
+  ) => void
+  set_hovered_packet_bond?: (
+    graph_idx: number,
+    filtered_idx: number | null,
+  ) => void
   set_hovered_bond_idx?: (filtered_idx: number | null) => void
   get_bond_thickness: () => number
   get_external_dragging: () => boolean
@@ -615,7 +623,7 @@ export function setup_hover_detection(
           deps.set_active_tooltip(`atom`)
         }
       } else if (action?.type === `bond`) {
-        deps.set_hovered_bond_idx?.(action.filtered_idx)
+        deps.set_hovered_packet_bond?.(action.graph_idx, action.filtered_idx)
         if (deps.get_hovered_idx() !== null) {
           deps.set_hovered_idx(null)
           deps.set_active_tooltip(null)
@@ -776,7 +784,11 @@ export function setup_hover_detection(
       deps.finish_packet_pointer_gesture?.(event)
       pending_packet_click = setTimeout(() => {
         pending_packet_click = undefined
-        deps.on_packet_bond_click?.(action.filtered_idx, event)
+        deps.on_packet_bond_click?.(
+          action.graph_idx,
+          action.filtered_idx,
+          event,
+        )
       }, 0)
     }
   }

@@ -125,13 +125,36 @@ export function topology_signature(structure: AnyStructure): string {
     .join(`,`)
 }
 
+/**
+ * Return whether two structures can safely share one rendered atom topology.
+ *
+ * Position-only trajectory rendering keeps the first frame's atom objects and
+ * swaps typed coordinate packets underneath them. That is only valid when the
+ * atom count and element order are identical. Comparing the sites directly
+ * avoids allocating the large comma-separated signatures used by validation
+ * messages on every playback/cache decision.
+ */
+export function structures_share_topology(
+  left: AnyStructure | null | undefined,
+  right: AnyStructure | null | undefined,
+): boolean {
+  if (!left || !right || left.sites.length !== right.sites.length) return false
+  for (let idx = 0; idx < left.sites.length; idx++) {
+    const left_site = left.sites[idx]
+    const right_site = right.sites[idx]
+    const left_element = left_site.species?.[0]?.element ?? left_site.label ?? `?`
+    const right_element = right_site.species?.[0]?.element ?? right_site.label ?? `?`
+    if (left_element !== right_element) return false
+  }
+  return true
+}
+
 export function validate_uniform_topology(trajectory: TrajectoryType): string | null {
   const first = trajectory.frames[0]?.structure
   if (!first) return `Trajectory has no loaded frame.`
-  const signature = topology_signature(first)
   for (let i = 1; i < trajectory.frames.length; i++) {
     const frame = trajectory.frames[i]
-    if (!frame?.structure || topology_signature(frame.structure) !== signature) {
+    if (!structures_share_topology(first, frame?.structure)) {
       return `Frame ${i} has a different atom count or element order; an all-frame topology edit would be unsafe.`
     }
   }

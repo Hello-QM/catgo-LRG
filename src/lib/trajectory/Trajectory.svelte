@@ -95,6 +95,7 @@
   } from '$lib/structure/viewer-registry.svelte'
   import {
     apply_trajectory_edit_op_to_frame,
+    structures_share_topology,
     type TrajectoryEditOp,
     validate_uniform_topology,
   } from './operations'
@@ -477,9 +478,15 @@
     trajectory?.total_frames || trajectory?.frames.length || 0,
   )
   let known_variable_topology = $derived(
-    trajectory?.frames.some(
-      (frame) => frame.position_data?.topology_changed === true,
-    ) || (trajectory ? has_frame_scoped_structure_ops(trajectory) : false),
+    trajectory
+      ? trajectory.frames.some(
+        (frame) => frame.position_data?.topology_changed === true ||
+          !structures_share_topology(
+            trajectory?.frames[0]?.structure,
+            frame.structure,
+          ),
+      ) || has_frame_scoped_structure_ops(trajectory)
+      : false,
   )
 
   // Current frame - load on demand for indexed trajectories
@@ -685,24 +692,13 @@
       return
     }
     const first_count = frames[0].structure.sites.length
-    // A topology ledger can make one arbitrary frame differ, so verify every
-    // count in that case. The historical sample check remains for untouched
-    // trajectories where this avoids walking a very long frames array.
-    const has_topology_ledger = trajectory.operation_ledger?.entries.some(
-      (entry) => entry.active &&
-        [`add`, `delete`, `supercell`].includes(entry.op.kind),
-    )
-    const count_check_indices = has_topology_ledger
-      ? frames.map((_, idx) => idx)
-      : [
-        0,
-        Math.floor(frames.length / 4),
-        Math.floor(frames.length / 2),
-        Math.floor(frames.length * 3 / 4),
-        frames.length - 1,
-      ]
-    const constant = count_check_indices.every(
-      (i) => (frames[i]?.structure.sites.length ?? first_count) === first_count,
+    // A saved frame-scoped edit no longer has an operation ledger after
+    // reload. Inspect every eager frame so an isolated middle-frame topology
+    // change cannot slip through the historical five-frame sample and create
+    // a fixed-width cache with the first frame's atom count.
+    const first_structure = frames[0].structure
+    const constant = frames.every((frame) =>
+      structures_share_topology(first_structure, frame.structure),
     )
     if (!constant) { position_cache = null; force_cache = null; return }
 
@@ -897,7 +893,11 @@
     const force_slow_path = traj_source === `doping_substitution` ||
       traj_source === `reaction_pathway`
     const compact = frame.position_data
-    const frame_topology_changed = compact?.topology_changed === true
+    const frame_topology_changed = compact?.topology_changed === true ||
+      !structures_share_topology(
+        trajectory?.frames[0]?.structure,
+        frame.structure,
+      )
     const frame_scoped_structure_ops = trajectory
       ? has_frame_scoped_structure_ops(trajectory)
       : false
@@ -918,7 +918,10 @@
       trajectory_frame_forces = compact.forces
       return
     }
-    if (position_cache && !force_slow_path) {
+    if (
+      position_cache && !frame_topology_changed && !force_slow_path &&
+      !frame_scoped_structure_ops
+    ) {
       // Architecture P fast-path: write current_structure once on trajectory
       // load (or new trajectory). Subsequent frames update only the Float32Array,
       // bypassing the displayed_structure cascade. Atom positions reach the
@@ -1845,6 +1848,10 @@
     const trajectory_source = metadata?.source_format ?? metadata?.type
     const positions_match_structure =
       positions.length === (sites?.length ?? 0) * 3
+    const topology_matches_base = structures_share_topology(
+      first_frame?.structure,
+      frame?.structure,
+    )
     return {
       frame_idx,
       positions,
@@ -1855,6 +1862,7 @@
       lattice: lattice ?? null,
       positions_version: trajectory_positions_version.v,
       topology_stable: positions_match_structure &&
+        topology_matches_base &&
         !(trajectory && has_frame_scoped_structure_ops(trajectory)) &&
         !frame?.position_data?.topology_changed &&
         trajectory_source !== `doping_substitution` &&
@@ -3071,6 +3079,7 @@
           {trajectory_frame_forces}
           {trajectory_frame_lattice}
           trajectory_step_idx={current_step_idx}
+          trajectory_is_playing={is_playing}
           trajectory_positions_version={trajectory_positions_version}
           trajectory_frame_count={total_frames}
           {get_trajectory_frame_source}

@@ -58,6 +58,7 @@
     get_majority_color,
     toggle_site_selection,
     clean_measured_sites,
+    resolve_packet_bond,
   } from './scene'
 
   // Extend Three.js prototypes with BVH acceleration (only once)
@@ -306,7 +307,9 @@
     finish_packet_pointer_gesture,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
+    set_hovered_packet_bond: handle_packet_bond_hover,
     set_hovered_bond_idx: (idx) => {
+      hovered_packet_bond_graph_idx = null
       if (idx === null || idx < 0 || idx >= filtered_bond_pairs.length) {
         if (hovered_bond_key !== null) hovered_bond_key = null
         return
@@ -386,11 +389,51 @@
     toggle_selection(site_idx, event)
   }
 
-  // Packet-path bond click — the replica ID pass already resolved the base
-  // bond graph index to a `filtered_bond_pairs` index.
-  function handle_packet_bond_click(bond_idx: number, event: MouseEvent) {
+  // Packet-path bond click/hover. Exact typed trajectory frames intentionally
+  // freeze filtered_bond_pairs, so the packet graph is the source of truth;
+  // filtered_idx is only a compatible fallback for the legacy path.
+  function handle_packet_bond_click(
+    graph_idx: number,
+    filtered_idx: number | null,
+    event: MouseEvent,
+  ) {
     if (bond_drag_active || external_dragging) return
-    select_bond_by_filtered_idx(bond_idx, event)
+    const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+    if (bond) {
+      select_bond(
+        bond.site_idx_1,
+        bond.site_idx_2,
+        bond.kind === BOND_KIND.MANUAL ? `manual` : `auto`,
+        event,
+        graph_idx,
+      )
+      return
+    }
+    if (filtered_idx !== null) select_bond_by_filtered_idx(filtered_idx, event)
+  }
+
+  function handle_packet_bond_hover(
+    graph_idx: number,
+    filtered_idx: number | null,
+  ) {
+    const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+    if (
+      bond && is_atom_pickable(bond.site_idx_1) &&
+      is_atom_pickable(bond.site_idx_2)
+    ) {
+      hovered_packet_bond_graph_idx = graph_idx
+      hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+      return
+    }
+    hovered_packet_bond_graph_idx = null
+    if (filtered_idx === null || filtered_idx < 0 || filtered_idx >= filtered_bond_pairs.length) {
+      hovered_bond_key = null
+      return
+    }
+    const legacy = filtered_bond_pairs[filtered_idx]
+    hovered_bond_key = is_bond_pickable(legacy)
+      ? get_bond_key(legacy.site_idx_1, legacy.site_idx_2)
+      : null
   }
 
   function setup_hover_detection() {
@@ -1936,9 +1979,21 @@
   let bond_pairs: BondPair[] = $state([])
   let active_tooltip = $state<`atom` | `bond` | null>(null)
   let hovered_bond_key = $state<string | null>(null)
+  let hovered_packet_bond_graph_idx = $state<number | null>(null)
 
-  // Clear stale hovered_bond_key when the bond disappears from filtered_bond_pairs
+  // Clear stale hover when the bond disappears from both the exact packet
+  // graph and the legacy object list.
   $effect(() => {
+    if (hovered_bond_key && hovered_packet_bond_graph_idx !== null) {
+      const exact = resolve_packet_bond(
+        manager_render_packet,
+        hovered_packet_bond_graph_idx,
+      )
+      if (
+        exact && get_bond_key(exact.site_idx_1, exact.site_idx_2) === hovered_bond_key
+      ) return
+      hovered_packet_bond_graph_idx = null
+    }
     if (hovered_bond_key && !filtered_bond_pairs.some(b =>
       get_bond_key(b.site_idx_1, b.site_idx_2) === hovered_bond_key
     )) {
@@ -5724,22 +5779,36 @@
   let bond_halo_entries = $derived.by(() => {
     const out: Array<{ key: string; matrix: number[] | Float32Array }> = []
     const seen = new Set<string>()
+
+    const exact_packet_matrix = (graph_idx: number, key: string) => {
+      const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+      if (!bond || get_bond_key(bond.site_idx_1, bond.site_idx_2) !== key) return null
+      return compute_bond_transform(bond.pos_1, bond.pos_2)
+    }
     if (hovered_bond_key) {
+      const exact_matrix = hovered_packet_bond_graph_idx === null
+        ? null
+        : exact_packet_matrix(hovered_packet_bond_graph_idx, hovered_bond_key)
       const b = filtered_bond_pairs.find(
         (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === hovered_bond_key,
       )
-      if (b) {
-        out.push({ key: hovered_bond_key, matrix: b.transform_matrix })
+      const matrix = exact_matrix ?? b?.transform_matrix
+      if (matrix) {
+        out.push({ key: hovered_bond_key, matrix })
         seen.add(hovered_bond_key)
       }
     }
     for (const sb of selected_bonds) {
       if (seen.has(sb.key)) continue
+      const exact_matrix = sb.graph_idx === undefined
+        ? null
+        : exact_packet_matrix(sb.graph_idx, sb.key)
       const b = filtered_bond_pairs.find(
         (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === sb.key,
       )
-      if (b) {
-        out.push({ key: sb.key, matrix: b.transform_matrix })
+      const matrix = exact_matrix ?? b?.transform_matrix
+      if (matrix) {
+        out.push({ key: sb.key, matrix })
         seen.add(sb.key)
       }
     }
@@ -6034,27 +6103,32 @@
 
   // Clear hovered bond when external dragging starts to prevent stale highlights
   $effect(() => {
-    if (external_dragging) hovered_bond_key = null
+    if (external_dragging) {
+      hovered_bond_key = null
+      hovered_packet_bond_graph_idx = null
+    }
   })
 
   // Bond hitbox interaction handlers using instanceId.
   // Each logical bond emits 2 hitbox instances (paired stubs / two halves);
   // decode `instanceId >>> 1` to the bond index. Hovering / clicking either
   // half resolves to the same bond.
-  // Shared bond-selection body for the legacy hitbox click AND the Visual T5
-  // packet-path click (which arrives with the filtered index pre-resolved).
-  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
-    if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
-    const bond = filtered_bond_pairs[bond_idx]
-    if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
+  function select_bond(
+    site_idx_1: number,
+    site_idx_2: number,
+    bond_type: `auto` | `manual`,
+    event?: Event,
+    graph_idx?: number,
+  ) {
+    if (!is_atom_pickable(site_idx_1) || !is_atom_pickable(site_idx_2)) return
     event?.stopPropagation?.()
-    const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
-    const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
-    const bond_info = {
+    const bond_key = get_bond_key(site_idx_1, site_idx_2)
+    const bond_info: import('./index').SelectedBond = {
       type: bond_type,
-      site_idx_1: bond.site_idx_1,
-      site_idx_2: bond.site_idx_2,
+      site_idx_1,
+      site_idx_2,
       key: bond_key,
+      ...(graph_idx === undefined ? {} : { graph_idx }),
     }
     if (bond_mode_active) {
       on_bond_select?.(bond_info)
@@ -6065,6 +6139,18 @@
         : [...selected_bonds, bond_info]
     }
     hovered_bond_key = null
+    hovered_packet_bond_graph_idx = null
+  }
+
+  // Shared legacy hitbox selection body. Packet clicks call select_bond()
+  // directly from the exact graph to avoid stale filtered_bond_pairs.
+  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
+    if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
+    const bond = filtered_bond_pairs[bond_idx]
+    if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
+    const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+    const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
+    select_bond(bond.site_idx_1, bond.site_idx_2, bond_type, event)
   }
 
   function handle_bond_hitbox_click(event: any) {
@@ -6762,6 +6848,17 @@
         const sel = selected_sites
         return sel && sel.length > 0 ? sel[sel.length - 1] : null
       },
+      get selected_bond_count(): number { return selected_bonds.length },
+      get_packet_bond_midpoint: (graph_idx: number): Vec3 | null => {
+        const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+        return bond
+          ? [
+              (bond.pos_1[0] + bond.pos_2[0]) * 0.5,
+              (bond.pos_1[1] + bond.pos_2[1]) * 0.5,
+              (bond.pos_1[2] + bond.pos_2[2]) * 0.5,
+            ]
+          : null
+      },
       reset: () => {
         __probe_atom_data_fires = 0
         __probe_atom_data_meaningful = 0
@@ -7161,7 +7258,7 @@
           onpointerleave={handle_bond_hitbox_pointer_leave}
         />
       {/if}
-      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
+      {#if bond_halo_entries.length > 0 && show_bulk_atoms}
         <!-- Bond halo (fresnel silhouette glow) — unified visual language
              with the atom selection halo. Renders for hovered + selected
              bonds; deduped via bond_halo_entries. depthTest:true so atoms

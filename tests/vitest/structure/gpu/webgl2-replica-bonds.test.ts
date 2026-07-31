@@ -446,6 +446,13 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
     expect(material.vertexShader).not.toMatch(/\bhalf\s*==/)
     expect(material.vertexShader).not.toContain(`a_half`)
     expect(material.vertexShader).not.toContain(`a_color`)
+    // Complete A/B halves have an open shared midpoint. Two closed,
+    // coplanar caps with different element colours z-fight into a jagged
+    // boundary at high zoom; exposed boundary stubs keep their real cap.
+    expect(material.vertexShader).toContain(`bool open_tip = inside`)
+    expect(material.vertexShader).toContain(`vOpenTip = open_tip`)
+    expect(material.fragmentShader).toContain(`vOpenTip`)
+    expect(material.fragmentShader).toContain(`if (vOpenTip < 0.5)`)
     // Flat (non-interpolated) per-instance cylinder frame + analytic ray-cast.
     expect(material.vertexShader).toContain(`flat varying`)
     expect(material.fragmentShader).toContain(`flat varying`)

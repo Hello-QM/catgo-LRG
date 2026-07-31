@@ -832,8 +832,9 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10, 11, 12]),
       ),
-    ).toEqual({ type: 'bond', filtered_idx: 12 })
-    // Orphan (-1), out-of-range, and missing maps degrade to null hits.
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: 12 })
+    // Orphan (-1), out-of-range, and missing legacy maps preserve the exact
+    // packet graph index so trajectory bond picking can bypass stale objects.
     expect(
       resolve_replica_pick_action(
         picked,
@@ -841,7 +842,7 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10, 11, -1]),
       ),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
     expect(
       resolve_replica_pick_action(
         picked,
@@ -849,10 +850,10 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10]),
       ),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
     expect(
       resolve_replica_pick_action(picked, 'visual-shared-base', site_ids, null),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
   })
 
   test('miss and out-of-range logical sites resolve to null', () => {
