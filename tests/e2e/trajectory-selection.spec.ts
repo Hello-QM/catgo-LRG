@@ -22,6 +22,10 @@ type Probe = {
     width: number
     height: number
   } | null
+  get_trackball_pointer_state: () => {
+    state: number
+    pointer_count: number
+  } | null
   selected_site_id: number | null
 }
 
@@ -89,4 +93,56 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
     null,
     { timeout: 5_000 },
   )
+
+  // A packet pick must finish the same pointer gesture that TrackballControls
+  // started. Otherwise its captured pointer remains in ROTATE state and the
+  // next hover-only mouse move rotates the structure without a button held.
+  await page.waitForTimeout(500)
+  const pointer_state = await page.evaluate(() =>
+    (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.get_trackball_pointer_state() ?? null,
+  )
+  expect(pointer_state).toEqual({ state: -1, pointer_count: 0 })
+  const view_before_hover = await page.evaluate(() =>
+    (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.get_camera_matrices()?.view ?? null,
+  )
+  expect(view_before_hover).not.toBeNull()
+  await page.mouse.move(box!.x + pixel!.x + 120, box!.y + pixel!.y + 80)
+  await page.waitForTimeout(300)
+  const view_after_hover = await page.evaluate(() =>
+    (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.get_camera_matrices()?.view ?? null,
+  )
+  expect(view_after_hover).toEqual(view_before_hover)
+
+  // Preserve click order for an angle: O(1) -> H(0) -> H(2) means H(0) is
+  // the vertex and therefore gives 0 degrees for this collinear fixture.
+  // Rendering every atom as a possible center would incorrectly show three
+  // labels instead of this one ordered A-B-C measurement.
+  const remaining = await page.evaluate(() => {
+    const probe = (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe
+    return {
+      matrices: probe?.get_camera_matrices() ?? null,
+      xyz_0: probe?.get_atom_xyz(0) ?? null,
+      xyz_2: probe?.get_atom_xyz(2) ?? null,
+    }
+  })
+  for (const xyz of [remaining.xyz_0, remaining.xyz_2]) {
+    expect(xyz).not.toBeNull()
+    const next_pixel = project_to_pixel(remaining.matrices, xyz!)
+    expect(next_pixel).not.toBeNull()
+    await page.mouse.click(
+      box!.x + next_pixel!.x,
+      box!.y + next_pixel!.y,
+    )
+  }
+  await expect(page.locator('.selection-limit-text')).toHaveText('3')
+  await page.locator('.measure-mode-dropdown .view-mode-button').click()
+  await page.locator('.measure-mode-dropdown .view-mode-option').nth(1).click()
+
+  const angle_labels = page.locator('.measure-label')
+  await expect(angle_labels).toHaveCount(1)
+  await expect(angle_labels).toHaveText(/^0(?:\.0+)?°$/)
 })

@@ -1116,6 +1116,6 @@ describe('packet path picking wiring (source contract)', () => {
       /window\.addEventListener\(\s*[`'"]pointerup[`'"]\s*,[^,]+,\s*true\s*\)/,
     )
     expect(integration_source).toContain('target === canvas.parentElement')
-    expect(integration_source).toContain('queueMicrotask')
+    expect(integration_source).toContain('pending_packet_click = setTimeout')
   })
 })

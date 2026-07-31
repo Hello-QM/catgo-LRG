@@ -6678,6 +6678,12 @@
         const target = orbit_controls?.target as Vector3 | undefined
         return target ? vector_to_vec3(target) : null
       },
+      get_trackball_pointer_state: () => {
+        const controls = orbit_controls as any
+        return controls
+          ? { state: controls.state, pointer_count: controls._pointers?.length ?? 0 }
+          : null
+      },
       get override_size(): number { return realtime_position_overrides?.size ?? 0 },
       get vibration_active(): boolean { return vibration_data?.playing === true },
       get is_playing(): boolean {
@@ -7389,55 +7395,50 @@
               {/each}
             {/each}
           {:else if measurement.type === 'angle' && measurement.sites.length >= 3}
-            <!-- Render all angle combinations — grouped under one measurement ID -->
-            {#each measurement.sites as idx_center (`${measurement.id}-center-${idx_center}`)}
-              {@const center = structure.sites[idx_center]}
-              {#if center}
-                {@const center_pos = realtime_position_overrides?.get(idx_center) ?? center.xyz}
-                {#each measurement.sites.filter((x) => x !== idx_center) as idx_a, loop_idx (`${measurement.id}-${idx_center}-${idx_a}`)}
-                  {#each measurement.sites.filter((x) => x !== idx_center).slice(loop_idx + 1) as idx_b (`${measurement.id}-${idx_center}-${idx_a}-${idx_b}`)}
-                    {@const site_a = structure.sites[idx_a]}
-                    {@const site_b = structure.sites[idx_b]}
-                    {#if site_a && site_b}
-                      {@const pos_a = realtime_position_overrides?.get(idx_a) ?? site_a.xyz}
-                      {@const pos_b = realtime_position_overrides?.get(idx_b) ?? site_b.xyz}
-                      {@const v1 = measure.displacement_pbc(center_pos, pos_a, lattice?.matrix)}
-                      {@const v2 = measure.displacement_pbc(center_pos, pos_b, lattice?.matrix)}
-                      {@const n1 = Math.hypot(v1[0], v1[1], v1[2])}
-                      {@const n2 = Math.hypot(v2[0], v2[1], v2[2])}
-                      {@const angle_deg = measure.angle_between_vectors(v1, v2, `degrees`)}
-                      {#if n1 > math.EPS && n2 > math.EPS}
-                        <Cylinder
-                          from={center_pos}
-                          to={pos_a}
-                          thickness={is_selected ? 0.07 : 0.05}
-                          color={is_selected ? '#ffcc00' : measure_line_color}
-                        />
-                        <Cylinder
-                          from={center_pos}
-                          to={pos_b}
-                          thickness={is_selected ? 0.07 : 0.05}
-                          color={is_selected ? '#ffcc00' : measure_line_color}
-                        />
-                        {@const bisector = math.add(math.scale(v1, 1 / n1), math.scale(v2, 1 / n2))}
-                        {@const bis_norm = Math.hypot(...bisector) || 1}
-                        {@const offset_dir = math.scale(bisector, 1 / bis_norm)}
-                        {@const label_pos = math.add(center_pos, math.scale(offset_dir, 0.6))}
-                        <extras.HTML center position={label_pos}>
-                          <span
-                            class="measure-label"
-                            class:selected={is_selected}
-                            data-measurement-id={measurement.id}
-                          >
-                            {format_num(angle_deg, float_fmt)}°
-                          </span>
-                        </extras.HTML>
-                      {/if}
-                    {/if}
-                  {/each}
-                {/each}
+            <!-- Ordered angle A-B-C: the second selected atom is the vertex. -->
+            {@const [idx_a, idx_center, idx_b] = measurement.sites}
+            {@const site_a = structure.sites[idx_a]}
+            {@const center = structure.sites[idx_center]}
+            {@const site_b = structure.sites[idx_b]}
+            {#if site_a && center && site_b}
+              {@const pos_a = realtime_position_overrides?.get(idx_a) ?? site_a.xyz}
+              {@const center_pos = realtime_position_overrides?.get(idx_center) ?? center.xyz}
+              {@const pos_b = realtime_position_overrides?.get(idx_b) ?? site_b.xyz}
+              {@const v1 = measure.displacement_pbc(center_pos, pos_a, lattice?.matrix)}
+              {@const v2 = measure.displacement_pbc(center_pos, pos_b, lattice?.matrix)}
+              {@const n1 = Math.hypot(v1[0], v1[1], v1[2])}
+              {@const n2 = Math.hypot(v2[0], v2[1], v2[2])}
+              {@const angle_deg = measure.angle_between_vectors(v1, v2, `degrees`)}
+              {#if n1 > math.EPS && n2 > math.EPS}
+                {@const display_pos_a = math.add(center_pos, v1)}
+                {@const display_pos_b = math.add(center_pos, v2)}
+                <Cylinder
+                  from={center_pos}
+                  to={display_pos_a}
+                  thickness={is_selected ? 0.07 : 0.05}
+                  color={is_selected ? '#ffcc00' : measure_line_color}
+                />
+                <Cylinder
+                  from={center_pos}
+                  to={display_pos_b}
+                  thickness={is_selected ? 0.07 : 0.05}
+                  color={is_selected ? '#ffcc00' : measure_line_color}
+                />
+                {@const bisector = math.add(math.scale(v1, 1 / n1), math.scale(v2, 1 / n2))}
+                {@const bis_norm = Math.hypot(...bisector) || 1}
+                {@const offset_dir = math.scale(bisector, 1 / bis_norm)}
+                {@const label_pos = math.add(center_pos, math.scale(offset_dir, 0.6))}
+                <extras.HTML center position={label_pos}>
+                  <span
+                    class="measure-label"
+                    class:selected={is_selected}
+                    data-measurement-id={measurement.id}
+                  >
+                    {format_num(angle_deg, float_fmt)}°
+                  </span>
+                </extras.HTML>
               {/if}
-            {/each}
+            {/if}
           {:else if measurement.type === 'dihedral' && measurement.sites.length >= 4}
             <!-- Dihedral angle: 4 atoms A-B-C-D, angle between planes ABC and BCD -->
             {@const [idx_a, idx_b, idx_c, idx_d] = measurement.sites}

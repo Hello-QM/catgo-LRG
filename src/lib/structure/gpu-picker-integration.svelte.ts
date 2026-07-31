@@ -714,6 +714,7 @@ export function setup_hover_detection(
   // A pointerdown/click distance guard keeps orbit drags from selecting.
   let click_down_x = 0
   let click_down_y = 0
+  let pending_packet_click: ReturnType<typeof setTimeout> | undefined
   const targets_canvas_surface = (target: EventTarget | null): boolean =>
     target === canvas || target === canvas.parentElement
   function handle_pointer_down(event: PointerEvent) {
@@ -758,13 +759,20 @@ export function setup_hover_detection(
         deps.get_cutting_visibility_map(),
       )
     ) {
-      // Defer the selection mutation until the pointerup dispatch has
-      // completed. toggle_selection() stops propagation for Threlte events;
-      // doing that from a capture listener would prevent TrackballControls
-      // from seeing pointerup and could leave the camera gesture stuck.
-      queueMicrotask(() => deps.on_packet_atom_click?.(action.site_idx, event))
+      // This listener runs in window capture, before TrackballControls sees
+      // pointerup on its DOM element. A microtask is still early enough in
+      // Chromium to stop that event's propagation, leaving TrackballControls
+      // in ROTATE with a captured pointer. Cross a task boundary so the camera
+      // gesture always finishes before selection mutates reactive state.
+      pending_packet_click = setTimeout(() => {
+        pending_packet_click = undefined
+        deps.on_packet_atom_click?.(action.site_idx, event)
+      }, 0)
     } else if (action?.type === `bond`) {
-      queueMicrotask(() => deps.on_packet_bond_click?.(action.filtered_idx, event))
+      pending_packet_click = setTimeout(() => {
+        pending_packet_click = undefined
+        deps.on_packet_bond_click?.(action.filtered_idx, event)
+      }, 0)
     }
   }
 
@@ -784,6 +792,7 @@ export function setup_hover_detection(
     canvas.removeEventListener(`pointerleave`, handle_hover_leave)
     window.removeEventListener(`pointerdown`, handle_pointer_down, true)
     window.removeEventListener(`pointerup`, handle_pointer_up, true)
+    if (pending_packet_click !== undefined) clearTimeout(pending_packet_click)
     if (raf_id !== 0) {
       cancelAnimationFrame(raf_id)
       raf_id = 0
