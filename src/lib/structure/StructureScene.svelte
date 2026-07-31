@@ -303,6 +303,7 @@
     // semantics), and bond picks carry the base bond GRAPH index.
     get_render_packet: () =>
       combined_packet_renderer_owned ? manager_render_packet : null,
+    finish_packet_pointer_gesture,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
     set_hovered_bond_idx: (idx) => {
@@ -317,6 +318,49 @@
       }
       hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
     },
+  }
+
+  /**
+   * Finish the exact TrackballControls pointer started by a packet pick.
+   *
+   * VS Code-family webviews can consume pointerup in capture before it reaches
+   * the controls' DOM element. Three.js then keeps `state=ROTATE`, the pointer
+   * entry, capture listeners, and every later hover-only move rotates the
+   * camera. This mirrors TrackballControls.onPointerUp for the mouse path and
+   * is deliberately idempotent: in a normal browser the native pointerup has
+   * already removed the entry by the time this can be called again.
+   */
+  function finish_packet_pointer_gesture(event: PointerEvent) {
+    const controls = orbit_controls as any
+    const pointers = controls?._pointers
+    if (!Array.isArray(pointers)) return
+    const pointer_idx = pointers.findIndex(
+      (pointer: PointerEvent) => pointer.pointerId === event.pointerId,
+    )
+    if (pointer_idx < 0) return
+
+    if (typeof controls._onMouseUp === `function`) controls._onMouseUp()
+    else {
+      controls.state = -1
+      controls.dispatchEvent?.({ type: `end` })
+    }
+    if (controls._pointerPositions) {
+      delete controls._pointerPositions[event.pointerId]
+    }
+    pointers.splice(pointer_idx, 1)
+    if (pointers.length > 0) return
+
+    const dom = controls.domElement as HTMLElement | undefined
+    if (!dom) return
+    try {
+      if (dom.hasPointerCapture?.(event.pointerId)) {
+        dom.releasePointerCapture(event.pointerId)
+      }
+    } catch {
+      // Chromium may auto-release capture before this host-level fallback.
+    }
+    dom.removeEventListener(`pointermove`, controls._onPointerMove)
+    dom.removeEventListener(`pointerup`, controls._onPointerUp)
   }
 
   // Packet-path atom click — same mode routing as the Threlte interaction

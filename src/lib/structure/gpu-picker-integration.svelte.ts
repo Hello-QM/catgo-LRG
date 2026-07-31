@@ -81,6 +81,9 @@ export interface GpuPickerDeps {
    * bond GRAPH index through `get_slot_to_filtered_idx`.
    */
   get_render_packet?: () => RenderPacket | null
+  /** End the camera pointer gesture before a packet click mutates selection.
+   *  Some embedded webviews consume pointerup before TrackballControls sees it. */
+  finish_packet_pointer_gesture?: (event: PointerEvent) => void
   on_packet_atom_click?: (site_idx: number, event: MouseEvent) => void
   on_packet_bond_click?: (filtered_idx: number, event: MouseEvent) => void
   set_hovered_bond_idx?: (filtered_idx: number | null) => void
@@ -759,6 +762,7 @@ export function setup_hover_detection(
         deps.get_cutting_visibility_map(),
       )
     ) {
+      deps.finish_packet_pointer_gesture?.(event)
       // This listener runs in window capture, before TrackballControls sees
       // pointerup on its DOM element. A microtask is still early enough in
       // Chromium to stop that event's propagation, leaving TrackballControls
@@ -769,6 +773,7 @@ export function setup_hover_detection(
         deps.on_packet_atom_click?.(action.site_idx, event)
       }, 0)
     } else if (action?.type === `bond`) {
+      deps.finish_packet_pointer_gesture?.(event)
       pending_packet_click = setTimeout(() => {
         pending_packet_click = undefined
         deps.on_packet_bond_click?.(action.filtered_idx, event)

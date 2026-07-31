@@ -85,6 +85,17 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   })
   expect(packet_path_active).toBe(true)
 
+  // VS Code/Antigravity webviews may consume pointerup in a capture listener
+  // before it reaches Threlte's TrackballControls DOM element. Reproduce that
+  // host-specific path while still allowing the picker window-capture handler
+  // to run first.
+  await page.evaluate(() => {
+    const consume_pointer_up = (event: PointerEvent) => {
+      document.removeEventListener('pointerup', consume_pointer_up, true)
+      event.stopPropagation()
+    }
+    document.addEventListener('pointerup', consume_pointer_up, true)
+  })
   await page.mouse.click(box!.x + pixel!.x, box!.y + pixel!.y)
 
   await page.waitForFunction(
