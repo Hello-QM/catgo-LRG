@@ -48,12 +48,12 @@ describe(`file-backed XYZ reader`, () => {
   test(`seeks individual frames and preserves variable topology verdicts`, async () => {
     const file_path = await fixture([
       `2`,
-      `Lattice="10 0 0 0 10 0 0 0 10" energy=-1`,
-      `H 0 0 0`,
-      `H 1 0 0`,
+      `Lattice="10 0 0 0 10 0 0 0 10" Properties=species:S:1:pos:R:3:force:R:3 energy=-1`,
+      `H 0 0 0 0.1 0.2 0.3`,
+      `H 1 0 0 -0.1 -0.2 -0.3`,
       `1`,
-      `Lattice="11 0 0 0 11 0 0 0 11" energy=-2`,
-      `O 2 0 0`,
+      `Lattice="11 0 0 0 11 0 0 0 11" Properties=species:S:1:pos:R:3:force:R:3 energy=-2`,
+      `O 2 0 0 0.4 0.5 0.6`,
     ].join(`\n`))
     const loader = await NodeXYZFrameLoader.create(file_path, `trajectory.extxyz`)
 
@@ -62,7 +62,14 @@ describe(`file-backed XYZ reader`, () => {
       const first = await loader.load_frame(``, 0)
       const second = await loader.load_frame_positions(``, 1)
       expect(first?.structure.sites).toHaveLength(2)
+      expect(first?.metadata?.forces).toEqual([
+        [0.1, 0.2, 0.3],
+        [-0.1, -0.2, -0.3],
+      ])
       expect(Array.from(second?.positions ?? [])).toEqual([2, 0, 0])
+      expect(Array.from(second?.forces ?? [])).toEqual([
+        expect.closeTo(0.4), expect.closeTo(0.5), expect.closeTo(0.6),
+      ])
       expect(second?.topology_changed).toBe(true)
       expect(second?.lattice).toEqual([
         [11, 0, 0],

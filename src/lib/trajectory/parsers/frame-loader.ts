@@ -38,7 +38,7 @@ function xyz_property_columns(comment: string): XyzPropertyColumns {
   for (let idx = 0; idx + 2 < fields.length; idx += 3) {
     const name = fields[idx].replace(/^['"]|['"]$/g, ``)
     const count = parseInt(fields[idx + 2], 10) || 0
-    if (name === `forces`) columns.forces = column
+    if (name === `forces` || name === `force`) columns.forces = column
     else if (name === `move_mask`) columns.move_mask = column
     else if (name === `selective_dynamics`) columns.selective_dynamics = column
     column += count

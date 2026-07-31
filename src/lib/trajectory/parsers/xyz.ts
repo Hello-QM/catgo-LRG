@@ -77,7 +77,7 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
       for (let f = 0; f + 2 < fields.length; f += 3) {
         const name = fields[f]
         const count = parseInt(fields[f + 2], 10) || 0
-        if (name === `forces`) forces_col = col
+        if (name === `forces` || name === `force`) forces_col = col
         else if (name === `move_mask`) move_mask_col = col
         else if (name === `selective_dynamics`) selective_dynamics_col = col
         col += count
@@ -85,7 +85,8 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
     }
     // Backwards-compat: legacy comments without a Properties field but with
     // 7+ tokens per atom line are treated as having forces at columns 4-6.
-    const has_forces_legacy = forces_col < 0 && comment.includes(`forces:R:3`)
+    const has_forces_legacy = forces_col < 0 &&
+      (comment.includes(`forces:R:3`) || comment.includes(`force:R:3`))
 
     // Parse atoms
     const positions: number[][] = []

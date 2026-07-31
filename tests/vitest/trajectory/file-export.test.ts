@@ -102,6 +102,30 @@ describe(`trajectory structure-file export`, () => {
       .toEqual([false, true, false])
   })
 
+  it(`accepts singular force:R:3 columns used by MACE datasets`, () => {
+    const content = `2
+Properties=species:S:1:pos:R:3:force:R:3 energy=-1.5
+Li 0 0 0 0.1 0.2 0.3
+P 1 1 1 -0.1 -0.2 -0.3
+`
+    const eager = parse_xyz_trajectory(content).frames[0]
+    expect(eager.metadata?.forces).toEqual([
+      [0.1, 0.2, 0.3],
+      [-0.1, -0.2, -0.3],
+    ])
+
+    const indexed = new TrajFrameReader(`mace.extxyz`)
+      .load_xyz_frame_chunk(content, 0)
+    expect(indexed?.metadata?.forces).toEqual([
+      [0.1, 0.2, 0.3],
+      [-0.1, -0.2, -0.3],
+    ])
+    expect(Array.from(indexed?.position_data?.forces ?? [])).toEqual([
+      expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.3),
+      expect.closeTo(-0.1), expect.closeTo(-0.2), expect.closeTo(-0.3),
+    ])
+  })
+
   it(`exports separate numbered POSCAR files with selective dynamics`, async () => {
     const constrained = apply_trajectory_edit_op_to_frame(frame(8), {
       kind: `set_selective_dynamics`,
