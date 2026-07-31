@@ -156,4 +156,37 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   const angle_labels = page.locator('.measure-label')
   await expect(angle_labels).toHaveCount(1)
   await expect(angle_labels).toHaveText(/^0(?:\.0+)?°$/)
+
+  // A topology edit must invalidate the compact three-atom coordinate packet.
+  // Otherwise the renderer combines 9 old position values with the new
+  // four-atom topology and replaces the viewer with a fatal error page.
+  await page.locator('.pencil-toggle').click()
+  await expect(page.locator('.pencil-toggle')).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  const add_state = await page.evaluate(() => {
+    const probe = (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe
+    return {
+      xyz: probe?.get_atom_xyz(1) ?? null,
+      matrices: probe?.get_camera_matrices() ?? null,
+    }
+  })
+  const add_anchor = project_to_pixel(add_state.matrices, add_state.xyz!)
+  expect(add_anchor).not.toBeNull()
+  const anchor_x = box!.x + add_anchor!.x
+  const anchor_y = box!.y + add_anchor!.y
+  await page.mouse.click(anchor_x, anchor_y)
+  await page.mouse.move(anchor_x + 80, anchor_y + 40, { steps: 4 })
+  await page.mouse.click(anchor_x + 80, anchor_y + 40)
+
+  await page.waitForFunction(
+    () => (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.get_atom_xyz(3) != null,
+    null,
+    { timeout: 5_000 },
+  )
+  await expect(page.locator('.trajectory-controls')).toBeVisible()
+  await expect(page.getByText(/position values for 4 atoms/)).toHaveCount(0)
 })

@@ -83,6 +83,9 @@ export function frame_with_supercell_execution(
   return {
     ...frame,
     structure: execution.structure,
+    // The compact coordinate packet belongs to the pre-supercell topology.
+    // Derived typed buffers are rebuilt from execution.structure after commit.
+    position_data: undefined,
     metadata: {
       ...frame.metadata,
       [SUPER_CELL_PROVENANCE_METADATA_KEY]: execution.provenance,

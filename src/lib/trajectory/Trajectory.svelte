@@ -894,7 +894,13 @@
       traj_source === `reaction_pathway`
     const compact = frame.position_data
     const frame_topology_changed = compact?.topology_changed === true
-    if (compact && !frame_topology_changed && !force_slow_path) {
+    const frame_scoped_structure_ops = trajectory
+      ? has_frame_scoped_structure_ops(trajectory)
+      : false
+    if (
+      compact && !frame_topology_changed && !force_slow_path &&
+      !frame_scoped_structure_ops
+    ) {
       // Remote constant-topology frames arrive as flat coordinates. Keep the
       // first frame's structure as topology and publish the packet directly;
       // this avoids allocating a 20k-object site graph on every timer tick.
@@ -950,9 +956,6 @@
       const supercell_ledger_active = trajectory?.operation_ledger?.entries.some(
         (entry) => entry.active && entry.op.kind === `supercell`,
       )
-      const frame_scoped_structure_ops = trajectory
-        ? has_frame_scoped_structure_ops(trajectory)
-        : false
       if (
         supercell_ledger_active && topology_initialized && current_structure &&
         current_structure.sites.length !== frame_sites.length
@@ -1836,6 +1839,8 @@
       | { source_format?: string; type?: string }
       | undefined
     const trajectory_source = metadata?.source_format ?? metadata?.type
+    const positions_match_structure =
+      positions.length === (sites?.length ?? 0) * 3
     return {
       frame_idx,
       positions,
@@ -1845,7 +1850,9 @@
         null,
       lattice: lattice ?? null,
       positions_version: trajectory_positions_version.v,
-      topology_stable: !frame?.position_data?.topology_changed &&
+      topology_stable: positions_match_structure &&
+        !(trajectory && has_frame_scoped_structure_ops(trajectory)) &&
+        !frame?.position_data?.topology_changed &&
         trajectory_source !== `doping_substitution` &&
         trajectory_source !== `reaction_pathway`,
     }

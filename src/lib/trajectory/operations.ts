@@ -89,9 +89,16 @@ export function apply_trajectory_edit_op_to_frame(
       op.kind === `replace` || op.kind === `manipulate`
     ? break_frame_supercell_provenance(frame)
     : frame
+  const structure = apply_trajectory_edit_op(source.structure, op)
   return {
     ...source,
-    structure: apply_trajectory_edit_op(source.structure, op),
+    structure,
+    // Compact packets describe the pre-edit frame. Keeping one after a
+    // physical/topology edit lets the exact trajectory renderer combine, for
+    // example, 304×3 old coordinates with a new 305-atom topology. Drop it so
+    // the edited structure becomes the source of truth; the frame-position
+    // cache will rebuild a correctly-sized typed packet when appropriate.
+    position_data: undefined,
   }
 }
 
