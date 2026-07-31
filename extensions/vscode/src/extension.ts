@@ -116,6 +116,7 @@ export interface MessageData {
   file_size?: number
   content?: string
   is_binary?: boolean
+  error?: string
   file_path?: string
   // Add frame loading support
   request_id?: string
@@ -1182,7 +1183,7 @@ export const render = async (
 
 // How long a save waits for the webview's `content` reply before failing the
 // save (error surfaced, document stays dirty) instead of hanging forever.
-const CONTENT_REQUEST_TIMEOUT_MS = 15_000
+const CONTENT_REQUEST_TIMEOUT_MS = 300_000
 
 // Custom editor provider for CatGo files. Editable: structural edits happen in
 // the webview, which flags the document dirty and answers a content request on
@@ -1270,6 +1271,11 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
             if (pending) {
               clearTimeout(pending.timer)
               this.pending_content.delete(msg.request_id)
+              if (msg.error) {
+                pending.reject(new Error(msg.error))
+                vscode.window.showErrorMessage(msg.error)
+                return
+              }
               pending.resolve({
                 content: msg.content ?? ``,
                 is_binary: !!msg.is_binary,

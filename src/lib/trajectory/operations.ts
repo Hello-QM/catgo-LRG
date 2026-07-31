@@ -23,6 +23,10 @@ export type TrajectoryEditOp =
   | { kind: `add`; element: ElementSymbol; position: Vec3 }
   | { kind: `replace`; site_indices: number[]; new_element: ElementSymbol }
   | { kind: `manipulate`; displacements: Map<number, Vec3> }
+  | {
+    kind: `set_selective_dynamics`
+    values: Array<[boolean, boolean, boolean] | null>
+  }
   | SupercellOp
 
 /**
@@ -67,6 +71,17 @@ export function apply_trajectory_edit_op(
         sites: apply_displacements(structure.sites, op.displacements, inverse),
       }
     }
+    case `set_selective_dynamics`:
+      return {
+        ...structure,
+        sites: structure.sites.map((site, idx) => {
+          const value = op.values[idx]
+          const properties = { ...site.properties }
+          if (value) properties.selective_dynamics = [...value]
+          else delete properties.selective_dynamics
+          return { ...site, properties }
+        }),
+      }
     case `supercell`:
       return execute_supercell_op_sync(
         structure as PymatgenStructure,
@@ -98,7 +113,9 @@ export function apply_trajectory_edit_op_to_frame(
     // example, 304×3 old coordinates with a new 305-atom topology. Drop it so
     // the edited structure becomes the source of truth; the frame-position
     // cache will rebuild a correctly-sized typed packet when appropriate.
-    position_data: undefined,
+    position_data: op.kind === `set_selective_dynamics`
+      ? source.position_data
+      : undefined,
   }
 }
 

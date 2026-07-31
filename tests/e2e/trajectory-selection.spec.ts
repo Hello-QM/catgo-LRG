@@ -229,4 +229,62 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   )
   await expect(page.locator('.trajectory-controls')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Error' })).toHaveCount(0)
+
+  // Structure-file exports are separate from video/image export: the visible
+  // frame downloads as one POSCAR, while a selected range can be downloaded
+  // as numbered POSCAR files in a ZIP. The current-frame path must work after
+  // topology edits and playback, not just on the initial eager frame.
+  if (await page.evaluate(() => Boolean(
+    (globalThis as typeof globalThis & { __catgo_traj_is_playing?: boolean })
+      .__catgo_traj_is_playing,
+  ))) await play.click()
+  const export_toggle = page.locator('.trajectory-export-toggle')
+  // Dispatch directly because the preceding pencil gesture intentionally
+  // exercises host-level pointer capture/swallowing; this assertion is about
+  // the export workflow rather than another pointer-routing round trip.
+  await export_toggle.dispatchEvent(`click`)
+  await expect(export_toggle).toHaveAttribute(`aria-expanded`, `true`)
+  const export_pane = page.locator('.export-pane')
+  await expect(export_pane).toBeVisible()
+  await expect(export_pane.locator('.trajectory-extxyz-export')).toBeVisible()
+  await expect(export_pane.locator('.current-poscar-export')).toBeVisible()
+  await expect(export_pane.locator('.poscar-sequence-export')).toBeVisible()
+
+  await page.evaluate(() => {
+    ;(globalThis as typeof globalThis & {
+      __catgo_export_capture?: { filename: string; content: string }
+      download?: (data: string | Blob, filename: string) => Promise<void>
+    }).download = async (data, filename) => {
+      const content = typeof data === `string` ? data : await data.text()
+      ;(globalThis as typeof globalThis & {
+        __catgo_export_capture?: { filename: string; content: string }
+      }).__catgo_export_capture = { filename, content }
+    }
+  })
+  await export_pane.locator('.current-poscar-export').dispatchEvent(`click`)
+  await page.waitForFunction(() => Boolean(
+    (globalThis as typeof globalThis & { __catgo_export_capture?: unknown })
+      .__catgo_export_capture,
+  ))
+  const poscar_download = await page.evaluate(() =>
+    (globalThis as typeof globalThis & {
+      __catgo_export_capture?: { filename: string; content: string }
+    }).__catgo_export_capture!,
+  )
+  expect(poscar_download.filename).toMatch(
+    /^trajectory-selection_frame_\d{4}\.vasp$/,
+  )
+  expect(poscar_download.content).toContain(`1.0`)
+  expect(poscar_download.content).toMatch(/Direct|Cartesian/)
+
+  // Trajectory edits must enter the same dirty/close guard as ordinary
+  // structures. A tab close now offers Save & Close instead of silently
+  // discarding the edited trajectory.
+  await page.getByRole(`button`, { name: `Close tab` }).first().click()
+  const close_dialog = page.locator(`.modal-dialog`).filter({
+    has: page.locator(`.modal-btn.save`),
+  })
+  await expect(close_dialog).toBeVisible()
+  await expect(close_dialog.locator(`.modal-btn.save`)).toBeVisible()
+  await close_dialog.locator(`.modal-btn.cancel`).click()
 })

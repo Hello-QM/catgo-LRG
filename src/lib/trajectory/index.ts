@@ -26,6 +26,20 @@ export interface TrajectoryFrame {
   position_data?: FramePositionData
 }
 
+/** Resolve one fully materialized frame for editing/export consumers. */
+export type TrajectoryFrameResolver = (
+  frame_idx: number,
+) => Promise<TrajectoryFrame | null>
+
+/** Source-format save result registered by the trajectory viewer. */
+export interface TrajectorySaveContent {
+  content: string
+  filename: string
+  is_binary: boolean
+}
+
+export type TrajectorySaveHandler = () => Promise<TrajectorySaveContent>
+
 export interface FrameIndex {
   frame_number: number
   byte_offset: number

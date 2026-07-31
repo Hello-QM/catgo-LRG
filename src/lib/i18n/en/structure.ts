@@ -519,6 +519,11 @@ const structure: Record<string, string> = {
   canvas_not_ready: `Canvas not ready`,
   invalid_frame_range: `Invalid frame range`,
   export_xyz_hint: `Export frames {start}-{end} as multi-frame XYZ`,
+  export_extxyz_hint: `Export edited frames {start}-{end} as a multi-frame extXYZ trajectory`,
+  current_poscar: `Current POSCAR`,
+  poscar_sequence: `POSCAR Sequence`,
+  export_current_poscar_hint: `Export the currently displayed frame {frame} as a POSCAR/VASP file (including selective-dynamics constraints)`,
+  export_poscar_sequence_hint: `Export frames {start}-{end} as separate numbered POSCAR/VASP files in a ZIP`,
   export_png_sequence_hint: `Export frames as numbered PNGs in a ZIP`,
   export_webm_hint: `Export as WebM video`,
   export_mp4_hint:

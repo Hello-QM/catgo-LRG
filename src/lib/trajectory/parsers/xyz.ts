@@ -70,6 +70,7 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
     const props_match = comment.match(/Properties\s*=\s*(\S+)/i)
     let forces_col = -1
     let move_mask_col = -1
+    let selective_dynamics_col = -1
     if (props_match) {
       const fields = props_match[1].split(`:`)
       let col = 0
@@ -78,6 +79,7 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
         const count = parseInt(fields[f + 2], 10) || 0
         if (name === `forces`) forces_col = col
         else if (name === `move_mask`) move_mask_col = col
+        else if (name === `selective_dynamics`) selective_dynamics_col = col
         col += count
       }
     }
@@ -90,6 +92,7 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
     const elements: ElementSymbol[] = []
     const forces: number[][] = []
     const move_mask: boolean[] = []
+    const selective_dynamics: [boolean, boolean, boolean][] = []
 
     for (let i = 0; i < num_atoms && ++line_idx < lines.length; i++) {
       const parts = lines[line_idx].trim().split(/\s+/)
@@ -112,6 +115,12 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
           const tok = parts[move_mask_col].toUpperCase()
           move_mask.push(tok === `T` || tok === `TRUE` || tok === `1`)
         }
+        if (selective_dynamics_col >= 0 && parts.length >= selective_dynamics_col + 3) {
+          const flags = parts.slice(selective_dynamics_col, selective_dynamics_col + 3)
+            .map((token) => [`T`, `TRUE`, `1`].includes(token.toUpperCase())) as
+              [boolean, boolean, boolean]
+          selective_dynamics.push(flags)
+        }
       }
     }
     if (forces.length > 0) {
@@ -130,8 +139,12 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
         mags.reduce((sum, mag) => sum + mag ** 2, 0) / mags.length,
       )
     }
-    frames.push(
-      create_trajectory_frame(
+    const frame_move_mask = move_mask.length === positions.length
+      ? move_mask
+      : selective_dynamics.length === positions.length
+      ? selective_dynamics.map((flags) => flags.some(Boolean))
+      : undefined
+    const frame = create_trajectory_frame(
         positions,
         elements,
         lattice_matrix,
@@ -142,8 +155,18 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
         // not threaded through to site properties to avoid affecting
         // downstream consumers that read forces from metadata.
         undefined,
-        move_mask.length > 0 ? move_mask : undefined,
-      ),
+        frame_move_mask,
+      )
+    if (selective_dynamics.length === positions.length) {
+      frame.structure.sites.forEach((site, idx) => {
+        site.properties = {
+          ...site.properties,
+          selective_dynamics: selective_dynamics[idx],
+        }
+      })
+    }
+    frames.push(
+      frame,
     )
     line_idx++
   }

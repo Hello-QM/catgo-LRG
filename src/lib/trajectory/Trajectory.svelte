@@ -41,9 +41,15 @@
     FramePositionData,
     TrajectoryDataExtractor,
     TrajectoryFrame,
+    TrajectorySaveContent,
+    TrajectorySaveHandler,
     TrajectoryType,
     TrajHandlerData,
   } from './index'
+  import {
+    editable_trajectory_source,
+    serialize_extxyz_frame_range,
+  } from './file-export'
   import { TrajectoryError, TrajectoryExportPane, TrajectoryInfoPane } from './index'
   import type { LoadingOptions } from './parse'
   import {
@@ -127,6 +133,8 @@
     on_fullscreen_change?: (data: TrajHandlerData) => void
     on_file_load?: (data: TrajHandlerData) => void
     on_error?: (data: TrajHandlerData) => void
+    on_trajectory_change?: (data: TrajHandlerData) => void
+    on_save_handler_change?: (handler: TrajectorySaveHandler | null) => void
   }
 
   let {
@@ -159,6 +167,8 @@
     on_fullscreen_change,
     on_file_load,
     on_error,
+    on_trajectory_change,
+    on_save_handler_change,
     fps_range = DEFAULTS.trajectory.fps_range,
     fps = $bindable(5),
     loading_options = {},
@@ -274,6 +284,10 @@
     pane_number?: number
     filename?: string | null
     is_active?: boolean
+    // User-edit notification for host dirty-state tracking.
+    on_trajectory_change?: (data: TrajHandlerData) => void
+    // Registers an async source-format serializer for Ctrl+S / close guards.
+    on_save_handler_change?: (handler: TrajectorySaveHandler | null) => void
   } = $props()
 
   // PNG sequence export settings
@@ -2008,7 +2022,70 @@
     else owner.effective_frames?.invalidate(scope.frame_idx)
     frame_pos_cache.clear()
     warmup_gen += 1
+    on_trajectory_change?.({
+      trajectory: owner,
+      step_idx: presented_step_idx,
+      frame_count: total_frames,
+      filename: current_filename ?? filename ?? undefined,
+    })
   }
+
+  /** Resolve the fully edited frame for save/export. This is deliberately the
+   * same path for small in-memory trajectories and lazy/indexed trajectories:
+   * no export is allowed to bypass the pane operation ledger. */
+  async function resolve_export_frame(frame_idx: number): Promise<TrajectoryFrame | null> {
+    const owner = trajectory
+    if (!owner || frame_idx < 0 || frame_idx >= total_frames) return null
+    if (!owner.frame_loader) {
+      materialize_frame(frame_idx)
+      return owner.frames[frame_idx] ?? null
+    }
+    const loader = owner.frame_loader
+    const source_data = owner.frame_source_data ?? untrack(() => orig_data) ?? ``
+    ensure_operation_ledger(owner)
+    const frame = await owner.effective_frames?.resolve(
+      frame_idx,
+      (idx) => loader.load_frame(source_data, idx),
+    )
+    return trajectory === owner ? frame ?? null : null
+  }
+
+  async function serialize_edited_trajectory_source(
+    owner: TrajectoryType,
+    source_name: string,
+  ): Promise<TrajectorySaveContent> {
+    const format = editable_trajectory_source(source_name)
+    if (!format) {
+      throw new Error(
+        `CatGo cannot overwrite ${source_name || `this trajectory`} in its source format. ` +
+          `Use extXYZ, Current POSCAR, or POSCAR Sequence in Export Trajectory.`,
+      )
+    }
+    if (trajectory !== owner) throw new Error(`The trajectory changed before it could be saved.`)
+    const count = owner.total_frames || owner.frames.length
+    const content = await serialize_extxyz_frame_range(
+      0,
+      count - 1,
+      resolve_export_frame,
+    )
+    if (trajectory !== owner) throw new Error(`The trajectory changed before it could be saved.`)
+    return {
+      content,
+      filename: source_name,
+      is_binary: false,
+    }
+  }
+
+  $effect(() => {
+    const owner = trajectory
+    const source_name = current_filename ?? filename ?? ``
+    if (!on_save_handler_change) return
+    const handler: TrajectorySaveHandler | null = owner
+      ? () => serialize_edited_trajectory_source(owner, source_name)
+      : null
+    untrack(() => on_save_handler_change(handler))
+    return () => untrack(() => on_save_handler_change(null))
+  })
 
   // ── External history (Build T5) ──
   // Structure's undo/redo routes `{kind:'external'}` entries back here by
@@ -2096,6 +2173,12 @@
         trajectory_topology_version += 1
         if (trajectory === owner) {
           trajectory = mark_raw_trajectory({ ...owner })
+          on_trajectory_change?.({
+            trajectory: owner,
+            step_idx: presented_step_idx,
+            frame_count: total_frames,
+            filename: current_filename ?? filename ?? undefined,
+          })
         }
       },
       history_token: (entry) => {
@@ -2140,10 +2223,19 @@
         return frame ? { frame_idx: idx, frame } : undefined
       }
       : undefined
-    return toggle_supercell_history_entry(
+    const changed = toggle_supercell_history_entry(
       { entry_id, active, scope, restore },
       trajectory_supercell_txn_hooks(owner, ledger),
     )
+    if (changed) {
+      on_trajectory_change?.({
+        trajectory: owner,
+        step_idx: presented_step_idx,
+        frame_count: total_frames,
+        filename: current_filename ?? filename ?? undefined,
+      })
+    }
+    return changed
   }
 
   const request_trajectory_supercell = create_trajectory_supercell_request_handler({
@@ -2289,6 +2381,45 @@
 
   function handle_atom_replaced(event: { site_indices: number[]; new_element: ElementSymbol }) {
     _apply_topology_op({ kind: `replace`, site_indices: event.site_indices, new_element: event.new_element })
+  }
+
+  function selective_dynamics_values(
+    structure: AnyStructure,
+  ): Array<[boolean, boolean, boolean] | null> {
+    return structure.sites.map((site) => {
+      const value = site.properties?.selective_dynamics
+      return Array.isArray(value) && value.length >= 3
+        ? [Boolean(value[0]), Boolean(value[1]), Boolean(value[2])]
+        : null
+    })
+  }
+
+  function selective_dynamics_equal(
+    left: Array<[boolean, boolean, boolean] | null>,
+    right: Array<[boolean, boolean, boolean] | null>,
+  ): boolean {
+    if (left.length !== right.length) return false
+    return left.every((value, idx) => {
+      const other = right[idx]
+      return value === null
+        ? other === null
+        : other !== null && value.every((axis, axis_idx) => axis === other[axis_idx])
+    })
+  }
+
+  // Constraint commands live inside Structure's context menu and replace the
+  // bound structure directly. Convert only that metadata delta into a ledger
+  // op, so a frozen current frame exports with Selective Dynamics while atom
+  // position/topology edits continue through their dedicated operation hooks.
+  function handle_embedded_structure_change(next: AnyStructure): void {
+    const owner = trajectory
+    if (!owner || edit_mode === `view` || presentation_pending) return
+    const source = current_edit_frame(owner, presented_step_idx)
+    if (!source?.structure || source.structure.sites.length !== next.sites.length) return
+    const before = selective_dynamics_values(source.structure)
+    const after = selective_dynamics_values(next)
+    if (selective_dynamics_equal(before, after)) return
+    commit_physical_edit({ kind: `set_selective_dynamics`, values: after }, false)
   }
 
   // Memoized on structure identity: the manifest refresh effect re-runs per
@@ -2828,8 +2959,10 @@
               bind:export_pane_open={trajectory_export_open}
               {trajectory}
               {wrapper}
-              filename={current_filename || `trajectory`}
+              filename={current_filename || filename || `trajectory`}
               on_step_change={go_to_step}
+              current_frame_idx={presented_step_idx}
+              resolve_frame={resolve_export_frame}
               bind:png_dpi
               crop_region={crop_region}
               max_height="calc({viewport.height}px - 50px)"
@@ -2964,6 +3097,7 @@
           on_atom_replaced={handle_atom_replaced}
           on_supercell_request={handle_trajectory_supercell_request}
           on_external_history_toggle={handle_external_history_toggle}
+          on_structure_change={handle_embedded_structure_change}
           hide_extra_tools={structure_props?.hide_extra_tools ?? true}
           trajectory_context={{ total_frames, on_step: (idx: number) => go_to_step(idx) }}
         />

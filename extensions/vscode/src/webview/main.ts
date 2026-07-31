@@ -49,6 +49,7 @@ import type {
   FramePositionData,
   TrajectoryFrame,
   TrajectoryMetadata,
+  TrajectorySaveHandler,
   TrajectoryType,
 } from '$lib/trajectory/index'
 import Trajectory from '$lib/trajectory/Trajectory.svelte'
@@ -269,6 +270,7 @@ let current_app: CatGoApp | null = null
 // serializes this in the SOURCE file's format (xyz→xyz, POSCAR→POSCAR, …) —
 // never the last export format the user may have picked in the UI.
 let current_structure: AnyStructure | null = null
+let current_trajectory_save_handler: TrajectorySaveHandler | null = null
 let source_filename = ``
 
 // Global backend port — set once server is ready, read by fetch/WebSocket interceptors.
@@ -472,15 +474,28 @@ export const serialize_current = (): {
 
 // Answer an extension-host content request (save round-trip). Always replies —
 // an empty `content` signals "nothing serializable" to the extension.
-const handle_content_request = (request_id: string): void => {
-  const payload = serialize_current()
-  vscode_api?.postMessage({
-    command: `content`,
-    request_id,
-    content: payload?.content ?? ``,
-    is_binary: payload?.is_binary ?? false,
-    filename: payload?.filename ?? ``,
-  })
+const handle_content_request = async (request_id: string): Promise<void> => {
+  try {
+    const payload = current_trajectory_save_handler
+      ? await current_trajectory_save_handler()
+      : serialize_current()
+    vscode_api?.postMessage({
+      command: `content`,
+      request_id,
+      content: payload?.content ?? ``,
+      is_binary: payload?.is_binary ?? false,
+      filename: payload?.filename ?? ``,
+    })
+  } catch (error) {
+    vscode_api?.postMessage({
+      command: `content`,
+      request_id,
+      content: ``,
+      is_binary: false,
+      filename: source_filename,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 // Handle file change events from extension
@@ -799,6 +814,11 @@ const create_display = (
   // resurrect stale edits.
   if (!is_trajectory) {
     current_structure = result.data as AnyStructure
+    current_trajectory_save_handler = null
+    source_filename = filename
+  } else {
+    current_structure = null
+    current_trajectory_save_handler = null
     source_filename = filename
   }
 
@@ -876,9 +896,16 @@ const create_display = (
     ...(is_trajectory
       ? {
         trajectory: final_trajectory_data,
+        filename,
         ...trajectory_props(defaults),
         fullscreen_toggle: false,
         hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
+        on_trajectory_change: () => {
+          vscode_api?.postMessage({ command: `dirty` })
+        },
+        on_save_handler_change: (handler: TrajectorySaveHandler | null) => {
+          current_trajectory_save_handler = handler
+        },
       }
       : {
         structure: result.data,
@@ -1096,7 +1123,7 @@ async function initialize() {
       if ([`fileUpdated`, `fileDeleted`].includes(event.data.command)) {
         handle_file_change(event.data)
       } else if (event.data.command === `requestContent`) {
-        handle_content_request(event.data.request_id)
+        void handle_content_request(event.data.request_id)
       }
     })
   }

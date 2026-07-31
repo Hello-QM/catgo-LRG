@@ -19,6 +19,37 @@ import {
   read_ndarray_from_view,
 } from './common'
 
+interface XyzPropertyColumns {
+  forces: number
+  move_mask: number
+  selective_dynamics: number
+}
+
+function xyz_property_columns(comment: string): XyzPropertyColumns {
+  const columns: XyzPropertyColumns = {
+    forces: -1,
+    move_mask: -1,
+    selective_dynamics: -1,
+  }
+  const match = comment.match(/Properties\s*=\s*(\S+)/i)
+  if (!match) return columns
+  const fields = match[1].split(`:`)
+  let column = 0
+  for (let idx = 0; idx + 2 < fields.length; idx += 3) {
+    const name = fields[idx].replace(/^['"]|['"]$/g, ``)
+    const count = parseInt(fields[idx + 2], 10) || 0
+    if (name === `forces`) columns.forces = column
+    else if (name === `move_mask`) columns.move_mask = column
+    else if (name === `selective_dynamics`) columns.selective_dynamics = column
+    column += count
+  }
+  return columns
+}
+
+function xyz_boolean(token: string | undefined): boolean {
+  return [`T`, `TRUE`, `1`].includes((token ?? ``).toUpperCase())
+}
+
 export class TrajFrameReader implements FrameLoader {
   private format: `xyz` | `ase`
   private global_numbers?: number[] // For ASE trajectories
@@ -331,12 +362,36 @@ export class TrajFrameReader implements FrameLoader {
     const comment = lines[head + 1] || ``
     const positions: number[][] = []
     const elements: ElementSymbol[] = []
+    const forces: number[][] = []
+    const move_mask: boolean[] = []
+    const selective_dynamics: [boolean, boolean, boolean][] = []
+    const columns = xyz_property_columns(comment)
 
     for (let i = 0; i < num_atoms; i++) {
       const parts = lines[head + 2 + i]?.trim().split(/\s+/)
       if (parts?.length >= 4) {
         elements.push(parts[0] as ElementSymbol)
         positions.push([parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3])])
+        if (columns.forces >= 0 && parts.length >= columns.forces + 3) {
+          forces.push([
+            parseFloat(parts[columns.forces]),
+            parseFloat(parts[columns.forces + 1]),
+            parseFloat(parts[columns.forces + 2]),
+          ])
+        }
+        if (columns.move_mask >= 0 && parts.length > columns.move_mask) {
+          move_mask.push(xyz_boolean(parts[columns.move_mask]))
+        }
+        if (
+          columns.selective_dynamics >= 0 &&
+          parts.length >= columns.selective_dynamics + 3
+        ) {
+          selective_dynamics.push([
+            xyz_boolean(parts[columns.selective_dynamics]),
+            xyz_boolean(parts[columns.selective_dynamics + 1]),
+            xyz_boolean(parts[columns.selective_dynamics + 2]),
+          ])
+        }
       }
     }
 
@@ -346,6 +401,14 @@ export class TrajFrameReader implements FrameLoader {
     const topology_changed = elements.length !== this.global_elements.length ||
       elements.some((element, idx) => element !== this.global_elements?.[idx])
     const metadata = this.parse_xyz_metadata(comment, frame_number)
+    const frame_metadata: Record<string, unknown> = { ...metadata.properties }
+    const has_forces = forces.length === positions.length
+    if (has_forces) frame_metadata.forces = forces
+    const frame_move_mask = move_mask.length === positions.length
+      ? move_mask
+      : selective_dynamics.length === positions.length
+      ? selective_dynamics.map((flags) => flags.some(Boolean))
+      : undefined
     // Per-frame lattice from the extxyz comment (#536): the indexed path must
     // agree with the eager parser (parsers/xyz.ts), which attaches the lattice
     // and pbc [true, true, true] whenever a Lattice field is present. Dropping
@@ -358,9 +421,19 @@ export class TrajFrameReader implements FrameLoader {
       elements,
       lattice_matrix,
       lattice_matrix ? [true, true, true] : undefined,
-      frame_number,
-      metadata.properties,
+      metadata.step,
+      frame_metadata,
+      undefined,
+      frame_move_mask,
     )
+    if (selective_dynamics.length === positions.length) {
+      frame.structure.sites.forEach((site, idx) => {
+        site.properties = {
+          ...site.properties,
+          selective_dynamics: selective_dynamics[idx],
+        }
+      })
+    }
     // Full frames are the correctness fallback when compact loading detects a
     // variable-N/species topology. Preserve that verdict on the materialized
     // frame; otherwise the renderer sees position_data === undefined, assumes
@@ -369,9 +442,9 @@ export class TrajFrameReader implements FrameLoader {
     frame.position_data = {
       step: metadata.step,
       positions: Float32Array.from(positions.flat()),
-      forces: null,
+      forces: has_forces ? Float32Array.from(forces.flat()) : null,
       lattice: lattice_matrix ?? null,
-      metadata: metadata.properties,
+      metadata: frame_metadata,
       topology_changed,
     }
     return frame
@@ -403,6 +476,9 @@ export class TrajFrameReader implements FrameLoader {
 
     const positions = new Float32Array(num_atoms * 3)
     const elements: ElementSymbol[] = []
+    const comment = lines[head + 1] || ``
+    const columns = xyz_property_columns(comment)
+    const forces = columns.forces >= 0 ? new Float32Array(num_atoms * 3) : null
     for (let atom_idx = 0; atom_idx < num_atoms; atom_idx++) {
       const parts = lines[head + 2 + atom_idx]?.trim().split(/\s+/)
       if (!parts || parts.length < 4) return null
@@ -411,6 +487,11 @@ export class TrajFrameReader implements FrameLoader {
       positions[offset] = Number(parts[1])
       positions[offset + 1] = Number(parts[2])
       positions[offset + 2] = Number(parts[3])
+      if (forces && parts.length >= columns.forces + 3) {
+        forces[offset] = Number(parts[columns.forces])
+        forces[offset + 1] = Number(parts[columns.forces + 1])
+        forces[offset + 2] = Number(parts[columns.forces + 2])
+      }
     }
 
     if (frame_number === 0 || !this.global_elements) {
@@ -418,12 +499,11 @@ export class TrajFrameReader implements FrameLoader {
     }
     const topology_changed = elements.length !== this.global_elements.length ||
       elements.some((element, idx) => element !== this.global_elements?.[idx])
-    const comment = lines[head + 1] || ``
     const metadata = this.parse_xyz_metadata(comment, frame_number)
     return {
       step: metadata.step,
       positions,
-      forces: null,
+      forces,
       lattice: parse_xyz_lattice(comment) ?? null,
       metadata: metadata.properties,
       topology_changed,
@@ -628,10 +708,13 @@ export class TrajFrameReader implements FrameLoader {
     const properties: Record<string, number> = {}
 
     const patterns = {
-      energy: /(?:energy|E|etot)\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
-      volume: /(?:volume|vol|V)\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
-      pressure: /(?:pressure|press|P)\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
-      force_max: /(?:max_force|fmax)\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      energy: /\b(?:energy|E|etot|total_energy)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      volume: /\b(?:volume|vol|V)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      pressure: /\b(?:pressure|press|P)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      temperature: /\b(?:temperature|temp|T)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      force_max: /\b(?:max_force|force_max|fmax)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      force_norm: /\b(?:force_norm|frms)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
+      bandgap: /\b(?:bandgap|E_gap|gap)\b\s*[=:]?\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)/i,
     }
 
     Object.entries(patterns).forEach(([key, pattern]) => {
