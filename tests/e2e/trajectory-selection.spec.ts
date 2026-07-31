@@ -189,4 +189,44 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   )
   await expect(page.locator('.trajectory-controls')).toBeVisible()
   await expect(page.getByText(/position values for 4 atoms/)).toHaveCount(0)
+
+  // Deleting from only the current frame creates a variable-topology
+  // trajectory. It must remain playable via the discrete slow path instead
+  // of leaving the play button permanently disabled or waiting forever for a
+  // fixed-topology prepared-frame buffer that can never be produced.
+  await page.evaluate(() => {
+    const api = (globalThis as typeof globalThis & {
+      __catgo_traj_test?: { trigger_atoms_deleted: () => void }
+    }).__catgo_traj_test
+    api?.trigger_atoms_deleted()
+  })
+  await page.waitForFunction(
+    () => (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.get_atom_xyz(3) == null,
+  )
+  const play = page.locator('.play-button').first()
+  await expect(play).toBeEnabled()
+  const frame_before_play = await page.evaluate(() => {
+    const api = (globalThis as typeof globalThis & {
+      __catgo_traj_test?: { get_current_idx: () => number }
+    }).__catgo_traj_test
+    return api?.get_current_idx() ?? -1
+  })
+  await play.click()
+  await page.waitForFunction(
+    (before) => {
+      const api = (globalThis as typeof globalThis & {
+        __catgo_traj_test?: { get_current_idx: () => number }
+      }).__catgo_traj_test
+      return Boolean(
+        (globalThis as typeof globalThis & {
+          __catgo_traj_is_playing?: boolean
+        }).__catgo_traj_is_playing,
+      ) && api?.get_current_idx() !== before
+    },
+    frame_before_play,
+    { timeout: 5_000 },
+  )
+  await expect(page.locator('.trajectory-controls')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Error' })).toHaveCount(0)
 })

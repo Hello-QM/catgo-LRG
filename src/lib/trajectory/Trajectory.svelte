@@ -298,11 +298,10 @@
     }
   })
 
-  // DEV-only probe: expose resume_disabled flag + handler-trigger API for
-  // W7 Tests 6.4 / 6.5. The W5 design (plans/W5-resume-disable-design.md)
-  // sets resume_disabled=true on add/delete/replace during pause and play
-  // button gates on it. Tests need to drive these handlers directly because
-  // the test page doesn't expose add/delete UI affordances.
+  // DEV-only probe for trajectory edit/playback regression tests. Ordinary
+  // add/delete/replace edits can now resume through the variable-topology
+  // slow path; resume_disabled remains observable for transformations (such
+  // as an incompatible true-supercell transition) that still require a lock.
   $effect(() => {
     if (!import.meta.env?.DEV) return
     const api = {
@@ -333,19 +332,10 @@
     }
   })
 
-  // Plan v3 Phase 5 (W5 resume-disable per plans/W5-resume-disable-design.md):
-  // When the user pauses trajectory and performs a topology-altering edit
-  // (add / delete / replace atom — but NOT drag, which doesn't change
-  // topology), resume must be blocked. The position_cache is sized for the
-  // original topology; resuming after a topology edit would either crash
-  // (delete) or animate atoms with garbage positions (add/replace).
-  // Resets only on new trajectory load. Stop, pause, and undo do NOT reset.
-  // Tracking `traj_load_seq` instead of `trajectory` directly avoids being
-  // retriggered by spread refreshes from `_chunked_cross_frame_edit` and
-  // `flush_pending_ops` (`trajectory = { ...trajectory }`), which would
-  // otherwise silently re-enable resume after add/replace edits during pause.
-  // The counter is bumped synchronously alongside the I6 cache-nulls inside
-  // `load_trajectory_data` / `load_with_indexing` — the only real-load paths.
+  // Playback is locked only for transformations whose topology cannot be
+  // presented discretely by the variable-topology slow path. Physical atom
+  // edits invalidate their compact packets and remain playable frame by frame.
+  // The lock resets only on a real trajectory load, not on spread refreshes.
   let resume_disabled = $state(false)
   let traj_load_seq = $state(0)
   $effect(() => {
@@ -475,7 +465,7 @@
   let known_variable_topology = $derived(
     trajectory?.frames.some(
       (frame) => frame.position_data?.topology_changed === true,
-    ) ?? false,
+    ) || (trajectory ? has_frame_scoped_structure_ops(trajectory) : false),
   )
 
   // Current frame - load on demand for indexed trajectories
@@ -2286,7 +2276,6 @@
   }
 
   function _apply_topology_op(op: TrajectoryEditOp) {
-    if (!is_playing) resume_disabled = true
     commit_physical_edit(op, true)
   }
 

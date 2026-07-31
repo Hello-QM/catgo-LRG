@@ -101,9 +101,8 @@ describe(`prepared playback backpressure`, () => {
     const acknowledgement = source.slice(ack_start, ack_end)
     expect(acknowledgement).toContain(`schedule_acknowledged_playback_pump()`)
     expect(source).toContain(`clearTimeout(playback_ack_timer)`)
-    expect(source).toContain(
-      `if (compact && !frame_topology_changed && !force_slow_path)`,
-    )
+    expect(source).toContain(`compact && !frame_topology_changed && !force_slow_path &&`)
+    expect(source).toContain(`!frame_scoped_structure_ops`)
     expect(source).toContain(`schedule_slow_path_presentation(`)
     expect(source).toContain(
       `requestAnimationFrame(() => requestAnimationFrame(acknowledge))`,

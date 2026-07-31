@@ -17,6 +17,7 @@ type TrajectoryTestApi = {
   trigger_atoms_deleted: () => void
   trigger_atom_replaced: () => void
   trigger_atoms_manipulated: () => void
+  get_current_idx: () => number
 }
 
 declare global {
@@ -1020,15 +1021,10 @@ test.describe(`W7 Category 5 — Memory + repeat start/stop`, () => {
 test.describe(`W7 Category 6 — Edge cases`, () => {
   test.setTimeout(60_000)
 
-  // ─── Test 6.4 — Topology-altering edit during pause disables resume ────
-  // W5 design (plans/W5-resume-disable-design.md): position_cache is
-  // sized for the original topology. Resuming after a topology edit
-  // (add/delete/replace) would either crash or animate atoms with garbage
-  // positions. This test asserts the play button gates on resume_disabled.
-  // Uses the DEV-only __catgo_traj_test API to invoke the W5 handlers
-  // without driving them through atom UI affordances (which the test page
-  // doesn't expose).
-  test(`6.4 topology-altering edit during pause disables resume`, async ({ page }) => {
+  // ─── Test 6.4 — Frame-scoped delete remains playable ─────────────────
+  // Edited compact packets are invalidated and variable topology is rendered
+  // discretely, so add/delete/replace no longer need the historical W5 lock.
+  test(`6.4 topology-altering delete during pause remains playable`, async ({ page }) => {
     await page.goto(`/test/structure-trajectory`, { waitUntil: `domcontentloaded` })
     await page.waitForFunction(() => Boolean(globalThis.__catgo_traj_test), null, {
       timeout: 30_000,
@@ -1039,34 +1035,28 @@ test.describe(`W7 Category 6 — Edge cases`, () => {
     )
     expect(before).toBe(false)
 
-    // Simulate a topology-altering edit while paused. handle_atoms_deleted
-    // sets resume_disabled=true (Trajectory.svelte:1342) BEFORE the cross-
-    // frame guard, so it fires even on cross-frame-blocked trajectories.
     await page.evaluate(() => globalThis.__catgo_traj_test?.trigger_atoms_deleted())
 
     const after = await page.evaluate(
       () => globalThis.__catgo_traj_test?.resume_disabled,
     )
-    expect(after).toBe(true)
+    expect(after).toBe(false)
 
-    // The play button must be disabled — UX surface that prevents resume.
     const play_btn = page.locator(`.play-button`).first()
-    await expect(play_btn).toBeDisabled()
+    await expect(play_btn).not.toBeDisabled()
+    const frame_before = await page.evaluate(
+      () => globalThis.__catgo_traj_test?.get_current_idx() ?? -1,
+    )
+    await play_btn.click()
+    await page.waitForFunction(
+      (before) => Boolean(globalThis.__catgo_probe?.is_playing) &&
+        globalThis.__catgo_traj_test?.get_current_idx() !== before,
+      frame_before,
+    )
   })
 
-  // ─── Test 6.4a — Atom-add during pause disables resume ────────────────
-  // Regression guard for the W5 contract bug fixed in B1 (commit introducing
-  // traj_load_seq counter). handle_atom_added sets resume_disabled=true,
-  // then calls _chunked_cross_frame_edit which ends with
-  // `trajectory = { ...trajectory }` (spread refresh). Pre-B1, the W5 reset
-  // $effect tracked `trajectory` directly, so the spread retriggered it and
-  // silently flipped resume_disabled back to false within ~0–4ms. Post-B1
-  // the reset $effect tracks a `traj_load_seq` counter that's only bumped
-  // on real load paths, so the spread no longer resets W5 state.
-  // Test 6.4 covers the delete path (different code path — purely lazy
-  // enqueue, no spread refresh); this test covers the add path which is
-  // the actual W5 bug surface.
-  test(`6.4a atom-add during pause disables resume`, async ({ page }) => {
+  // ─── Test 6.4a — Atom-add during pause remains playable ──────────────
+  test(`6.4a atom-add during pause remains playable`, async ({ page }) => {
     await page.goto(`/test/structure-trajectory`, { waitUntil: `domcontentloaded` })
     await page.waitForFunction(() => Boolean(globalThis.__catgo_traj_test), null, {
       timeout: 30_000,
@@ -1078,24 +1068,19 @@ test.describe(`W7 Category 6 — Edge cases`, () => {
 
     await page.evaluate(() => globalThis.__catgo_traj_test?.trigger_atom_added())
 
-    // Wait long enough for the spread refresh and any reactive flush to settle.
-    // Pre-B1 bug: resume_disabled would flip back to false on the next macrotask.
     await page.waitForTimeout(50)
 
     const after = await page.evaluate(
       () => globalThis.__catgo_traj_test?.resume_disabled,
     )
-    expect(after).toBe(true)
+    expect(after).toBe(false)
 
     const play_btn = page.locator(`.play-button`).first()
-    await expect(play_btn).toBeDisabled()
+    await expect(play_btn).not.toBeDisabled()
   })
 
-  // ─── Test 6.4b — Atom-replace during pause disables resume ────────────
-  // Same regression guard as 6.4a but for handle_atom_replaced — the other
-  // _chunked_cross_frame_edit caller. Both add and replace ride the same
-  // spread-refresh path; deletes don't.
-  test(`6.4b atom-replace during pause disables resume`, async ({ page }) => {
+  // ─── Test 6.4b — Atom-replace during pause remains playable ──────────
+  test(`6.4b atom-replace during pause remains playable`, async ({ page }) => {
     await page.goto(`/test/structure-trajectory`, { waitUntil: `domcontentloaded` })
     await page.waitForFunction(() => Boolean(globalThis.__catgo_traj_test), null, {
       timeout: 30_000,
@@ -1112,10 +1097,10 @@ test.describe(`W7 Category 6 — Edge cases`, () => {
     const after = await page.evaluate(
       () => globalThis.__catgo_traj_test?.resume_disabled,
     )
-    expect(after).toBe(true)
+    expect(after).toBe(false)
 
     const play_btn = page.locator(`.play-button`).first()
-    await expect(play_btn).toBeDisabled()
+    await expect(play_btn).not.toBeDisabled()
   })
 
   // ─── Test 6.5 — Drag-then-resume is NOT disabled ───────────────────────
