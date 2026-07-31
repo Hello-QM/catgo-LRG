@@ -2,7 +2,11 @@ import { COMPRESSION_EXTENSIONS_REGEX } from '$lib/constants'
 import { DEFAULTS, type DefaultSettings, merge } from '$lib/settings'
 import { is_structure_file } from '$lib/structure/parse'
 import { AUTO_THEME, COLOR_THEMES, is_valid_theme_mode, type ThemeName } from '$lib/theme'
-import type { FrameLoader } from '$lib/trajectory/index'
+import type {
+  FrameLoader,
+  TrajectoryMetadata,
+  TrajectoryType,
+} from '$lib/trajectory/index'
 import {
   create_frame_loader,
   is_trajectory_file,
@@ -19,6 +23,10 @@ import { search_optimade_structures_backend, type OptimadeSearchOptions } from '
 import { search_pubchem_compounds_backend } from './pubchem-backend'
 import { CatgoDocument } from './catgo-document'
 import { select_scalar_ferrox_wasm } from './ferrox-assets'
+import {
+  build_local_trajectory_manifest,
+  create_local_trajectory_loader,
+} from './node-trajectory-reader'
 
 // CatgoDocument is a VS-Code-free core (its own module so unit tests can import
 // it without pulling the full extension/webview graph); re-exported here so it
@@ -28,7 +36,7 @@ export type { DocDeps } from './catgo-document'
 
 interface FrameLoaderData {
   loader: FrameLoader
-  file_data: ArrayBuffer
+  file_data: string | ArrayBuffer
   filename: string
 }
 
@@ -84,6 +92,8 @@ export type IncomingCommand =
   | `error`
   | `request_large_file`
   | `request_frame`
+  | `request_frame_positions`
+  | `request_plot_metadata`
   | `saveAs`
   | `startWatching`
   | `stopWatching`
@@ -110,6 +120,7 @@ export interface MessageData {
   // Add frame loading support
   request_id?: string
   frame_index?: number
+  sample_rate?: number
   // OPTIMADE API proxy support
   url?: string
   // Materials Project API key
@@ -137,11 +148,86 @@ export const auto_render_timers = new Map<string, ReturnType<typeof setTimeout>>
 // Track active panels by URI to prevent duplicate opens
 export const active_auto_render_panels = new Map<string, vscode.WebviewPanel>()
 
+const replace_active_frame_loader = (
+  file_path: string,
+  data: FrameLoaderData,
+): void => {
+  const previous = active_frame_loaders.get(file_path)
+  if (previous?.loader !== data.loader) void previous?.loader.dispose?.()
+  active_frame_loaders.set(file_path, data)
+}
+
+const remove_active_frame_loader = (file_path: string): void => {
+  const active = active_frame_loaders.get(file_path)
+  if (active) void active.loader.dispose?.()
+  active_frame_loaders.delete(file_path)
+}
+
 // File size thresholds for reading files via VSCode API (1GB for both text and binary)
 const MAX_VSCODE_FILE_SIZE = 1024 * 1024 * 1024 // 1GB
+// Keep large trajectories and calculation outputs out of the webview
+// bootstrap HTML. Format-specific readers index once in the extension host and
+// stream compact per-frame packets.
+export const VSCODE_TRAJECTORY_STREAM_THRESHOLD = 1 * 1024 * 1024
+const FILE_BACKED_EXTENSION_REGEX =
+  /\.(xyz|extxyz|traj|h5|hdf5|dump|lammpstrj)$/i
+const FILE_BACKED_VASP_NAME_REGEX =
+  /(?:^|[._-])(xdatcar|outcar)(?:[._-]|$)|vasprun.*\.xml$/i
+const FILE_BACKED_GAUSSIAN_REGEX = /\.(out|log)$/i
+const FILE_BACKED_JSON_REGEX =
+  /(?:^|[._-])(?:trajectory|traj|frames|relax|npt|nvt|nve|md)(?:[._-]|$).*\.json$/i
+
+const strip_compression_suffixes = (filename: string): string => {
+  let base = filename
+  while (COMPRESSION_EXTENSIONS_REGEX.test(base)) {
+    base = base.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
+  }
+  return base
+}
+
+const is_file_backed_trajectory_name = (filename: string): boolean => {
+  const base = strip_compression_suffixes(filename)
+  return (
+    FILE_BACKED_EXTENSION_REGEX.test(base) ||
+    FILE_BACKED_VASP_NAME_REGEX.test(base) ||
+    FILE_BACKED_GAUSSIAN_REGEX.test(base) ||
+    FILE_BACKED_JSON_REGEX.test(base)
+  )
+}
+
+const is_large_gaussian_output = async (
+  file_path: string,
+  filename: string,
+): Promise<boolean> => {
+  const base = strip_compression_suffixes(filename)
+  if (!FILE_BACKED_GAUSSIAN_REGEX.test(base)) return false
+  // The format-specific loader validates the decompressed content. Avoid
+  // inflating a multi-megabyte archive just for a second prefix probe.
+  if (base !== filename) return true
+  try {
+    const handle = await fs.promises.open(file_path, `r`)
+    try {
+      const probe = Buffer.allocUnsafe(256 * 1024)
+      const { bytesRead } = await handle.read(probe, 0, probe.length, 0)
+      const prefix = probe.subarray(0, bytesRead).toString(`utf8`)
+      return /Gaussian,\s*Inc\./.test(prefix) ||
+        /Entering Gaussian System/.test(prefix) ||
+        /CARTESIAN COORDINATES\s*\(ANGSTROEM\)/.test(prefix) ||
+        /O\s+R\s+C\s+A/.test(prefix)
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return false
+  }
+}
 
 // Helper: determine view type using content when available
 const infer_view_type = (file: FileData): `trajectory` | `structure` => {
+  if (
+    file.content.startsWith(`LARGE_FILE:`) &&
+    is_file_backed_trajectory_name(file.filename)
+  ) return `trajectory`
   // Only pass content for text files; for binary (compressed) fall back to filename
   const content = file.is_base64 ? undefined : file.content
   return is_trajectory_file(file.filename, content) ? `trajectory` : `structure`
@@ -193,7 +279,26 @@ export const read_file = async (file_path: string): Promise<FileData> => {
 
   const threshold = MAX_VSCODE_FILE_SIZE
 
-  if (file_size > threshold) {
+  const compressed_trajectory = COMPRESSION_EXTENSIONS_REGEX.test(filename)
+  const seekable_compression = !compressed_trajectory || /\.(?:gz|gzip)$/i.test(filename)
+  const stream_threshold = compressed_trajectory
+    ? 256 * 1024
+    : VSCODE_TRAJECTORY_STREAM_THRESHOLD
+  const base_filename = strip_compression_suffixes(filename)
+  const stream_trajectory =
+    seekable_compression && file_size > stream_threshold &&
+    (
+      (
+        (
+          FILE_BACKED_EXTENSION_REGEX.test(base_filename) ||
+          FILE_BACKED_VASP_NAME_REGEX.test(base_filename) ||
+          FILE_BACKED_JSON_REGEX.test(base_filename)
+        )
+      ) ||
+      await is_large_gaussian_output(file_path, filename)
+    )
+
+  if (file_size > threshold || stream_trajectory) {
     return {
       filename,
       content: `LARGE_FILE:${file_path}:${file_size}`,
@@ -475,6 +580,63 @@ export const handle_msg = async (
     try {
       const { request_id, file_path } = msg
       const filename = path.basename(file_path)
+
+      // Match OVITO's architecture across every supported trajectory family:
+      // scan/read the format's native frame index, keep the source on disk,
+      // and seek only the requested frame.
+      let local: Awaited<ReturnType<typeof create_local_trajectory_loader>> = null
+      try {
+        local = await create_local_trajectory_loader(
+          file_path,
+          filename,
+          (progress_data) => {
+            webview.postMessage({
+              command: `large_file_progress`,
+              request_id,
+              stage: progress_data.stage,
+              progress: Math.round(progress_data.current),
+            })
+          },
+        )
+      } catch (file_backed_error) {
+        // A non-file vscode provider may expose workspace.fs bytes but no
+        // host-local path. Preserve that fallback. If the path is local, the
+        // format error is real and must not trigger a whole-file memory load.
+        let host_path_exists = true
+        try {
+          await fs.promises.stat(file_path)
+        } catch {
+          host_path_exists = false
+        }
+        if (host_path_exists) throw file_backed_error
+        console.warn(
+          `[CatGo] Host-local trajectory reader unavailable; using workspace.fs fallback:`,
+          file_backed_error,
+        )
+      }
+      if (local) {
+        try {
+          const webview_trajectory = await build_local_trajectory_manifest(local)
+          replace_active_frame_loader(file_path, {
+            loader: local.loader,
+            file_data: ``,
+            filename,
+          })
+          webview.postMessage({
+            command,
+            request_id,
+            parsed_trajectory: webview_trajectory,
+            is_parsed: true,
+            supports_frame_streaming: true,
+            file_path,
+          })
+          return
+        } catch (file_backed_error) {
+          await local.loader.dispose?.()
+          throw file_backed_error
+        }
+      }
+
       const array_buffer = await stream_file_to_buffer(file_path, (progress_data) => {
         webview.postMessage({
           command: `large_file_progress`,
@@ -484,24 +646,55 @@ export const handle_msg = async (
         })
       })
 
-      // Parse with indexing and create frame loader
+      // Virtual filesystem fallback: binary readers keep the ArrayBuffer;
+      // text formats decode in the extension host rather than bootstrap HTML.
+      const file_data: string | ArrayBuffer =
+        /\.(traj|h5|hdf5)$/i.test(filename)
+          ? array_buffer
+          : new TextDecoder().decode(array_buffer)
+
+      // Parse with indexing. Plot metadata stays lazy so whole-file comment
+      // extraction cannot delay the first rendered frame.
       const parsed_trajectory = await parse_trajectory_async(
-        array_buffer,
+        file_data,
         filename,
-        undefined,
-        { use_indexing: true, extract_plot_metadata: true },
+        (progress_data) => {
+          webview.postMessage({
+            command: `large_file_progress`,
+            request_id,
+            stage: progress_data.stage,
+            progress: Math.round(progress_data.current),
+          })
+        },
+        { use_indexing: true, extract_plot_metadata: false },
       )
 
-      active_frame_loaders.set(file_path, {
-        loader: create_frame_loader(filename),
-        file_data: array_buffer,
+      // Reuse the initialized reader: frame 0 established the reference
+      // elements/numbers and its cached offset table makes subsequent random
+      // access O(1). A fresh reader would misclassify the first requested
+      // variable-topology frame as the reference topology.
+      const loader = parsed_trajectory.frame_loader ?? create_frame_loader(filename)
+      replace_active_frame_loader(file_path, {
+        loader,
+        file_data,
         filename,
       })
 
+      // Functions, promises, and the full source payload are extension-host
+      // state and are not structured-cloneable. Send only the small trajectory
+      // manifest plus the eagerly loaded initial frames.
+      const webview_trajectory: TrajectoryType = {
+        frames: parsed_trajectory.frames,
+        metadata: parsed_trajectory.metadata,
+        total_frames: parsed_trajectory.total_frames,
+        indexed_frames: parsed_trajectory.indexed_frames,
+        plot_metadata: parsed_trajectory.plot_metadata,
+        is_indexed: true,
+      }
       webview.postMessage({
         command,
         request_id,
-        parsed_trajectory,
+        parsed_trajectory: webview_trajectory,
         is_parsed: true,
         supports_frame_streaming: true,
         file_path,
@@ -540,6 +733,78 @@ export const handle_msg = async (
         request_id: msg.request_id ?? ``,
         error: error_message,
         frame_index: msg.frame_index,
+      })
+    }
+  } else if (
+    msg.command === `request_frame_positions` &&
+    msg.file_path &&
+    webview
+  ) {
+    const command = `frame_positions_response`
+    try {
+      const { request_id, file_path, frame_index } = msg
+      if (
+        typeof request_id !== `string` ||
+        frame_index === undefined ||
+        !Number.isInteger(frame_index) ||
+        frame_index < 0
+      ) {
+        throw new Error(`Invalid request_id or frame_index`)
+      }
+      const loader_data = active_frame_loaders.get(file_path)
+      if (!loader_data) throw new Error(`No frame loader found for file: ${file_path}`)
+      if (!loader_data.loader.load_frame_positions) {
+        throw new Error(`Frame-position streaming is not supported for this file`)
+      }
+      const position_data = await loader_data.loader.load_frame_positions(
+        loader_data.file_data,
+        frame_index,
+      )
+      webview.postMessage({
+        command,
+        request_id,
+        position_data,
+        frame_index,
+      })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      webview.postMessage({
+        command,
+        request_id: msg.request_id ?? ``,
+        error: error_message,
+        frame_index: msg.frame_index,
+      })
+    }
+  } else if (
+    msg.command === `request_plot_metadata` &&
+    msg.file_path &&
+    webview
+  ) {
+    const command = `plot_metadata_response`
+    try {
+      const { request_id, file_path } = msg
+      if (typeof request_id !== `string`) throw new Error(`Invalid request_id`)
+      const loader_data = active_frame_loaders.get(file_path)
+      if (!loader_data) throw new Error(`No frame loader found for file: ${file_path}`)
+      const sample_rate = Number.isInteger(msg.sample_rate) && (msg.sample_rate ?? 0) > 0
+        ? msg.sample_rate
+        : 1
+      const plot_metadata: TrajectoryMetadata[] =
+        await loader_data.loader.extract_plot_metadata(
+          loader_data.file_data,
+          { sample_rate },
+        )
+      webview.postMessage({
+        command,
+        request_id,
+        plot_metadata,
+      })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      webview.postMessage({
+        command,
+        request_id: msg.request_id ?? ``,
+        error: error_message,
       })
     }
   } else if (msg.command === `saveAs` && msg.content) {
@@ -818,9 +1083,7 @@ function stop_watching_file(file_path: string): void {
   }
 
   // Also clean up frame loader for this file
-  if (active_frame_loaders.has(file_path)) {
-    active_frame_loaders.delete(file_path)
-  }
+  remove_active_frame_loader(file_path)
 }
 
 // Create webview panel with common setup
@@ -1395,6 +1658,7 @@ export const deactivate = (): void => {
   auto_render_timers.clear()
   active_watchers.forEach((watcher) => watcher.dispose())
   active_watchers.clear()
+  active_frame_loaders.forEach(({ loader }) => void loader.dispose?.())
   active_frame_loaders.clear()
   active_auto_render_panels.clear()
 }

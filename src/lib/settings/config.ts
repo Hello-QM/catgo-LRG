@@ -838,7 +838,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maxItems: 2,
     },
     display_mode: {
-      value: `structure+scatter` as const,
+      value: `structure` as const,
       description: `Visualization mode for trajectory data`,
       enum: {
         'structure+scatter': `Structure + Scatter`,

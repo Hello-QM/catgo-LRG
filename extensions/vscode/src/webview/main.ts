@@ -39,15 +39,17 @@ import '$lib/theme/themes'
 import { ensure_ferrox_wasm_ready } from '$lib/structure/ferrox-wasm'
 import { ensure_moyo_wasm_ready } from '$lib/symmetry'
 import type { LoadingOptions } from '$lib/trajectory/parse'
-import { is_trajectory_file, parse_trajectory_data } from '$lib/trajectory/parse'
+import { is_trajectory_file, parse_trajectory_async } from '$lib/trajectory/parse'
 // Add frame loader import
 import { COMPRESSION_EXTENSIONS_REGEX } from '$lib/constants'
 import { type DefaultSettings, merge } from '$lib/settings'
 import type {
   FrameIndex,
   FrameLoader,
+  FramePositionData,
   TrajectoryFrame,
   TrajectoryMetadata,
+  TrajectoryType,
 } from '$lib/trajectory/index'
 import Trajectory from '$lib/trajectory/Trajectory.svelte'
 import { mount, unmount } from 'svelte'
@@ -96,56 +98,144 @@ export interface FileChangeMessage {
 
 // VS Code Frame Loader - streams frames via extension communication
 class VSCodeFrameLoader implements FrameLoader {
+  private readonly position_requests =
+    new Map<number, Promise<FramePositionData | null>>()
+  private readonly plot_requests =
+    new Map<number, Promise<TrajectoryMetadata[]>>()
+
   constructor(private file_path: string, private vscode_api: VSCodeAPI) {}
 
-  // Only implement the method we actually use
-  async load_frame(
-    _data: string | ArrayBuffer,
-    frame_index: number,
-  ): Promise<TrajectoryFrame | null> {
+  fork(): FrameLoader {
+    return new VSCodeFrameLoader(this.file_path, this.vscode_api)
+  }
+
+  private request<T>(
+    command: string,
+    response_command: string,
+    payload: Record<string, unknown>,
+    timeout_label: string,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const request_id = crypto.randomUUID()
       let timer: ReturnType<typeof setTimeout> | null = null
       const handler = (event: MessageEvent) => {
-        const { command, request_id: id, error, frame } = event.data
-        if (command === `frame_response` && id === request_id) {
+        const { command: response, request_id: id, error } = event.data
+        if (response === response_command && id === request_id) {
           globalThis.removeEventListener(`message`, handler)
           if (timer) clearTimeout(timer)
           if (error) reject(new Error(error))
-          else resolve(frame)
+          else resolve(event.data as T)
         }
       }
 
       globalThis.addEventListener(`message`, handler)
       this.vscode_api.postMessage({
-        command: `request_frame`,
+        command,
         request_id,
         file_path: this.file_path,
-        frame_index,
+        ...payload,
       })
 
       timer = setTimeout(() => {
         globalThis.removeEventListener(`message`, handler)
-        reject(new Error(`Frame ${frame_index} timeout`))
+        reject(new Error(`${timeout_label} timeout`))
       }, 30000)
     })
   }
 
-  // Unused methods - just throw errors
+  async load_frame(
+    _data: string | ArrayBuffer,
+    frame_index: number,
+  ): Promise<TrajectoryFrame | null> {
+    const response = await this.request<{ frame: TrajectoryFrame | null }>(
+      `request_frame`,
+      `frame_response`,
+      { frame_index },
+      `Frame ${frame_index}`,
+    )
+    return response.frame
+  }
+
+  async load_frame_positions(
+    _data: string | ArrayBuffer,
+    frame_index: number,
+  ): Promise<FramePositionData | null> {
+    const cached = this.position_requests.get(frame_index)
+    if (cached) return cached
+    const pending = this.request<{ position_data: FramePositionData | null }>(
+      `request_frame_positions`,
+      `frame_positions_response`,
+      { frame_index },
+      `Frame positions ${frame_index}`,
+    ).then(({ position_data }) => {
+      if (!position_data) return null
+      return {
+        ...position_data,
+        positions: float32_array(position_data.positions),
+        forces: position_data.forces
+          ? float32_array(position_data.forces)
+          : null,
+      }
+    }).catch((error) => {
+      this.position_requests.delete(frame_index)
+      throw error
+    })
+    this.position_requests.set(frame_index, pending)
+    while (this.position_requests.size > 16) {
+      const oldest = this.position_requests.keys().next().value
+      if (oldest === undefined) break
+      this.position_requests.delete(oldest)
+    }
+    return pending
+  }
+
   async get_total_frames(): Promise<number> {
     throw new Error(`Not implemented`)
   }
   async build_frame_index(): Promise<FrameIndex[]> {
     throw new Error(`Not implemented`)
   }
-  async extract_plot_metadata(): Promise<TrajectoryMetadata[]> {
-    throw new Error(`Not implemented`)
+  async extract_plot_metadata(
+    _data: string | ArrayBuffer,
+    options?: { sample_rate?: number; properties?: string[] },
+  ): Promise<TrajectoryMetadata[]> {
+    const sample_rate = Math.max(1, options?.sample_rate ?? 1)
+    const cached = this.plot_requests.get(sample_rate)
+    if (cached) return cached
+    const pending = this.request<{ plot_metadata: TrajectoryMetadata[] }>(
+      `request_plot_metadata`,
+      `plot_metadata_response`,
+      { sample_rate },
+      `Trajectory plot metadata`,
+    ).then(({ plot_metadata }) => plot_metadata ?? []).catch((error) => {
+      this.plot_requests.delete(sample_rate)
+      throw error
+    })
+    this.plot_requests.set(sample_rate, pending)
+    return pending
   }
 }
 
-export interface TrajectoryData {
-  frames?: { structure?: { sites?: unknown[] } }[]
+function float32_array(value: unknown): Float32Array {
+  if (value instanceof Float32Array) return value
+  if (value instanceof ArrayBuffer) return new Float32Array(value)
+  if (ArrayBuffer.isView(value)) {
+    return Float32Array.from(value as unknown as ArrayLike<number>)
+  }
+  if (Array.isArray(value)) return Float32Array.from(value)
+  if (value && typeof value === `object`) {
+    const record = value as Record<string, number>
+    return Float32Array.from(
+      Object.keys(record)
+        .filter((key) => /^\d+$/.test(key))
+        .sort((left, right) => Number(left) - Number(right))
+        .map((key) => record[key]),
+    )
+  }
+  return new Float32Array(0)
 }
+
+export type TrajectoryData = TrajectoryType
 
 export interface StructureData {
   sites?: unknown[]
@@ -520,7 +610,9 @@ const parse_file_content = async (
 
   // Check if this is a large file marker from the extension
   if (content.startsWith(`LARGE_FILE:`)) {
-    const [, file_path, file_size_str] = content.split(`:`)
+    const marker = /^LARGE_FILE:(.*):(\d+)$/.exec(content)
+    if (!marker) throw new Error(`Invalid large-file marker`)
+    const [, file_path, file_size_str] = marker
     const file_size = parseInt(file_size_str, 10)
 
     console.log(
@@ -559,13 +651,23 @@ const parse_file_content = async (
 
     // For HDF5 files, pass buffer directly to trajectory parser
     if (/\.(h5|hdf5)$/i.test(filename)) {
-      const data = await parse_trajectory_data(buffer, filename)
+      const data = await parse_trajectory_async(
+        buffer,
+        filename,
+        undefined,
+        loading_options,
+      )
       return { type: `trajectory`, filename, data }
     }
 
     // For ASE .traj files, pass buffer directly to trajectory parser
     if (/\.traj$/i.test(filename)) {
-      const data = await parse_trajectory_data(buffer, filename)
+      const data = await parse_trajectory_async(
+        buffer,
+        filename,
+        undefined,
+        loading_options,
+      )
       return { type: `trajectory`, filename, data }
     }
 
@@ -579,7 +681,12 @@ const parse_file_content = async (
 
   // Try trajectory parsing first if it looks like a trajectory
   if (is_trajectory_file(filename, content)) {
-    const data = await parse_trajectory_data(content, filename)
+    const data = await parse_trajectory_async(
+      content,
+      filename,
+      undefined,
+      loading_options,
+    )
     return { type: `trajectory`, data, filename }
   }
 
@@ -706,6 +813,13 @@ const create_display = (
     const trajectory_data = result.data as TrajectoryData
 
     if (vscode_api && result.streaming_info.file_path) {
+      const loader = new VSCodeFrameLoader(
+        result.streaming_info.file_path,
+        vscode_api,
+      )
+      const frame_count = trajectory_data.total_frames ??
+        trajectory_data.frames.length
+      const metadata_sample_rate = Math.max(1, Math.ceil(frame_count / 2000))
       // Create trajectory with frame loader for streaming
       final_trajectory_data = {
         ...trajectory_data,
@@ -713,7 +827,12 @@ const create_display = (
         // Keep existing frames for initial display
         frames: trajectory_data.frames || [],
         // Attach frame loader directly to trajectory
-        frame_loader: new VSCodeFrameLoader(result.streaming_info.file_path, vscode_api),
+        frame_loader: loader,
+        // Whole-file comment parsing starts only when a plot is visible.
+        plot_metadata_loader: () => loader.extract_plot_metadata(
+          ``,
+          { sample_rate: metadata_sample_rate },
+        ),
       }
     }
   }

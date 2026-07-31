@@ -47,7 +47,6 @@ from catgo.models.hpc import (
     JobStatus,
     JobSubmitRequest,
     JobSubmitResponse,
-    SchedulerType,
 )
 from catgo.utils.hpc_client import pool, load_profiles, save_profile, delete_profile
 from catgo.utils.job_parser import detect_calc_type, parse_vasp_convergence, parse_vasp_progress, get_structure_content, tail_remote_file, read_remote_file, write_remote_file, get_xdatcar_content, list_job_files, find_job_script, merge_structures_from_dir
@@ -999,10 +998,11 @@ async def materialize_trajectory(
     size = await hpc.run_on_owner(lambda: hpc.get_remote_file_size(remote_path))
 
     key = hashlib.sha1(f"{session_id}\0{remote_path}\0{size}".encode()).hexdigest()[:16]
-    ext = os.path.splitext(remote_path)[1] or ".xyz"
+    from .trajectory_stream import _cache_name_for_trajectory
+
     cache_dir = Path.home() / ".catgoat" / "cache" / "traj"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    local = cache_dir / f"{key}{ext}"
+    local = cache_dir / _cache_name_for_trajectory(key, remote_path)
 
     if not (local.is_file() and local.stat().st_size > 0):
         tmp = local.with_name(local.name + ".part")

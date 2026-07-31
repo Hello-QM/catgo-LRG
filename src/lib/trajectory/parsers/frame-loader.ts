@@ -307,6 +307,18 @@ export class TrajFrameReader implements FrameLoader {
     if (frame_number < 0 || frame_number + 1 >= offsets.length) return null
 
     const chunk = data.slice(offsets[frame_number], offsets[frame_number + 1])
+    return this.load_xyz_frame_chunk(chunk, frame_number)
+  }
+
+  /**
+   * Parse one standalone XYZ frame while preserving this reader's reference
+   * topology. Node/Electron integrations use this entry point after seeking
+   * directly to a frame's byte range on disk, avoiding a whole-file string.
+   */
+  load_xyz_frame_chunk(
+    chunk: string,
+    frame_number: number,
+  ): TrajectoryFrame | null {
     const lines = chunk.split(/\r?\n/)
 
     // First non-empty line is the atom count (offset points at it, but stay
@@ -328,7 +340,11 @@ export class TrajFrameReader implements FrameLoader {
       }
     }
 
-    if (frame_number === 0) this.global_elements = [...elements]
+    if (frame_number === 0 || !this.global_elements) {
+      this.global_elements = [...elements]
+    }
+    const topology_changed = elements.length !== this.global_elements.length ||
+      elements.some((element, idx) => element !== this.global_elements?.[idx])
     const metadata = this.parse_xyz_metadata(comment, frame_number)
     // Per-frame lattice from the extxyz comment (#536): the indexed path must
     // agree with the eager parser (parsers/xyz.ts), which attaches the lattice
@@ -337,7 +353,7 @@ export class TrajFrameReader implements FrameLoader {
     // box, non-periodic bonds, supercell controls gone). Variable-cell
     // trajectories work naturally — each frame parses its own comment.
     const lattice_matrix = parse_xyz_lattice(comment)
-    return create_trajectory_frame(
+    const frame = create_trajectory_frame(
       positions,
       elements,
       lattice_matrix,
@@ -345,6 +361,20 @@ export class TrajFrameReader implements FrameLoader {
       frame_number,
       metadata.properties,
     )
+    // Full frames are the correctness fallback when compact loading detects a
+    // variable-N/species topology. Preserve that verdict on the materialized
+    // frame; otherwise the renderer sees position_data === undefined, assumes
+    // a fixed topology, and prepares (for example) 16 atoms against frame 0's
+    // 48-atom packet.
+    frame.position_data = {
+      step: metadata.step,
+      positions: Float32Array.from(positions.flat()),
+      forces: null,
+      lattice: lattice_matrix ?? null,
+      metadata: metadata.properties,
+      topology_changed,
+    }
+    return frame
   }
 
   private load_xyz_frame_positions(
@@ -355,6 +385,16 @@ export class TrajFrameReader implements FrameLoader {
     if (frame_number < 0 || frame_number + 1 >= offsets.length) return null
 
     const chunk = data.slice(offsets[frame_number], offsets[frame_number + 1])
+    return this.load_xyz_frame_positions_chunk(chunk, frame_number)
+  }
+
+  /**
+   * Compact companion to load_xyz_frame_chunk() for file-backed playback.
+   */
+  load_xyz_frame_positions_chunk(
+    chunk: string,
+    frame_number: number,
+  ): FramePositionData | null {
     const lines = chunk.split(/\r?\n/)
     let head = 0
     while (head < lines.length && !lines[head]?.trim()) head++
@@ -378,12 +418,13 @@ export class TrajFrameReader implements FrameLoader {
     }
     const topology_changed = elements.length !== this.global_elements.length ||
       elements.some((element, idx) => element !== this.global_elements?.[idx])
-    const metadata = this.parse_xyz_metadata(lines[head + 1] || ``, frame_number)
+    const comment = lines[head + 1] || ``
+    const metadata = this.parse_xyz_metadata(comment, frame_number)
     return {
       step: metadata.step,
       positions,
       forces: null,
-      lattice: null,
+      lattice: parse_xyz_lattice(comment) ?? null,
       metadata: metadata.properties,
       topology_changed,
     }
@@ -538,6 +579,10 @@ export class TrajFrameReader implements FrameLoader {
         this.global_numbers = [...numbers]
       }
       if (!numbers || !positions) throw new Error(`Missing atomic numbers or positions`)
+      const topology_changed =
+        positions.length !== this.global_numbers?.length ||
+        numbers.length !== this.global_numbers?.length ||
+        numbers.some((number, idx) => number !== this.global_numbers?.[idx])
 
       // Extract cell and calculate volume if present
       const cell = frame_data.cell as Matrix3x3 | undefined
@@ -556,7 +601,7 @@ export class TrajFrameReader implements FrameLoader {
         }
       }
 
-      return create_trajectory_frame(
+      const frame = create_trajectory_frame(
         positions,
         convert_atomic_numbers(numbers),
         cell,
@@ -564,13 +609,22 @@ export class TrajFrameReader implements FrameLoader {
         frame_number,
         metadata,
       )
+      frame.position_data = {
+        step: frame_number,
+        positions: Float32Array.from(positions.flat()),
+        forces: null,
+        lattice: cell ?? null,
+        metadata,
+        topology_changed,
+      }
+      return frame
     } catch (error) {
       console.warn(`Failed to load ASE frame ${frame_number}:`, error)
       return null
     }
   }
 
-  private parse_xyz_metadata(comment: string, frame_number: number): TrajectoryMetadata {
+  parse_xyz_metadata(comment: string, frame_number: number): TrajectoryMetadata {
     const properties: Record<string, number> = {}
 
     const patterns = {

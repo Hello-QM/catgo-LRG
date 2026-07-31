@@ -493,6 +493,29 @@ describe(`Trajectory Streaming`, () => {
   })
 
   describe(`Regression Tests`, () => {
+    it(`preserves XYZ topology changes on fully materialized fallback frames`, async () => {
+      const data = [
+        `2`,
+        `energy=-1 Properties=species:S:1:pos:R:3`,
+        `H 0 0 0`,
+        `H 1 0 0`,
+        `1`,
+        `energy=-2 Properties=species:S:1:pos:R:3`,
+        `O 2 0 0`,
+      ].join(`\n`)
+      const loader = new TrajFrameReader(`variable.extxyz`)
+
+      const first = await loader.load_frame(data, 0)
+      const changed = await loader.load_frame(data, 1)
+
+      expect(first?.position_data?.topology_changed).toBe(false)
+      expect(changed?.structure.sites).toHaveLength(1)
+      expect(changed?.position_data?.positions).toEqual(
+        Float32Array.from([2, 0, 0]),
+      )
+      expect(changed?.position_data?.topology_changed).toBe(true)
+    })
+
     it(`loads compact ASE positions and truthfully reports topology stability`, async () => {
       const stable_data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
       const stable_loader = new TrajFrameReader(`stable.traj`)

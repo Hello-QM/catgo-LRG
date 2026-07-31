@@ -81,6 +81,40 @@ export function parse_orca(content: string): ParsedStructure | null {
       }
     }
 
+    // ORCA output: keep the last Cartesian geometry from an optimization or
+    // single-point result. Multi-step large outputs use the trajectory
+    // streamer; this path makes a one-step/small .out useful as a structure.
+    let last_output_sites: Site[] | null = null
+    for (let idx = 0; idx < lines.length; idx++) {
+      if (!/CARTESIAN COORDINATES\s*\(ANGSTROE?M\)/i.test(lines[idx])) continue
+      const sites: Site[] = []
+      const counters: Record<string, number> = {}
+      let started = false
+      for (let row_idx = idx + 1; row_idx < lines.length; row_idx++) {
+        const trimmed = lines[row_idx].trim()
+        const match = trimmed.match(
+          /^([A-Z][a-z]?)\s+([-+\d.eEdD]+)\s+([-+\d.eEdD]+)\s+([-+\d.eEdD]+)(?:\s|$)/,
+        )
+        if (!match) {
+          if (started && (!trimmed || /^-+$/.test(trimmed))) break
+          continue
+        }
+        started = true
+        const xyz = match.slice(2, 5).map((value) => Number(value.replace(/[dD]/g, `e`)))
+        if (xyz.some((value) => !Number.isFinite(value))) continue
+        const element = validate_element_symbol(match[1], sites.length)
+        counters[element] = (counters[element] ?? 0) + 1
+        sites.push(make_site(
+          element,
+          xyz as Vec3,
+          [0, 0, 0],
+          `${element}${counters[element]}`,
+        ))
+      }
+      if (sites.length > 0) last_output_sites = sites
+    }
+    if (last_output_sites) return { sites: last_output_sites }
+
     return null
   } catch (error) {
     console.error(`Error parsing ORCA input:`, error)

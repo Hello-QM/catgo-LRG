@@ -109,6 +109,8 @@ export type TrajectoryDataExtractor = (
 
 export interface FrameLoader {
   fork?: () => FrameLoader
+  /** Release file descriptors or remote resources held by a runtime loader. */
+  dispose?: () => void | Promise<void>
   /** Optional constant-topology display path that skips full site objects. */
   load_frame_positions?: (
     data: string | ArrayBuffer,

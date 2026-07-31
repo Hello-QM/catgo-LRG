@@ -1102,13 +1102,20 @@ describe('packet path picking wiring (source contract)', () => {
     expect(scene_source).toContain('on_packet_bond_click')
   })
 
-  test('picker integration owns the packet branch and canvas click routing', () => {
+  test('picker integration owns the packet branch and pointer gesture routing', () => {
     const integration_source = readFileSync(
       resolve(process.cwd(), 'src/lib/structure/gpu-picker-integration.svelte.ts'),
       'utf8',
     )
     expect(integration_source).toContain('get_render_packet')
     expect(integration_source).toContain('resolve_replica_pick_action')
-    expect(integration_source).toMatch(/addEventListener\(\s*[`'"]click/)
+    expect(integration_source).toMatch(
+      /window\.addEventListener\(\s*[`'"]pointerdown[`'"]\s*,[^,]+,\s*true\s*\)/,
+    )
+    expect(integration_source).toMatch(
+      /window\.addEventListener\(\s*[`'"]pointerup[`'"]\s*,[^,]+,\s*true\s*\)/,
+    )
+    expect(integration_source).toContain('target === canvas.parentElement')
+    expect(integration_source).toContain('queueMicrotask')
   })
 })

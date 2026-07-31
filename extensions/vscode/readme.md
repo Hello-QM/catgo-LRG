@@ -83,6 +83,11 @@ Anything CatGo can parse renders here — far beyond CIF/POSCAR. Use
 - **pymatgen** JSON frames
 - `.gz`-compressed variants of the above
 
+Large trajectories use an OVITO-style file-backed index: CatGo scans frame
+boundaries once, keeps topology static where possible, and reads only the
+requested frame. Files above 1 MiB (or compressed files above 256 KiB) take
+this path in the extension and in the shared desktop/Web application.
+
 ### Custom Editor Integration
 
 CatGo automatically registers as a custom editor for trajectory files such as `.traj`, `.h5`, `.hdf5`, `.xyz.gz`, etc.
@@ -94,7 +99,8 @@ CatGo supports [VSCode](https://marketplace.visualstudio.com/items?itemName=ms-v
 - ✅ **Remote file access**: Visualize structures and trajectories on remote servers (HPC clusters, cloud instances, etc.)
 - ✅ **No manual file transfer**: Files are read directly from the remote filesystem
 - ✅ **File watching**: Changes to remote files are automatically detected and reloaded
-- ⚠️ **File size limit**: Files are currently limited to 1GB to prevent memory issues. Larger files are streamed in chunks which is only supported locally, not via remote SSH.
+- ✅ **Large trajectory streaming**: Streamable trajectory formats are indexed and read frame-by-frame on the remote extension host; they are not copied wholesale into the webview.
+- ⚠️ **Other files**: The 1 GB safety limit still applies to non-streamable files.
 
 ## ⚙️ Configuration & Customization
 
@@ -124,7 +130,7 @@ CatGo provides extensive customization options through VSCode settings. Access t
 {
   "catgo.trajectory.auto_play": true,
   "catgo.trajectory.fps": 10,
-  "catgo.trajectory.display_mode": "structure+scatter",
+  "catgo.trajectory.display_mode": "structure",
   "catgo.trajectory.show_controls": true
 }
 ```

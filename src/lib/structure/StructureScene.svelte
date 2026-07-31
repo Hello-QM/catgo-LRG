@@ -98,6 +98,8 @@
   import {
     create_prepared_frame_pipeline,
     is_prepared_frame_budget_refusal,
+    is_prepared_frame_topology_change,
+    PreparedFrameTopologyChangeError,
     prepared_frame_window_key,
     prepared_frame_with_replicas,
     same_prepared_frame_key,
@@ -2898,7 +2900,7 @@
       ).then((source) => {
         if (!current_source_request_guard.settle(current_source_request)) return
         if (
-          !source ||
+          !source?.topology_stable ||
           render_packet?.frame.owner !== raw_packet.frame.owner ||
           trajectory_step_idx !== frame_idx
         ) return
@@ -2908,6 +2910,23 @@
           source,
         }
       })
+      return
+    }
+    if (!current_source.topology_stable) {
+      // A variable-N/species frame belongs to Trajectory.svelte's materialized
+      // slow path. Preparing it against the previous fixed packet compares,
+      // for example, 16×3 coordinates with a 48-atom topology and turns a
+      // supported topology transition into a fatal length error.
+      current_source_request_guard.invalidate()
+      latest_prepared_request_key = null
+      latest_prepared_schedule = null
+      prepared_pipeline.clear(raw_packet.frame.owner)
+      pending_prepared_presentation = null
+      trajectory_presentation_committer.clear()
+      prepared_render_packet = null
+      prepared_gpu_positions = null
+      prepared_frame_forces = null
+      prepared_error = null
       return
     }
     current_source_request_guard.invalidate()
@@ -3062,6 +3081,7 @@
       if (
         outcome.status === `failed` &&
         !is_prepared_frame_budget_refusal(outcome.error) &&
+        !is_prepared_frame_topology_change(outcome.error) &&
         outcome.error !== already_reported_error
       ) {
         report_buffer_failure(outcome.error)
@@ -3153,14 +3173,12 @@
                 report_buffer_failure(error)
               },
             )
-            if (!source) {
-              throw reported_decode_error ??
-                new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
-            }
-            if (!source.topology_stable) {
-              throw new Error(
-                `Trajectory frame ${prefetch_idx} changed topology`,
-              )
+            if (!source?.topology_stable) {
+              if (!source) {
+                throw reported_decode_error ??
+                  new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
+              }
+              throw new PreparedFrameTopologyChangeError(prefetch_idx)
             }
             const decoded_key = key_for_source(source)
             if (!same_prepared_frame_key(decoded_key, provisional_key)) {

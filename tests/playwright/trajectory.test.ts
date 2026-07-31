@@ -218,10 +218,11 @@ test.describe(`Trajectory Component`, () => {
   })
 
   test(`has correct default values`, async () => {
-    // Check default display mode (should be 'structure+scatter')
+    // Check default display mode (structure-only keeps large trajectories
+    // focused on playback and avoids opening the plot pipeline eagerly).
     const content_area = trajectory_viewer.locator(`.content-area`)
-    await expect(content_area).toHaveClass(/show-both/)
-    await expect(content_area).not.toHaveClass(/show-structure-only/)
+    await expect(content_area).not.toHaveClass(/show-both/)
+    await expect(content_area).toHaveClass(/show-structure-only/)
     await expect(content_area).not.toHaveClass(/show-scatter-only/)
 
     // Check default step (should be 0)

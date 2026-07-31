@@ -75,6 +75,7 @@
     advance_playback_deadline,
     may_advance_playback,
     may_start_prepared_playback,
+    needs_prepared_playback_warmup,
     playback_poll_interval_ms,
     request_playback_frame,
   } from './prepared-playback-state'
@@ -221,7 +222,8 @@
     // When true (or when the OS prefers-reduced-motion matches), don't
     // auto-start playback. Manual play (▶) still works.
     reduced_motion?: boolean
-    // display mode: 'structure+scatter' (default), 'structure' (only structure), 'scatter' (only scatter), 'histogram' (only histogram), 'structure+histogram' (structure with histogram)
+    // display mode: 'structure' (default), 'structure+scatter', 'scatter',
+    // 'histogram', or 'structure+histogram'
     display_mode?:
       | `structure+scatter`
       | `structure`
@@ -469,6 +471,11 @@
   // Get total frame count (supports both regular and indexed trajectories)
   let total_frames = $derived(
     trajectory?.total_frames || trajectory?.frames.length || 0,
+  )
+  let known_variable_topology = $derived(
+    trajectory?.frames.some(
+      (frame) => frame.position_data?.topology_changed === true,
+    ) ?? false,
   )
 
   // Current frame - load on demand for indexed trajectories
@@ -792,6 +799,36 @@
   // per-frame current_structure writes (the slow path is acceptable for the
   // large-file workflow this represents).
   let topology_initialized = $state(false)
+  let slow_path_presentation_token = 0
+
+  function schedule_slow_path_presentation(
+    token: number,
+    owner: TrajectoryType | undefined,
+    frame: TrajectoryFrame,
+    frame_idx: number,
+    positions_version: number,
+  ): void {
+    const acknowledge = () => {
+      if (
+        token !== slow_path_presentation_token ||
+        trajectory !== owner ||
+        current_frame !== frame ||
+        displayed_frame_idx !== frame_idx ||
+        current_step_idx !== frame_idx ||
+        trajectory_frame_positions !== null
+      ) return
+      handle_trajectory_frame_presented(frame_idx, positions_version)
+    }
+    if (typeof requestAnimationFrame !== `function`) {
+      setTimeout(acknowledge, 0)
+      return
+    }
+    // The object renderer owns variable-topology frames. Wait through one
+    // complete browser paint before acknowledging so playback cannot replace
+    // the structure before the user ever sees it.
+    requestAnimationFrame(() => requestAnimationFrame(acknowledge))
+  }
+
   $effect(() => {
     trajectory // track
     topology_initialized = false
@@ -802,6 +839,7 @@
 
   $effect(() => {
     const frame = current_frame
+    const presentation_token = ++slow_path_presentation_token
     if (!frame?.structure) {
       current_structure = undefined
       trajectory_frame_positions = null
@@ -855,7 +893,8 @@
     const force_slow_path = traj_source === `doping_substitution` ||
       traj_source === `reaction_pathway`
     const compact = frame.position_data
-    if (compact && !force_slow_path) {
+    const frame_topology_changed = compact?.topology_changed === true
+    if (compact && !frame_topology_changed && !force_slow_path) {
       // Remote constant-topology frames arrive as flat coordinates. Keep the
       // first frame's structure as topology and publish the packet directly;
       // this avoids allocating a 20k-object site graph on every timer tick.
@@ -925,7 +964,8 @@
         resume_disabled = true
       }
       if (
-        !force_slow_path && !frame_scoped_structure_ops && topology_initialized &&
+        !frame_topology_changed && !force_slow_path &&
+        !frame_scoped_structure_ops && topology_initialized &&
         current_structure?.sites.length === frame_sites.length &&
         (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
       ) {
@@ -942,10 +982,18 @@
         current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
           ? clone_structure(frame.structure)
           : frame.structure
-        topology_initialized = !force_slow_path && !frame_scoped_structure_ops &&
+        topology_initialized = !frame_topology_changed &&
+          !force_slow_path && !frame_scoped_structure_ops &&
           (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
         trajectory_frame_positions = null
         trajectory_frame_forces = null
+        schedule_slow_path_presentation(
+          presentation_token,
+          trajectory,
+          frame,
+          active_displayed_frame_idx,
+          trajectory_positions_version.v,
+        )
       }
     }
   })
@@ -1241,7 +1289,10 @@
   function start_playback() {
     if (total_frames <= 1) return
     const show_bonds = trajectory_scene_props?.show_bonds
-    waiting_for_prepared_warmup = show_bonds !== `never`
+    waiting_for_prepared_warmup = needs_prepared_playback_warmup(
+      show_bonds,
+      known_variable_topology,
+    )
     is_playing = true
     if (trajectory) {
       on_play?.({ trajectory, step_idx: presented_step_idx, frame_count: total_frames })
@@ -1382,6 +1433,7 @@
     if (play_interval !== undefined) clearInterval(play_interval)
     if (playback_ack_timer !== undefined) clearTimeout(playback_ack_timer)
     if (pushback_timer) clearTimeout(pushback_timer)
+    slow_path_presentation_token++
   })
 
   // Handle internal file format drops

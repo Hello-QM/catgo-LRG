@@ -714,11 +714,15 @@ export function setup_hover_detection(
   // A pointerdown/click distance guard keeps orbit drags from selecting.
   let click_down_x = 0
   let click_down_y = 0
+  const targets_canvas_surface = (target: EventTarget | null): boolean =>
+    target === canvas || target === canvas.parentElement
   function handle_pointer_down(event: PointerEvent) {
+    if (!targets_canvas_surface(event.target)) return
     click_down_x = event.clientX
     click_down_y = event.clientY
   }
-  function handle_click(event: MouseEvent) {
+  function handle_pointer_up(event: PointerEvent) {
+    if (!targets_canvas_surface(event.target)) return
     const packet = deps.get_render_packet?.() ?? null
     if (packet === null || replica_picker === undefined) return
     if (
@@ -754,21 +758,32 @@ export function setup_hover_detection(
         deps.get_cutting_visibility_map(),
       )
     ) {
-      deps.on_packet_atom_click?.(action.site_idx, event)
+      // Defer the selection mutation until the pointerup dispatch has
+      // completed. toggle_selection() stops propagation for Threlte events;
+      // doing that from a capture listener would prevent TrackballControls
+      // from seeing pointerup and could leave the camera gesture stuck.
+      queueMicrotask(() => deps.on_packet_atom_click?.(action.site_idx, event))
     } else if (action?.type === `bond`) {
-      deps.on_packet_bond_click?.(action.filtered_idx, event)
+      queueMicrotask(() => deps.on_packet_bond_click?.(action.filtered_idx, event))
     }
   }
 
   canvas.addEventListener(`pointermove`, handle_hover)
   canvas.addEventListener(`pointerleave`, handle_hover_leave)
-  canvas.addEventListener(`pointerdown`, handle_pointer_down)
-  canvas.addEventListener(`click`, handle_click)
+  // TrackballControls prevents the browser's synthetic `click`, and an
+  // earlier capture listener on this same canvas may stop pointer events
+  // immediately after it finds no CPU hitbox. Packet rendering intentionally
+  // unmounts those hitboxes, so listen from window capture (before the event
+  // reaches the canvas) and accept only events whose target is this canvas.
+  // This keeps picking event-driven (one 1×1 readback per click) without
+  // reintroducing per-frame CPU hitbox matrix updates.
+  window.addEventListener(`pointerdown`, handle_pointer_down, true)
+  window.addEventListener(`pointerup`, handle_pointer_up, true)
   return () => {
     canvas.removeEventListener(`pointermove`, handle_hover)
     canvas.removeEventListener(`pointerleave`, handle_hover_leave)
-    canvas.removeEventListener(`pointerdown`, handle_pointer_down)
-    canvas.removeEventListener(`click`, handle_click)
+    window.removeEventListener(`pointerdown`, handle_pointer_down, true)
+    window.removeEventListener(`pointerup`, handle_pointer_up, true)
     if (raf_id !== 0) {
       cancelAnimationFrame(raf_id)
       raf_id = 0
