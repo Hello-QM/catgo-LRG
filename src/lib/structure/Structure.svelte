@@ -3818,7 +3818,8 @@
       bind:measure_mode={meas_state.measure_mode}
       bind:measure_mode_active={meas_state.measure_mode_active}
       bind:measure_menu_open={meas_state.measure_menu_open}
-      bind:measurements={meas_state.measurements}
+      measurements={meas_state.measurements}
+      on_measurements_change={(next) => { meas_state.measurements = next }}
       bind:measured_sites
       bind:selected_measurement_id={meas_state.selected_measurement_id}
       bind:selected_sites

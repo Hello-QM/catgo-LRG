@@ -7186,6 +7186,7 @@
           ? { state: controls.state, pointer_count: controls._pointers?.length ?? 0 }
           : null
       },
+      get_camera_is_moving: (): boolean => camera_is_moving,
       get override_size(): number { return realtime_position_overrides?.size ?? 0 },
       get vibration_active(): boolean { return vibration_data?.playing === true },
       get is_playing(): boolean {

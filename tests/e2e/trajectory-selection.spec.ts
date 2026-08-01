@@ -48,6 +48,7 @@ type Probe = {
     state: number
     pointer_count: number
   } | null
+  get_camera_is_moving: () => boolean
   selected_site_id: number | null
   selected_bond_count: number
   get_packet_bond_midpoint: (graph_idx: number) => [number, number, number] | null
@@ -123,7 +124,10 @@ test('saved middle-frame atom additions reopen with discrete topology', async ({
 })
 
 test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
-  test.setTimeout(60_000)
+  // This scenario intentionally covers the complete edit lifecycle (ordered
+  // measurement, add/delete, playback, export and dirty-close guard).  A cold
+  // software-WebGL CI worker needs more than the ordinary one-action budget.
+  test.setTimeout(120_000)
   await page.goto('/', { waitUntil: 'load' })
   const open = page.locator(
     'button.import-card.add-own-card',
@@ -433,10 +437,26 @@ test('packet-rendered trajectory bonds remain clickable', async ({ page }) => {
 
   // Paused quality mode supersamples the analytic sphere/cylinder depth
   // boundary; browser downsampling is what removes the junction staircase.
+  // Initial camera fitting temporarily enables the native-DPR motion path.
+  // Wait for both layout and that fit to settle before checking paused quality.
+  await expect.poll(async () => page.evaluate(() => {
+    const probe = (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      `canvas[data-render-active="true"]`,
+    )
+    const camera_is_moving = typeof probe?.get_camera_is_moving === `function`
+      ? probe.get_camera_is_moving()
+      : probe?.get_trackball_pointer_state()?.state !== -1
+    return Boolean(
+      canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0 &&
+      probe && !camera_is_moving,
+    )
+  }), { timeout: 15_000 }).toBe(true)
   await expect.poll(async () => canvas.evaluate((node) => {
     const el = node as HTMLCanvasElement
     return el.width / Math.max(1, el.clientWidth)
-  })).toBeGreaterThan(1.5)
+  }), { timeout: 15_000 }).toBeGreaterThan(1.5)
 
   await page.mouse.click(box!.x + pixel!.x, box!.y + pixel!.y)
   await page.waitForFunction(
