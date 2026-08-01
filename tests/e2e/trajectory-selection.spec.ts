@@ -56,7 +56,7 @@ type Probe = {
 
 test('bundled ASE trajectory stays binary through the Vite asset URL', async ({ page }) => {
   test.setTimeout(60_000)
-  await page.goto('/', { waitUntil: 'load' })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   const source = page.locator('.source-selector select').first()
   await source.selectOption('catgo')
   await page.locator('.section-header', { hasText: /Trajectories/i }).click()
@@ -80,7 +80,7 @@ test('saved middle-frame atom additions reopen with discrete topology', async ({
       shader_errors.push(value)
     }
   })
-  await page.goto('/', { waitUntil: 'load' })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   const open = page.locator(
     'button.import-card.add-own-card',
     { hasText: /Open file/i },
@@ -125,10 +125,10 @@ test('saved middle-frame atom additions reopen with discrete topology', async ({
 
 test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   // This scenario intentionally covers the complete edit lifecycle (ordered
-  // measurement, add/delete, playback, export and dirty-close guard).  A cold
+  // measurement, add/delete, playback and export). A cold
   // software-WebGL CI worker needs more than the ordinary one-action budget.
   test.setTimeout(120_000)
-  await page.goto('/', { waitUntil: 'load' })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   const open = page.locator(
     'button.import-card.add-own-card',
     { hasText: /Open file/i },
@@ -374,21 +374,66 @@ test('packet-rendered trajectory atoms remain clickable', async ({ page }) => {
   expect(poscar_download.content).toContain(`1.0`)
   expect(poscar_download.content).toMatch(/Direct|Cartesian/)
 
-  // Trajectory edits must enter the same dirty/close guard as ordinary
-  // structures. A tab close now offers Save & Close instead of silently
-  // discarding the edited trajectory.
-  await page.getByRole(`button`, { name: `Close tab` }).first().click()
-  const close_dialog = page.locator(`.modal-dialog`).filter({
-    has: page.locator(`.modal-btn.save`),
+})
+
+test('edited trajectory prompts to save before tab close', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const open = page.locator(
+    'button.import-card.add-own-card',
+    { hasText: /Open file/i },
+  ).first()
+  await expect(open).toBeVisible({ timeout: 30_000 })
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    open.click(),
+  ])
+  await chooser.setFiles({
+    name: 'trajectory-dirty-close.extxyz',
+    mimeType: 'chemical/x-xyz',
+    buffer: Buffer.from(TWO_FRAME_EXTXYZ),
   })
-  await expect(close_dialog).toBeVisible()
-  await expect(close_dialog.locator(`.modal-btn.save`)).toBeVisible()
-  await close_dialog.locator(`.modal-btn.cancel`).click()
+
+  await expect(page.locator('.trajectory-controls')).toBeVisible({
+    timeout: 30_000,
+  })
+  await page.waitForFunction(
+    () => Boolean((globalThis as typeof globalThis & {
+      __catgo_traj_test?: unknown
+    }).__catgo_traj_test),
+    null,
+    { timeout: 30_000 },
+  )
+  await page.evaluate(() => {
+    const api = (globalThis as typeof globalThis & {
+      __catgo_traj_test?: { trigger_atoms_deleted: () => void }
+    }).__catgo_traj_test
+    api?.trigger_atoms_deleted()
+  })
+  await page.waitForFunction(
+    () => (globalThis as typeof globalThis & { __catgo_probe?: Probe })
+      .__catgo_probe?.atom_count === 2,
+    null,
+    { timeout: 10_000 },
+  )
+
+  // Dispatch directly: this assertion targets the close guard, not the tab
+  // button hover animation. Scope to the active tab so additional tabs cannot
+  // redirect the request.
+  const close = page.locator('.tab.active .tab-close')
+  await expect(close).toHaveCount(1)
+  await close.dispatchEvent('click')
+  const close_dialog = page.locator('.modal-dialog').filter({
+    has: page.locator('.modal-btn.save'),
+  })
+  await expect(close_dialog).toBeVisible({ timeout: 10_000 })
+  await expect(close_dialog.locator('.modal-btn.save')).toBeVisible()
+  await close_dialog.locator('.modal-btn.cancel').click()
 })
 
 test('packet-rendered trajectory bonds remain clickable', async ({ page }) => {
   test.setTimeout(60_000)
-  await page.goto('/', { waitUntil: 'load' })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   const open = page.locator(
     'button.import-card.add-own-card',
     { hasText: /Open file/i },
