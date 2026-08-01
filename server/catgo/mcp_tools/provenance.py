@@ -42,6 +42,7 @@ _STRICT_RESULT_FIELDS = {
     "E_ads_eV", "E_ads_unit", "dG_ads_eV", "dG_ads_unit",
 }
 _RESULT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+STRUCTURE_INPUT_RECORD_KEY = "_catgo_structure_input"
 
 # what a checkable claim of each kind needs, beyond the value itself
 NEEDS = {
@@ -189,6 +190,33 @@ def _result_digest(value, claim, provenance):
         allow_nan=False,
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def structure_input_record(structure, *, source):
+    """Return a compact, deterministic identity record for a structure input.
+
+    Some handlers obtain their effective structure from the current viewer only
+    after dispatch starts.  Echoing the full structure into provenance would be
+    needlessly large, but omitting it makes two different viewer structures look
+    like the same logical result.  Bind both the normalized content and its
+    origin into the result identity instead.
+    """
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("structure input source must be a nonempty string")
+    canonical = json.dumps(
+        _digest_normalize({
+            "kind": "catgo_structure_input_v1",
+            "structure": structure,
+        }),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return {
+        "source": source.strip(),
+        "digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+    }
 
 
 def _result_identity(*, tool, action, inputs=None, discriminator=None):

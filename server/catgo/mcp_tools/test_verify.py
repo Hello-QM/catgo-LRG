@@ -900,6 +900,48 @@ def test_corrected_result_supersedes_only_same_logical_identity():
     assert enf.precheck("catgo_campaign", {"action": "report"}, sk)[0] == enf.ALLOW
 
 
+def test_distinct_implicit_structure_records_cannot_supersede_each_other():
+    sk = "implicit-structure-scope"; _fresh(sk)
+    structure_a = {"charge": 0, "sites": [{"xyz": [0.0, 0.0, 0.0]}]}
+    structure_b = {"sites": [{"xyz": [1.0, 0.0, 0.0]}]}
+    record_a = prov.structure_input_record(structure_a, source="viewer")
+    record_b = prov.structure_input_record(structure_b, source="viewer")
+    # Dict key order must not perturb the content digest.
+    assert record_a == prov.structure_input_record(
+        {"sites": [{"xyz": [0.0, 0.0, 0.0]}], "charge": 0},
+        source="viewer",
+    )
+    assert record_a["digest"] != record_b["digest"]
+
+    envelopes = [
+        prov.envelope(
+            {"rdf": [1.0, 2.0]},
+            tool="catgo_analyze",
+            action="rdf",
+            inputs={"action": "rdf", prov.STRUCTURE_INPUT_RECORD_KEY: record},
+        )
+        for record in (record_a, record_b)
+    ]
+    assert (
+        envelopes[0]["provenance"]["result_identity"]
+        != envelopes[1]["provenance"]["result_identity"]
+    )
+    for envelope in envelopes:
+        enf.postmark(
+            "catgo_analyze",
+            {"action": "rdf", "_result_records": prov.extract_result_records(envelope)},
+            session_key=sk,
+        )
+    state = enf.state(sk)
+    assert set(state["pending_digests"]) == {
+        envelope["result_digest"] for envelope in envelopes
+    }
+    assert not [
+        event for event in state["audit"]
+        if event.get("event") == "result_superseded"
+    ]
+
+
 def test_R5_override_is_narrow_justified_and_one_shot():
     sk = "r5o"; _fresh(sk)
     enf.postmark("catgo_catalysis", {"action": "oer"}, ok=True, session_key=sk)

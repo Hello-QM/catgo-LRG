@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 VASP_MANDATORY_INPUTS = ("INCAR", "POSCAR", "POTCAR", "KPOINTS")
 VASP_KPOINTS_POLICIES = {"vasp_default", "explicit_regular_mesh"}
 _INCAR_TAG_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
+_SAFE_JOB_SUBSTITUTION_LINES = {
+    'echo "Calculation finished on $(date)."',
+}
 
 
 @dataclass(frozen=True)
@@ -232,12 +235,14 @@ def validate_vasp_job_script(
         r"^(if|then|else|elif|fi|for|while|until|case|esac|select|function)\b"
     )
     for line in lines:
-        if ("$(" in line or "`" in line) and not line.startswith("echo "):
-            # The ban makes the EXECUTION path auditable. An `echo` line cannot
-            # become one — and the repo ships a Shaheen3 template ending in
-            # `echo "Calculation finished on $(date)."`, which a blanket ban
-            # rejects, so generate_job_script() failed on CatGo's own template.
-            raise ValueError("VASP job script command substitution is not auditable")
+        has_shell_substitution = any(
+            marker in line for marker in ("$(", "`", "<(", ">(")
+        )
+        if has_shell_substitution and line not in _SAFE_JOB_SUBSTITUTION_LINES:
+            # Command and process substitution execute even inside `echo "..."`.
+            # Keep the one exact timestamp line shipped by CatGo, and fail closed
+            # for all other substitutions so echo cannot hide another launch.
+            raise ValueError("VASP job script shell substitution is not auditable")
         if control.match(line) or line in {"{", "}"}:
             raise ValueError(
                 "VASP job script control flow is not auditable; use a linear "

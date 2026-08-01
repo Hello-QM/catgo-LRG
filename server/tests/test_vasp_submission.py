@@ -45,6 +45,30 @@ def test_job_script_rejects_hidden_or_second_vasp_execution_path():
         )
 
 
+@pytest.mark.parametrize("hidden", [
+    'echo "hidden: $(srun rogue_vasp)"',
+    "echo `srun rogue_vasp`",
+    'echo "finished: $(date; srun rogue_vasp)"',
+    "echo <(srun rogue_vasp)",
+    "echo >(srun rogue_vasp)",
+])
+def test_job_script_rejects_shell_substitution_hidden_in_echo(hidden):
+    resolution = resolve_vasp_command({}, {})
+    with pytest.raises(ValueError, match="shell substitution"):
+        validate_vasp_job_script(
+            f"srun vasp_std\n{hidden}\n", resolution, False,
+        )
+
+
+def test_job_script_allows_the_shipped_timestamp_substitution():
+    resolution = resolve_vasp_command({}, {})
+    validate_vasp_job_script(
+        'srun vasp_std\necho "Calculation finished on $(date)."\n',
+        resolution,
+        False,
+    )
+
+
 @pytest.mark.parametrize(
     "command",
     [

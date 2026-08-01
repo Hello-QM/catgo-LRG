@@ -2134,8 +2134,21 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
         return [T(type="text", text=f"Unknown analyze action '{action}'. Valid: {valid}")]
 
     method, endpoint = route
+    try:
+        from . import provenance as _prov
+    except ImportError:
+        import provenance as _prov
+
+    # This key is internal output from effective-input resolution.  Never trust
+    # or forward a caller-provided value; overwrite it below from the structure
+    # that is actually sent to the backend.
+    args.pop(_prov.STRUCTURE_INPUT_RECORD_KEY, None)
+
     # `software` is a routing hint for dft_input, not a request-body field.
-    payload = {k: v for k, v in args.items() if k not in ("action", "software")}
+    payload = {
+        k: v for k, v in args.items()
+        if k not in ("action", "software", _prov.STRUCTURE_INPUT_RECORD_KEY)
+    }
 
     # Normalize optimize params: MCP uses "model", backend uses "calculator"
     if action == "optimize":
@@ -2143,10 +2156,19 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
             payload["calculator"] = payload.pop("model").lower()
 
     # Auto-inject structure for POST endpoints that need it
-    if method == "POST" and "structure" not in payload:
-        struct = await _get_current_structure(client)
-        if struct:
-            payload["structure"] = struct
+    if method == "POST":
+        structure_source = "argument"
+        if "structure" not in payload:
+            struct = await _get_current_structure(client)
+            if struct:
+                payload["structure"] = struct
+                structure_source = "viewer"
+        effective_structure = payload.get("structure")
+        if isinstance(effective_structure, dict):
+            args[_prov.STRUCTURE_INPUT_RECORD_KEY] = _prov.structure_input_record(
+                effective_structure,
+                source=structure_source,
+            )
 
     if method == "GET":
         resp = await client.get(f"{API_BASE}{endpoint}", params=payload or None)

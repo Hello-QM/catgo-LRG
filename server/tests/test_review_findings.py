@@ -18,6 +18,7 @@ mcp_http = importlib.import_module("catgo.routers.mcp_http")
 scc = importlib.import_module("catgo.mcp_tools.server_claude_code")
 enf = importlib.import_module("catgo.mcp_tools.verify_enforcement")
 helpers = importlib.import_module("catgo.mcp_tools.helpers")
+prov = importlib.import_module("catgo.mcp_tools.provenance")
 vg = importlib.import_module("catgo.mcp_tools.verify_gates")
 vsub = importlib.import_module("catgo.workflow.engine.vasp_submission")
 rc = importlib.import_module("catgo.workflow.engine.result_collector")
@@ -115,6 +116,23 @@ def test_command_substitution_on_an_execution_line_is_still_rejected():
     bad = "module load vasp\nexport X=$(cat /etc/passwd)\nsrun vasp_std\n"
     with pytest.raises(ValueError):
         vsub.validate_vasp_job_script(bad, res, use_custodian=False)
+
+
+@pytest.mark.parametrize("hidden", [
+    'echo "hidden: $(srun rogue_vasp)"',
+    "echo `srun rogue_vasp`",
+    'echo "finished: $(date; srun rogue_vasp)"',
+    "echo <(srun rogue_vasp)",
+    "echo >(srun rogue_vasp)",
+])
+def test_echo_cannot_hide_shell_substitution(hidden):
+    res = vsub.VaspCommandResolution(
+        command="srun vasp_std", binary_token="vasp_std", source="test",
+    )
+    with pytest.raises(ValueError, match="shell substitution"):
+        vsub.validate_vasp_job_script(
+            f"srun vasp_std\n{hidden}\n", res, use_custodian=False,
+        )
 
 
 # ---- a quoted tilde is a literal directory --------------------------------
@@ -865,6 +883,91 @@ def test_dos_guidance_does_not_arm_numeric_verification():
     state = enf.state(key)
     assert state["in_flight"] == 0
     assert state["unverified"] == 0
+
+
+def test_implicit_viewer_structures_have_distinct_result_identities():
+    structures = [
+        {"sites": [{"xyz": [0.0, 0.0, 0.0]}]},
+        {"sites": [{"xyz": [1.0, 0.0, 0.0]}]},
+    ]
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            # Deliberately identical result values: only the effective structure
+            # should distinguish the two logical results.
+            return {"rdf": [1.0, 2.0]}
+
+    class Client:
+        def __init__(self):
+            self.payloads = []
+
+        async def post(self, url, json):
+            self.payloads.append(json)
+            return Response()
+
+    async def current_structure(_client, _panel_id):
+        return structures.pop(0)
+
+    async def scenario():
+        client = Client()
+
+        async def dispatch(_name, arguments):
+            return await scc._handle_analyze(client, arguments)
+
+        first_args = {
+            "action": "rdf",
+            # A caller cannot forge the internal effective-input record.
+            prov.STRUCTURE_INPUT_RECORD_KEY: {
+                "source": "spoofed",
+                "digest": "sha256:" + "0" * 64,
+            },
+        }
+        second_args = {"action": "rdf"}
+        first = await scc.run_with_verification(
+            "catgo_analyze", first_args, dispatch,
+        )
+        second = await scc.run_with_verification(
+            "catgo_analyze", second_args, dispatch,
+        )
+        return client, [json.loads(first[0].text), json.loads(second[0].text)]
+
+    session_id = "review:implicit-structure-identity"
+    enf._sessions.pop(session_id, None)
+    session_token = helpers.current_verification_session_id.set(session_id)
+    structure_token = scc._get_current_structure_override.set(current_structure)
+    try:
+        client, envelopes = asyncio.run(scenario())
+    finally:
+        scc._get_current_structure_override.reset(structure_token)
+        helpers.current_verification_session_id.reset(session_token)
+
+    records = [
+        envelope["provenance"]["inputs"][prov.STRUCTURE_INPUT_RECORD_KEY]
+        for envelope in envelopes
+    ]
+    assert [record["source"] for record in records] == ["viewer", "viewer"]
+    assert records[0]["digest"] != records[1]["digest"]
+    assert (
+        envelopes[0]["provenance"]["result_identity"]
+        != envelopes[1]["provenance"]["result_identity"]
+    )
+    assert prov.STRUCTURE_INPUT_RECORD_KEY not in client.payloads[0]
+    assert [payload["structure"] for payload in client.payloads] == [
+        {"sites": [{"xyz": [0.0, 0.0, 0.0]}]},
+        {"sites": [{"xyz": [1.0, 0.0, 0.0]}]},
+    ]
+    state = enf.state(session_id)
+    assert set(state["pending_digests"]) == {
+        envelope["result_digest"] for envelope in envelopes
+    }
+    assert not [
+        event for event in state["audit"]
+        if event.get("event") == "result_superseded"
+    ]
 
 
 @pytest.mark.parametrize("action", ["status", "results", "step_error"])
