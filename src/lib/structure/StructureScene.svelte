@@ -3433,9 +3433,9 @@
 
   // The first bond computation can run before the ferrox WASM finishes loading
   // (a popout window loads its structure at mount; mobile cold-starts are slow).
-  // compute_bonds_sync then falls back to the pure-JS path, which emits NO
-  // cross-cell PBC bonds. When WASM finishes, recompute ONCE with the real
-  // (PBC-aware) detector. Done imperatively + untracked so it can't entangle
+  // atom_radii now has an exact PBC-aware JS fallback; the heuristic strategies
+  // still need Rust for their periodic graphs. When WASM finishes, recompute
+  // ONCE with the preferred detector. Done imperatively + untracked so it can't entangle
   // with the reactive bond effect above (that would loop on bond_state writes).
   $effect(() => on_ferrox_wasm_ready(() => untrack(() => {
     invalidate_bonds_for_recompute(bond_state, bond_input)

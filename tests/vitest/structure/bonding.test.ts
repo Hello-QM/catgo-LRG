@@ -310,7 +310,7 @@ describe(`Bond Strength Validation`, () => {
 //
 // Rust `Bond` already carries `image: [i32; 3]`, the WASM JSON wire format
 // preserves it, and `WasmBond.image` is typed. Phase 1 only required:
-//   - JS fallback strategies emit BondPair.jimage = [0, 0, 0]
+//   - JS atom_radii preserves PBC jimages; Cartesian heuristics emit zero
 //   - wasm_bonds_to_pairs propagates Rust's image through to BondPair.jimage
 //   - controller mapping (bond_connectivity) carries jimage forward
 //
@@ -318,18 +318,21 @@ describe(`Bond Strength Validation`, () => {
 // conversion. End-to-end through the controller is exercised in Phase 2/3
 // once jimage is required everywhere.
 describe(`Phase 1 jimage propagation`, () => {
-  test(`JS strategies emit jimage = [0, 0, 0] on every BondPair`, () => {
+  test(`Cartesian JS strategies emit zero jimage while atom_radii preserves PBC images`, () => {
     const structure = get_test_structure([
       { xyz: [0, 0, 0], element: `C` },
       { xyz: [1.5, 0, 0], element: `O` },
       { xyz: [0, 1.5, 0], element: `H` },
     ])
-    for (const strategy of Object.values(bonding.BONDING_STRATEGIES)) {
+    for (const [name, strategy] of Object.entries(bonding.BONDING_STRATEGIES)) {
       const bonds = strategy(structure)
       // Test only meaningful when at least one bond is detected.
       if (bonds.length === 0) continue
-      for (const bond of bonds) {
-        expect(bond.jimage).toEqual([0, 0, 0])
+      if (name === `atom_radii`) {
+        expect(bonds.some((bond) => bond.jimage?.some((value) => value !== 0)))
+          .toBe(true)
+      } else {
+        for (const bond of bonds) expect(bond.jimage).toEqual([0, 0, 0])
       }
     }
   })
@@ -386,4 +389,3 @@ describe(`Phase 1 jimage propagation`, () => {
     }
   })
 })
-

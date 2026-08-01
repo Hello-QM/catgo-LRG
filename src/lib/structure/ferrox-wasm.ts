@@ -599,9 +599,9 @@ export function is_ferrox_wasm_ready(): boolean {
  *
  *  Used by the bond viewer: the first bond computation can race the eager WASM
  *  init (a popout window loads its structure at mount; mobile cold-starts are
- *  slow), in which case compute_bonds_sync falls back to the pure-JS path that
- *  produces NO cross-cell PBC bonds. This lets the viewer recompute once the
- *  real WASM detector is available. */
+ *  slow). atom_radii's JS fallback is PBC-aware, but the listener still lets
+ *  heuristic strategies upgrade to their exact Rust implementations once the
+ *  module becomes available. */
 export function on_ferrox_wasm_ready(cb: () => void): () => void {
   if (wasm_module) {
     cb()
