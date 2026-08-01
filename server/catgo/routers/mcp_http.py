@@ -21,8 +21,10 @@ Computation endpoints like /structure-ops/supercell remain ordinary HTTP.
 """
 
 import logging
+import inspect
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 
@@ -194,17 +196,54 @@ logger.info("MCP HTTP: request-local viewer helper overrides enabled")
 
 mcp_server = Server("catgo-claude-code-http")
 
-session_manager = StreamableHTTPSessionManager(
-    app=mcp_server,
-    json_response=True,
-    # Stateful mode gives headless clients a standards-defined Mcp-Session-Id.
-    # Stateless mode created no protocol session id, so every no-panel client
-    # shared one verification ledger in this server process.
-    stateless=False,
-    # CLI processes can die without the protocol DELETE. Bound abandoned
-    # transports instead of retaining one Server.run task forever.
-    session_idle_timeout=3600.0,
-)
+_SESSION_IDLE_TIMEOUT_SECONDS = 3600.0
+
+
+def _make_session_manager(
+    manager_cls: Callable[..., Any] = StreamableHTTPSessionManager,
+) -> Any:
+    """Build the HTTP session manager across the supported MCP 1.x range.
+
+    ``session_idle_timeout`` was added after MCP 1.26.  CatGo supports
+    ``mcp>=1,<2``, so passing the newer keyword unconditionally makes this
+    module fail at import time on otherwise-supported installations.  Keep
+    the useful timeout where the installed constructor advertises it, and
+    omit only that optional keyword on older releases.
+    """
+    kwargs: dict[str, Any] = {
+        "app": mcp_server,
+        "json_response": True,
+        # Stateful mode gives headless clients a standards-defined
+        # Mcp-Session-Id. Stateless mode created no protocol session id, so
+        # every no-panel client shared one verification ledger in this process.
+        "stateless": False,
+    }
+    try:
+        parameters = inspect.signature(manager_cls).parameters.values()
+    except (TypeError, ValueError):
+        logger.warning(
+            "MCP HTTP: cannot inspect StreamableHTTPSessionManager; "
+            "idle-session timeout disabled for compatibility",
+        )
+    else:
+        accepts_timeout = any(
+            parameter.name == "session_idle_timeout"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if accepts_timeout:
+            # CLI processes can die without the protocol DELETE. Bound
+            # abandoned transports where the installed MCP exposes support.
+            kwargs["session_idle_timeout"] = _SESSION_IDLE_TIMEOUT_SECONDS
+        else:
+            logger.info(
+                "MCP HTTP: installed MCP has no session_idle_timeout; "
+                "using its legacy session lifecycle",
+            )
+    return manager_cls(**kwargs)
+
+
+session_manager = _make_session_manager()
 
 
 @mcp_server.list_tools()

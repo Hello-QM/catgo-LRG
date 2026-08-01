@@ -7,6 +7,7 @@ guarantee it did not deliver.
 
 import asyncio
 import importlib
+import inspect
 import json
 import subprocess
 
@@ -149,7 +150,46 @@ def test_the_wrapper_derives_a_session_key():
 
 def test_http_transport_uses_protocol_sessions():
     assert mcp_http.session_manager.stateless is False
-    assert mcp_http.session_manager.session_idle_timeout == 3600.0
+    if "session_idle_timeout" in inspect.signature(
+        mcp_http.StreamableHTTPSessionManager,
+    ).parameters:
+        assert mcp_http.session_manager.session_idle_timeout == 3600.0
+
+
+def test_http_session_manager_supports_legacy_and_new_mcp_signatures():
+    calls = []
+
+    class LegacyManager:
+        def __init__(self, *, app, json_response, stateless):
+            calls.append(("legacy", app, json_response, stateless, None))
+            self.stateless = stateless
+
+    class TimeoutManager:
+        def __init__(
+            self,
+            *,
+            app,
+            json_response,
+            stateless,
+            session_idle_timeout=None,
+        ):
+            calls.append((
+                "timeout", app, json_response, stateless,
+                session_idle_timeout,
+            ))
+            self.stateless = stateless
+            self.session_idle_timeout = session_idle_timeout
+
+    legacy = mcp_http._make_session_manager(LegacyManager)
+    modern = mcp_http._make_session_manager(TimeoutManager)
+
+    assert legacy.stateless is False
+    assert modern.stateless is False
+    assert modern.session_idle_timeout == 3600.0
+    assert calls == [
+        ("legacy", mcp_http.mcp_server, True, False, None),
+        ("timeout", mcp_http.mcp_server, True, False, 3600.0),
+    ]
 
 
 def test_bound_http_session_wins_over_stdio_default():
