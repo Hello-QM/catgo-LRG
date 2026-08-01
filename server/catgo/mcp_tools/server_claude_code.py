@@ -2564,7 +2564,8 @@ def _handle_verify(args: dict) -> list[TextContent]:
             ov = _enf.register_override(args["override"], args.get("justification", ""),
                                         session_key=_verification_session_key())
             ov_lines = ["", f"⚠ override registered for {', '.join(ov['gates'])} — "
-                            f"one-shot, spent by the next irreversible call, and recorded. "
+                            f"one-shot; the exact irreversible call still requires "
+                            f"explicit human approval and will be recorded. "
                             f"justification: {ov['why']}"]
         except ValueError as e:
             ov_lines = ["", f"override REFUSED: {e}"]
@@ -3810,17 +3811,24 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
         import verify_enforcement as _enf  # flat-layout fallback
     session_key = _verification_session_key()
     decision, reason = _enf.precheck(name, arguments, session_key=session_key)
-    if decision == _enf.FORBIDDEN:
+    if decision in {_enf.FORBIDDEN, _enf.PROMPT}:
         return [T(type="text", text=reason)]
+
+    # The approval id is a control-plane capability, not a tool argument.  Never
+    # expose it to handlers, provenance inputs, or downstream HTTP services.
+    dispatch_arguments = {
+        key: value for key, value in arguments.items()
+        if key != _enf.APPROVAL_ARG
+    }
 
     # Arm BEFORE dispatch: an HPC-backed numeric call takes seconds, and a
     # concurrent submit arriving in that window used to see a clean session.
-    armed = _enf._may_produce_numeric(name, arguments)
+    armed = _enf._may_produce_numeric(name, dispatch_arguments)
     if armed:
         _enf.arm_pending(name, session_key=session_key)
     try:
-        result = await dispatch(name, arguments)
-        ok = _response_succeeded(name, result, arguments)
+        result = await dispatch(name, dispatch_arguments)
+        ok = _response_succeeded(name, result, dispatch_arguments)
         # Emit provenance for EVERY numeric tool, not just the handlers someone edited.
         # Single boundary = the same place the ecosystem audit found metadata being
         # discarded (59.6% of 178 public tools emit none).
@@ -3831,25 +3839,25 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
             import provenance as _prov
         v2_result_response = (
             name == "catgo_workflow"
-            and str(arguments.get("action", "")).lower() in {
+            and str(dispatch_arguments.get("action", "")).lower() in {
                 "status", "results", "step_error"
             }
             and _prov.workflow_payload_has_results(raw_numeric_text)
         ) if ok and result else False
-        numeric_response = _enf._is_numeric(name, arguments) or v2_result_response
+        numeric_response = _enf._is_numeric(name, dispatch_arguments) or v2_result_response
         if ok and result and numeric_response:
             wrapped = _prov.wrap_payload(
                 result[0].text,
                 tool=name,
-                action=arguments.get("action"),
-                inputs=arguments,
+                action=dispatch_arguments.get("action"),
+                inputs=dispatch_arguments,
             )
             if wrapped is not None:
                 result[0] = T(type="text", text=wrapped)
         # batch_results is numeric only when at least one item was enveloped.
         is_empty_batch = (
             name == "catgo_workflow"
-            and str(arguments.get("action", "")).lower() == "batch_results"
+            and str(dispatch_arguments.get("action", "")).lower() == "batch_results"
             and _prov.batch_payload_is_empty(raw_numeric_text)
         )
         result_records = (
@@ -3857,7 +3865,7 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
             if ok and result and numeric_response else []
         )
         postmark_args = {
-            **arguments,
+            **dispatch_arguments,
             **({"_numeric_response": True} if v2_result_response else {}),
             **({"_result_records": result_records} if result_records else {}),
         }
@@ -3867,8 +3875,8 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
             ok=ok and not is_empty_batch,
             session_key=session_key,
         )
-        if decision == _enf.PROMPT and result:
-            # A waived FAIL still went out — stamp it in the transcript.
+        if reason and result:
+            # A human-approved waiver went out — stamp it in the transcript.
             result[0] = T(type="text", text=f"{reason}\n\n{result[0].text}")
         return result
     finally:

@@ -26,15 +26,24 @@ model; swap for a store if the server ever multiplexes sessions.
 """
 
 import copy
+import hashlib
+import hmac
+import json
+import os
 import re
+import secrets
+import time
+from pathlib import Path
 
 ALLOW, PROMPT, FORBIDDEN = "allow", "prompt", "forbidden"
-# NOTE on PROMPT: this layer does NOT block for a human. A spent override lets the
-# call through and the response is stamped so the waiver is visible in the
-# transcript and recorded in `audit`. Actual human-in-the-loop approval belongs to
-# the permission manager / decide_tool_permission layer, which sits above this one
-# (see the module docstring). Do not read PROMPT as "a human approved this".
+# PROMPT is fail-closed.  The shared wrapper must not dispatch until the desktop
+# bridge has shown a PermissionCard and approved the exact challenge through the
+# authenticated backend endpoint.
 _SEVERITY = {ALLOW: 0, PROMPT: 1, FORBIDDEN: 2}
+
+APPROVAL_ARG = "_catgo_approval_id"
+APPROVAL_TTL_SECONDS = 300
+_APPROVAL_SECRET_ENV = "CATGO_VERIFY_APPROVAL_SECRET_FILE"
 
 
 def strictest(*decisions):
@@ -116,8 +125,193 @@ def _st(session_key="default"):
         "legacy_failed_taxa": [],
         "failed_by_digest": {},
         "override": None,
+        "approval_challenges": {},
+        "used_approval_ids": [],
         "audit": [],
     })
+
+
+def approval_secret_path():
+    """Path shared only by the local backend and trusted desktop bridge."""
+    configured = os.environ.get(_APPROVAL_SECRET_ENV, "").strip()
+    return Path(configured).expanduser() if configured else (
+        Path.home() / ".catgo" / "verification-approval.key"
+    )
+
+
+def approval_secret():
+    """Read or atomically create the bridge/backend capability secret.
+
+    The secret is deliberately outside MCP state and never appears in a tool
+    response.  Failure to create/read/validate it raises, so approval remains
+    fail-closed.
+    """
+    path = approval_secret_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        try:
+            os.write(fd, (secrets.token_hex(32) + "\n").encode("ascii"))
+        finally:
+            os.close(fd)
+    value = path.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise RuntimeError("invalid CatGo verification approval secret")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return value
+
+
+def verify_approval_secret(candidate):
+    """Constant-time verification for the trusted approval endpoint."""
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    try:
+        expected = approval_secret()
+    except (OSError, RuntimeError, UnicodeError):
+        return False
+    return hmac.compare_digest(candidate, expected)
+
+
+def _call_fingerprint(tool, args):
+    clean = {k: v for k, v in (args or {}).items() if k != APPROVAL_ARG}
+    try:
+        encoded = json.dumps(
+            {"tool": tool, "arguments": clean}, sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        # MCP arguments are JSON, but fail closed if an in-process caller breaks
+        # that contract rather than accidentally approving a different call.
+        encoded = repr((tool, clean)).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _prune_challenges(st, now=None):
+    now = time.time() if now is None else now
+    for approval_id, challenge in list(st["approval_challenges"].items()):
+        if challenge["expires_at"] <= now:
+            st["approval_challenges"].pop(approval_id, None)
+
+
+def _override_binding(override):
+    return (
+        sorted(override.get("result_digests", ())),
+        int(override.get("legacy_unverified", 0)),
+    )
+
+
+def _remaining_unverified(st, override):
+    bound_digests, bound_legacy = _override_binding(override)
+    digest_count = len(set(st["pending_digests"]) - set(bound_digests))
+    legacy_count = max(0, st["legacy_unverified"] - bound_legacy)
+    return digest_count + legacy_count
+
+
+def _challenge(st, tool, args, gates):
+    now = time.time()
+    _prune_challenges(st, now)
+    fingerprint = _call_fingerprint(tool, args)
+    normalized_gates = sorted(set(gates))
+    result_digests, legacy_unverified = _override_binding(st["override"])
+    for challenge in st["approval_challenges"].values():
+        if (challenge["fingerprint"] == fingerprint
+                and challenge["gates"] == normalized_gates
+                and challenge["result_digests"] == result_digests
+                and challenge["legacy_unverified"] == legacy_unverified
+                and challenge["approved_at"] is None):
+            return challenge
+    approval_id = secrets.token_urlsafe(24)
+    challenge = {
+        "approval_id": approval_id,
+        "fingerprint": fingerprint,
+        "tool": tool,
+        "action": (args or {}).get("action"),
+        "gates": normalized_gates,
+        "result_digests": result_digests,
+        "legacy_unverified": legacy_unverified,
+        "created_at": now,
+        "expires_at": now + APPROVAL_TTL_SECONDS,
+        "approved_at": None,
+        "approved_by": None,
+    }
+    st["approval_challenges"][approval_id] = challenge
+    return challenge
+
+
+def approve_override(approval_id, session_key="default", approved_by="human"):
+    """Approve one live challenge after the HTTP layer authenticates the caller."""
+    st = _st(session_key)
+    _prune_challenges(st)
+    challenge = st["approval_challenges"].get(str(approval_id or ""))
+    if challenge is None:
+        raise ValueError("unknown or expired approval challenge")
+    if challenge["approved_at"] is not None:
+        raise ValueError("approval challenge was already approved")
+    ov = st.get("override")
+    if (not ov or not set(challenge["gates"]) <= set(ov["gates"])
+            or (challenge["result_digests"], challenge["legacy_unverified"])
+            != _override_binding(ov)):
+        raise ValueError("the underlying override is no longer valid")
+    challenge["approved_at"] = time.time()
+    challenge["approved_by"] = str(approved_by or "human")
+    return copy.deepcopy(challenge)
+
+
+def _approved_override(st, tool, args, gates):
+    """Consume a human-approved exact-call challenge, or issue a prompt."""
+    _prune_challenges(st)
+    approval_id = str((args or {}).get(APPROVAL_ARG, "") or "")
+    fingerprint = _call_fingerprint(tool, args)
+    normalized_gates = sorted(set(gates))
+    ov = st["override"]
+    result_digests, legacy_unverified = _override_binding(ov)
+    challenge = st["approval_challenges"].get(approval_id) if approval_id else None
+    if (challenge and challenge["approved_at"] is not None
+            and challenge["fingerprint"] == fingerprint
+            and challenge["gates"] == normalized_gates
+            and challenge["result_digests"] == result_digests
+            and challenge["legacy_unverified"] == legacy_unverified):
+        remaining = _remaining_unverified(st, ov)
+        if remaining:
+            return (
+                FORBIDDEN,
+                f"BLOCKED: human approval covers only result digest(s) "
+                f"{', '.join(result_digests) or 'the bound legacy result'}; "
+                f"{remaining} other numeric result(s) remain unverified.",
+            )
+        st["approval_challenges"].pop(approval_id, None)
+        st["used_approval_ids"].append(approval_id)
+        st["used_approval_ids"] = st["used_approval_ids"][-100:]
+        st["override"] = None
+        st["audit"].append({
+            "waived": normalized_gates,
+            "why": ov["why"],
+            "tool": tool,
+            "action": (args or {}).get("action"),
+            "approval_id": approval_id,
+            "approved_at": challenge["approved_at"],
+            "approved_by": challenge["approved_by"],
+            "result_digests": result_digests,
+            "legacy_unverified": legacy_unverified,
+        })
+        return (ALLOW,
+                f"⚠ HUMAN-APPROVED OVERRIDE: proceeding despite "
+                f"{', '.join(normalized_gates)} — justification: {ov['why']}")
+    if approval_id:
+        return (PROMPT,
+                "HUMAN APPROVAL REQUIRED: the supplied approval challenge is "
+                "invalid, expired, not approved, or does not match this exact call.")
+    challenge = _challenge(st, tool, args, normalized_gates)
+    return (PROMPT,
+            "HUMAN APPROVAL REQUIRED: this one-shot verification override must "
+            "be approved in CatGo before dispatch. Retry the exact same tool call "
+            f"with {APPROVAL_ARG}='{challenge['approval_id']}'.")
 
 
 def _valid_digest(value):
@@ -190,8 +384,8 @@ def precheck(tool, args, session_key="default"):
       1. verify FAILED (or refused to certify a claim) and nothing was fixed
          → the result is *known* bad; submitting is worse than not having checked.
       2. numeric results exist that were never verified at all.
-    A one-shot override downgrades (1) to PROMPT — the submit proceeds but is
-    stamped, so a false alarm costs one logged waiver instead of a dead end.
+    A one-shot override first returns PROMPT and cannot dispatch until a trusted
+    host records explicit human approval for the exact call.
     """
     st = _st(session_key)
     if not _is_guarded_release(tool, args):
@@ -208,13 +402,7 @@ def precheck(tool, args, session_key="default"):
     if st["failed"]:
         ov = st["override"]
         if ov and set(st["failed"]) <= set(ov["gates"]):
-            st["override"] = None  # one-shot: spent by this submit
-            st["audit"].append({"waived": sorted(st["failed"]), "why": ov["why"],
-                                "tool": tool, "action": (args or {}).get("action")})
-            return (PROMPT,
-                    f"⚠ OVERRIDE SPENT: submitting despite FAILED gate(s) "
-                    f"{', '.join(sorted(st['failed']))} "
-                    f"[taxa {', '.join(st['failed_taxa'])}] — justification: {ov['why']}")
+            return _approved_override(st, tool, args, st["failed"])
         return (FORBIDDEN,
                 f"BLOCKED: catgo_verify FAILED on {', '.join(sorted(st['failed']))} "
                 f"[silent-error taxa {', '.join(st['failed_taxa']) or 'n/a'}]. "
@@ -227,12 +415,7 @@ def precheck(tool, args, session_key="default"):
     if st["unverified"] > 0:
         ov = st["override"]
         if ov and NO_COVERAGE in ov["gates"]:
-            st["override"] = None
-            st["audit"].append({"waived": [NO_COVERAGE], "why": ov["why"],
-                                "tool": tool, "action": (args or {}).get("action")})
-            return (PROMPT,
-                    f"⚠ OVERRIDE SPENT: submitting a result no gate could check "
-                    f"— justification: {ov['why']}")
+            return _approved_override(st, tool, args, [NO_COVERAGE])
         return (FORBIDDEN,
                 f"BLOCKED: {st['unverified']} numeric result(s) from "
                 f"{st['last_numeric']} have not passed catgo_verify. Run "
@@ -366,6 +549,7 @@ def mark_verified(covered, failed_gates=(), failed_taxa=(), uncertified_claims=(
             st["legacy_failed"] = bad
             st["legacy_failed_taxa"] = sorted(set(failed_taxa))
         st["override"] = None  # a new failing audit invalidates a stale waiver
+        st["approval_challenges"].clear()
         _refresh(st)
         return
     if _valid_digest(result_digest):
@@ -389,6 +573,7 @@ def mark_verified(covered, failed_gates=(), failed_taxa=(), uncertified_claims=(
     st["legacy_failed"] = []
     st["legacy_failed_taxa"] = []
     st["override"] = None
+    st["approval_challenges"].clear()
     _refresh(st)
 
 
@@ -417,7 +602,28 @@ def register_override(gates, justification, session_key="default"):
     if len(why) < MIN_JUSTIFICATION:
         raise ValueError(f"justification must be ≥{MIN_JUSTIFICATION} chars saying why "
                          f"this FAIL is a false alarm (got {len(why)})")
-    st["override"] = {"gates": sorted(set(gates)), "why": why}
+    selected_gates = set(gates)
+    if st["failed"]:
+        result_digests = sorted(
+            digest for digest, record in st["failed_by_digest"].items()
+            if set(record.get("gates", ())) <= selected_gates
+        )
+        # Legacy results have no stable identity. Bind at most the one result
+        # represented by the failing bare audit; any additional legacy result
+        # remains pending and therefore blocks release.
+        legacy_unverified = 1 if st["legacy_failed"] and st["legacy_unverified"] else 0
+    else:
+        # NO_COVERAGE applies to the exact pending digest snapshot. A numeric
+        # result produced later is outside the waiver and remains blocking.
+        result_digests = sorted(st["pending_digests"])
+        legacy_unverified = min(st["legacy_unverified"], 1)
+    st["override"] = {
+        "gates": sorted(selected_gates),
+        "why": why,
+        "result_digests": result_digests,
+        "legacy_unverified": legacy_unverified,
+    }
+    st["approval_challenges"].clear()
     return st["override"]
 
 
@@ -514,7 +720,13 @@ if __name__ == "__main__":
     register_override(["ul_range"], "cer U_L window is reaction-dependent; "
                                     "geometry checked in D-06", session_key=sk2)
     dec, why = precheck("catgo_workflow", {"action": "submit"}, sk2)
-    assert dec == PROMPT and "OVERRIDE SPENT" in why
+    assert dec == PROMPT and "HUMAN APPROVAL REQUIRED" in why
+    approval_id = next(iter(state(sk2)["approval_challenges"]))
+    approve_override(approval_id, session_key=sk2, approved_by="self-test")
+    dec, why = precheck(
+        "catgo_workflow", {"action": "submit", APPROVAL_ARG: approval_id}, sk2,
+    )
+    assert dec == ALLOW and "HUMAN-APPROVED" in why
     assert len(state(sk2)["audit"]) == 1
     # one-shot: the next submit is blocked again
     assert precheck("catgo_workflow", {"action": "submit"}, sk2)[0] == FORBIDDEN

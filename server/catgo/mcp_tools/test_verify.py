@@ -957,8 +957,15 @@ def test_R5_override_is_narrow_justified_and_one_shot():
             assert False, f"override should be refused: {bad_gates!r} {why!r}"
     enf.register_override(["ul_range"], "U_L window is reaction-dependent for CER; "
                                         "geometry verified in D-06", session_key=sk)
-    dec, why = enf.precheck("catgo_workflow", {"action": "submit"}, sk)
-    assert dec == enf.PROMPT and "OVERRIDE SPENT" in why
+    call = {"action": "submit"}
+    dec, why = enf.precheck("catgo_workflow", call, sk)
+    assert dec == enf.PROMPT and "HUMAN APPROVAL REQUIRED" in why
+    challenge = next(iter(enf.state(sk)["approval_challenges"]))
+    enf.approve_override(challenge, session_key=sk, approved_by="test-human")
+    dec, why = enf.precheck(
+        "catgo_workflow", {**call, enf.APPROVAL_ARG: challenge}, sk,
+    )
+    assert dec == enf.ALLOW and "HUMAN-APPROVED" in why
     # spent — the next submit is blocked again, and the waiver is on record
     assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
     audit = enf.state(sk)["audit"]
@@ -1010,6 +1017,12 @@ def test_R5_no_coverage_has_an_escape_hatch():
                           "MD restart energies carry no field any gate reads; "
                           "trajectory checked by hand", session_key=sk)
     assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.PROMPT
+    challenge = next(iter(enf.state(sk)["approval_challenges"]))
+    enf.approve_override(challenge, session_key=sk, approved_by="test-human")
+    assert enf.precheck(
+        "catgo_workflow",
+        {"action": "submit", enf.APPROVAL_ARG: challenge}, sk,
+    )[0] == enf.ALLOW
     assert enf.precheck("catgo_workflow", {"action": "submit"}, sk)[0] == enf.FORBIDDEN
     # and the hatch must not open when a gate actually failed — that must be fixed
     sk2 = "r5nc2"; _fresh(sk2)
