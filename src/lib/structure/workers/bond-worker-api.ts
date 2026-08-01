@@ -471,9 +471,9 @@ export function is_bond_worker_ready(): boolean {
 export function prewarm_bond_worker(): void {
   get_runtime().acquire(0).catch(() => {/* logged inside the runtime */})
   // Also kick off main-thread WASM init so compute_bonds_sync can use the
-  // sync WASM path (which emits the `image` field needed for cross-cell
-  // bond rendering). Without this, sync calls would fall through to the
-  // pure-JS strategies that never produce non-zero jimage values.
+  // preferred sync WASM path. atom_radii's JS fallback is fully PBC-aware,
+  // but the heuristic electroneg_ratio/solid_angle fallbacks still rely on
+  // Rust for their periodic image graphs.
   ensure_ferrox_wasm_ready().catch(() => {/* error already logged inside */})
 }
 
@@ -483,9 +483,18 @@ export function prewarm_bond_worker(): void {
  *  Priority chain:
  *    1. Main-thread Rust WASM (sync once initialized) — emits the `image`
  *       field needed for cross-cell half-bond rendering.
- *    2. Pure-JS BONDING_STRATEGIES — Cartesian-only, never produces
- *       cross-cell bonds (jimage stays [0,0,0]). Last-resort fallback.
+ *    2. Pure-JS BONDING_STRATEGIES — atom_radii is PBC-aware; the two legacy
+ *       heuristic strategies are restricted to non-periodic structures.
  *  Returns null if the structure is too large for sync computation. */
+function has_periodic_axes(structure: AnyStructure): boolean {
+  const lattice = (structure as {
+    lattice?: { matrix?: unknown; pbc?: readonly boolean[] }
+  }).lattice
+  return Boolean(
+    lattice?.matrix && (lattice.pbc === undefined || lattice.pbc.some(Boolean)),
+  )
+}
+
 export function compute_bonds_sync(
   structure: AnyStructure,
   strategy: BondingStrategy,
@@ -524,7 +533,15 @@ export function compute_bonds_sync(
     }
   }
 
-  // Pure-JS fallback: never produces cross-cell bonds.
+  // atom_radii has an exact PBC-aware JS fallback. The two legacy heuristic
+  // strategies are still Cartesian-only, so a periodic crystal must defer
+  // those to the async Rust worker rather than cache an incomplete graph.
+  // A lattice without an explicit `pbc` field is periodic by convention.
+  const has_periodic_axis = has_periodic_axes(structure)
+  if (has_periodic_axis && strategy !== `atom_radii`) return null
+
+  // Pure-JS fallback. atom_radii emits periodic jimages; the other strategies
+  // reach this point only for non-periodic structures.
   try {
     const t0 = performance.now()
     const result = BONDING_STRATEGIES[strategy](structure, options)
@@ -695,14 +712,25 @@ function compute_bonds_async_with_strategy(
     return try_main_thread_wasm(structure, strategy, options).then(wasm_result => {
       if (wasm_result) return wasm_result
 
-      // 3. JS fallback (blocks) — small systems only
-      console.warn(`[bonds] WASM unavailable, falling back to JS | ${strategy}`)
+      // 3. JS fallback (blocks) — small systems only. The legacy heuristic
+      // strategies are not PBC-aware in JavaScript; if every WASM backend is
+      // unavailable, degrade those periodic requests to the exact PBC-aware
+      // atom_radii implementation instead of returning a silently incomplete
+      // crystal graph.
+      const js_strategy = has_periodic_axes(structure) && strategy !== `atom_radii`
+        ? `atom_radii`
+        : strategy
+      console.warn(
+        js_strategy === strategy
+          ? `[bonds] WASM unavailable, falling back to JS | ${strategy}`
+          : `[bonds] WASM unavailable, periodic ${strategy} -> PBC-aware atom_radii JS`,
+      )
 
       // Small structure: compute directly
       if (n_sites <= JS_SYNC_FALLBACK_THRESHOLD) {
         try {
           const t0 = performance.now()
-          const bonds = BONDING_STRATEGIES[strategy](structure, options)
+          const bonds = BONDING_STRATEGIES[js_strategy](structure, options)
           const dt = (performance.now() - t0).toFixed(1)
           console.log(`[bonds] JS async-fallback | ${strategy} | ${n_sites} atoms | ${bonds.length} bonds | ${dt}ms`)
           return bonds
@@ -717,7 +745,7 @@ function compute_bonds_async_with_strategy(
         const compute = () => {
           try {
             const t0 = performance.now()
-            const bonds = BONDING_STRATEGIES[strategy](structure, options)
+            const bonds = BONDING_STRATEGIES[js_strategy](structure, options)
             const dt = (performance.now() - t0).toFixed(1)
             console.log(`[bonds] JS idle-callback | ${strategy} | ${n_sites} atoms | ${bonds.length} bonds | ${dt}ms`)
             resolve(bonds)

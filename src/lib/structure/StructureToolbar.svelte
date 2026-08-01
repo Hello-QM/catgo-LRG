@@ -24,6 +24,12 @@
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import ToolbarSettings from './ToolbarSettings.svelte'
+  import {
+    TOOLBAR_TOOLS,
+    pane_toolbar,
+    type ToolbarToolId,
+  } from './toolbar-state.svelte'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -36,6 +42,8 @@
     enable_measure_mode = false,
     fullscreen_toggle = undefined,
     hidden_toolbar_items = [] as string[],
+    pane_key = `default`,
+    show_info_tool = true,
     remote_origin = null,
     structure = undefined,
     molecular_fragments = [],
@@ -103,6 +111,8 @@
     enable_measure_mode?: boolean
     fullscreen_toggle?: Snippet<[]> | boolean
     hidden_toolbar_items?: string[]
+    pane_key?: string
+    show_info_tool?: boolean
     remote_origin?: { session_id: string; file_path: string } | null
     structure?: AnyStructure
     molecular_fragments?: MolecularFragment[]
@@ -160,6 +170,47 @@
     // 子组件 snippet
     children?: Snippet
   } = $props()
+
+  let toolbar_prefs = $derived(pane_toolbar(pane_key))
+
+  function toolbar_forced_hidden(tool_id: ToolbarToolId): boolean {
+    return hidden_toolbar_items.includes(tool_id) ||
+      (tool_id === `upload_hpc` && hidden_toolbar_items.includes(`server`))
+  }
+
+  function toolbar_tool_available(tool_id: ToolbarToolId): boolean {
+    switch (tool_id) {
+      case `view_angles`: return !!get_view_angles && !!set_view_angles && !hide_extra_tools
+      case `fullscreen`: return !!fullscreen_toggle
+      case `info`: return show_info_tool
+      case `touch`: return has_touch
+      case `molstar`: return !!on_open_in_molstar && !hide_extra_tools
+      case `build`: return !hide_extra_tools
+      case `analysis`: return !hide_extra_tools && !STATIC_ONLY
+      case `measure`: return enable_measure_mode
+      case `workflow`: return !hide_extra_tools && !STATIC_ONLY
+      case `server`: return !hide_extra_tools && !STATIC_ONLY
+      case `upload_hpc`: return !hide_extra_tools && !STATIC_ONLY && !!on_upload_to_hpc
+      case `terminal`: return !hide_extra_tools && !STATIC_ONLY && !!on_open_terminal
+      case `io`: return !hide_extra_tools
+      case `remote_save`: return !hide_extra_tools && !!remote_origin && !!structure
+      case `plugin_hub`: return !hide_extra_tools && !STATIC_ONLY
+      case `chat`: return !hide_extra_tools
+      default: return true
+    }
+  }
+
+  function toolbar_tool_visible(tool_id: ToolbarToolId): boolean {
+    return toolbar_tool_available(tool_id) && !toolbar_forced_hidden(tool_id) &&
+      !toolbar_prefs.hidden.includes(tool_id)
+  }
+
+  let available_toolbar_tools = $derived(
+    TOOLBAR_TOOLS.map((tool) => tool.id).filter(toolbar_tool_available),
+  )
+  let forced_hidden_toolbar_tools = $derived(
+    TOOLBAR_TOOLS.map((tool) => tool.id).filter(toolbar_forced_hidden),
+  )
 
   // Touch-capability detection for the touch-mode buttons. `any-pointer: coarse`
   // is true when ANY available pointer is coarse (finger/stylus) — so it also
@@ -232,13 +283,14 @@
 
 <section class:visible={visible_buttons} class="control-buttons">
   {#if visible_buttons}
+    {#if !toolbar_prefs.collapsed}
     <!-- === View / Navigation === -->
-    {#if camera_has_moved}
+    {#if camera_has_moved && toolbar_tool_visible(`reset_camera`)}
       <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
     {/if}
-    {#if get_view_angles && set_view_angles && !hide_extra_tools}
+    {#if toolbar_tool_visible(`view_angles`)}
       <button
         class:active={view_angles_open}
         onclick={toggle_view_angles}
@@ -289,7 +341,7 @@
         </div>
       {/if}
     {/if}
-    {#if fullscreen_toggle}
+    {#if toolbar_tool_visible(`fullscreen`)}
       <button
         type="button"
         onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
@@ -308,7 +360,7 @@
     {/if}
 
     <!-- === Gesture Control === -->
-    {#if !hidden_toolbar_items.includes('gesture')}
+    {#if toolbar_tool_visible(`gesture`)}
     <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
@@ -365,7 +417,7 @@
     {/if}
 
     <!-- === Touch interaction modes (no modifier keys on touch devices) === -->
-    {#if has_touch}
+    {#if toolbar_tool_visible(`touch`)}
       <div class="touch-mode-container">
         <span class="struct-toolbar-tooltip-wrap">
           <button
@@ -411,6 +463,7 @@
     {/if}
 
     <!-- === Structure Editing (Pencil Mode) === -->
+    {#if toolbar_tool_visible(`pencil`)}
     <div class="pencil-mode-container">
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -538,8 +591,10 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- === Large-system performance mode (always visible — also in trajectory/large views) === -->
+    {#if toolbar_tool_visible(`gauge`)}
     <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
@@ -553,9 +608,11 @@
       </button>
       <span class="struct-toolbar-tooltip" role="tooltip">{webgpu_available ? t('structure.large_system_mode') : t('structure.large_system_mode_unavailable')}</span>
     </span>
+    {/if}
 
     {#if !hide_extra_tools}
       <!-- === Build Tools === -->
+      {#if toolbar_tool_visible(`build`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -567,8 +624,9 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.build_tools')}</span>
       </span>
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('analysis') && !STATIC_ONLY}
+      {#if toolbar_tool_visible(`analysis`)}
       <!-- === Analysis Tools === -->
       <!-- Gated like workflow/server below: AnalysisPane's DOS/band/COHP/freq/charge
            sub-tabs are backend-only (no WASM fallback), so on STATIC_ONLY (web + the
@@ -587,7 +645,7 @@
       </span>
       {/if}
 
-      {#if on_open_in_molstar}
+      {#if toolbar_tool_visible(`molstar`)}
       <!-- === Open current structure in the Mol* bio viewer === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -601,7 +659,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
+      {#if toolbar_tool_visible(`workflow`)}
       <!-- === Workflow === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -617,6 +675,7 @@
       {/if}
 
       <!-- === IO (Import/Export) === -->
+      {#if toolbar_tool_visible(`io`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -628,8 +687,9 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.import_export')}</span>
       </span>
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('server') && !STATIC_ONLY}
+      {#if toolbar_tool_visible(`server`)}
       <!-- === Server (HPC) === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -642,6 +702,8 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.server_hpc')}</span>
       </span>
+      {/if}
+      {#if toolbar_tool_visible(`upload_hpc`)}
       <!-- === Upload current structure to HPC === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -655,7 +717,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('plugin_hub') && !STATIC_ONLY}
+      {#if toolbar_tool_visible(`plugin_hub`)}
       <!-- === Plugin Hub === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -670,7 +732,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('chat')}
+      {#if toolbar_tool_visible(`chat`)}
       <!-- === AI Chat === -->
       <!-- Shown in STATIC_ONLY too: CatBot runs the client-direct tool-calling
            loop in-browser (no backend) under static deploys. See is_client_direct. -->
@@ -691,7 +753,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('terminal') && !STATIC_ONLY}
+      {#if toolbar_tool_visible(`terminal`)}
       <!-- === Terminal === — opens a terminal pane-tree leaf (no longer a
            side-panel toggle). -->
       <span class="struct-toolbar-tooltip-wrap">
@@ -707,7 +769,7 @@
       {/if}
 
       <!-- === Push structure back to remote === -->
-      {#if remote_origin && structure}
+      {#if toolbar_tool_visible(`remote_save`) && remote_origin && structure}
         <button
           type="button"
           onclick={async () => {
@@ -735,7 +797,7 @@
     {/if}
 
     <!-- === Analysis & Computation: Measurement Mode === -->
-    {#if enable_measure_mode}
+    {#if toolbar_tool_visible(`measure`)}
       <div
         class="measure-mode-dropdown"
         {@attach click_outside({ callback: () => measure_menu_open = false })}
@@ -887,8 +949,14 @@
       {/if}
     {/if}
 
-    <!-- 面板组件通过 children snippet 从 Structure.svelte 传入 -->
+    {/if}
+    <!-- 面板组件通过 children snippet 从 Structure.svelte 传入；折叠时不卸载 pane。 -->
     {@render children?.()}
+    <ToolbarSettings
+      {pane_key}
+      available_tools={available_toolbar_tools}
+      forced_hidden={forced_hidden_toolbar_tools}
+    />
   {/if}
 </section>
 

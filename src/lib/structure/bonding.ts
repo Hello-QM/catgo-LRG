@@ -2,7 +2,6 @@
 
 import type { AnyStructure, BondPair, HBondOptions, Site, Vec3 } from '$lib'
 import { element_data } from '$lib/element'
-import covalent_radii_data from '$lib/element/single_bond_covalent_radii.json'
 import * as math from '$lib/math'
 
 // Canonical bond key for deduplication and lookup (smaller index first).
@@ -372,40 +371,97 @@ export function solid_angle(
   return bonds
 }
 
+type AtomRadiiOptions = {
+  /** Legacy alias retained for callers outside the viewer. */
+  max_distance?: number
+  max_bond_dist?: number
+  min_bond_dist?: number
+  scale?: number
+  tolerance?: number
+}
+
 export function atom_radii(
   structure: AnyStructure,
-  {
-    max_distance = 5.0,
-    min_bond_dist = 0.4,
-    tolerance = 0.3, // Tolerance in Angstroms for bond distance (increased from 0.05 for better detection)
-  } = {},
+  options: AtomRadiiOptions = {},
 ): BondPair[] {
+  const {
+    max_distance,
+    min_bond_dist = 0.4,
+    scale = 1.2,
+    tolerance,
+  } = options
+  const max_bond_dist = options.max_bond_dist ?? max_distance ?? 5.0
   const { sites } = structure
+  if (sites.length === 0) return []
+
+  const lattice = (structure as {
+    lattice?: {
+      matrix?: readonly (readonly number[])[]
+      pbc?: readonly boolean[]
+    }
+  }).lattice
+  const matrix = lattice?.matrix
+  const pbc = matrix
+    ? (lattice?.pbc ?? [true, true, true]).map(Boolean)
+    : [false, false, false]
+  const is_periodic = pbc.some(Boolean)
+
+  const radii = sites.map((site) => {
+    const elem = get_majority_species(site).element
+    return (elem ? covalent_radii.get(elem) : undefined) ?? 1.5
+  })
+
+  // The Rust/WASM implementation uses either an explicitly supplied fixed
+  // tolerance or a multiplicative scale. Keep the JS fallback byte-for-byte
+  // compatible at the predicate level instead of silently using its old
+  // hard-coded +0.3 Å rule.
+  const pair_cutoff = (idx_a: number, idx_b: number) => {
+    const radii_sum = radii[idx_a] + radii[idx_b]
+    return tolerance === undefined
+      ? radii_sum * scale
+      : radii_sum + Math.max(0, tolerance)
+  }
+
+  if (is_periodic) {
+    if (!matrix || matrix.length !== 3 || matrix.some((row) => row.length !== 3)) {
+      throw new Error(`Periodic bond detection requires a valid 3×3 lattice matrix`)
+    }
+    const inverse = invert_3x3(matrix)
+    if (inverse === null) {
+      throw new Error(`Periodic bond detection requires a non-singular lattice matrix`)
+    }
+
+    const max_radius = radii.reduce((max, radius) => Math.max(max, radius), 0)
+    const criterion_cutoff = tolerance === undefined
+      ? 2 * max_radius * scale
+      : 2 * max_radius + Math.max(0, tolerance)
+    const search_cutoff = Math.min(max_bond_dist, criterion_cutoff)
+    return atom_radii_periodic(
+      sites,
+      radii,
+      matrix,
+      inverse,
+      pbc,
+      search_cutoff,
+      min_bond_dist,
+      pair_cutoff,
+    )
+  }
+
   if (sites.length < 2) return []
 
   const bonds: BondPair[] = [] // Store results here
   const min_dist_sq = min_bond_dist ** 2
-  const max_dist_sq = max_distance ** 2
-  const spatial = setup_spatial_grid(sites, max_distance)
+  const max_dist_sq = max_bond_dist ** 2
+  const spatial = setup_spatial_grid(sites, max_bond_dist)
 
   for (let idx_a = 0; idx_a < sites.length - 1; idx_a++) {
     const [x1, y1, z1] = sites[idx_a].xyz
-    const majority_a = get_majority_species(sites[idx_a])
-    const covalent_radius_a = majority_a.element
-      ? covalent_radii_data[majority_a.element]?.covalent_radius_pm / 100
-      : undefined
 
     for (const idx_b of get_candidates(sites[idx_a].xyz, sites, spatial)) {
       if (idx_b <= idx_a) continue
 
       const [x2, y2, z2] = sites[idx_b].xyz
-      const majority_b = get_majority_species(sites[idx_b])
-      const covalent_radius_b = majority_b.element
-        ? covalent_radii_data[majority_b.element]?.covalent_radius_pm / 100
-        : undefined
-
-      // Skip if either radius is undefined
-      if (!covalent_radius_a || !covalent_radius_b) continue
 
       const [dx, dy, dz] = [x2 - x1, y2 - y1, z2 - z1]
       const dist_sq = dx * dx + dy * dy + dz * dz
@@ -414,11 +470,7 @@ export function atom_radii(
       // Check basic distance constraints
       if (dist_sq < min_dist_sq || dist_sq > max_dist_sq) continue
 
-      const expected = covalent_radius_a + covalent_radius_b
-      const lower_bound = expected - tolerance
-      const upper_bound = expected + tolerance
-
-      if (dist >= lower_bound && dist <= upper_bound) {
+      if (dist <= pair_cutoff(idx_a, idx_b)) {
         bonds.push({
           pos_1: sites[idx_a].xyz,
           pos_2: sites[idx_b].xyz,
@@ -429,6 +481,118 @@ export function atom_radii(
           transform_matrix: compute_bond_transform(sites[idx_a].xyz, sites[idx_b].xyz),
           jimage: [0, 0, 0],
         })
+      }
+    }
+  }
+  return bonds
+}
+
+/** Exact 3×3 inverse for a row-major lattice matrix. */
+function invert_3x3(
+  matrix: readonly (readonly number[])[],
+): number[][] | null {
+  const [a, b, c] = matrix[0]
+  const [d, e, f] = matrix[1]
+  const [g, h, i] = matrix[2]
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null
+  const inv_det = 1 / det
+  return [
+    [(e * i - f * h) * inv_det, (c * h - b * i) * inv_det, (b * f - c * e) * inv_det],
+    [(f * g - d * i) * inv_det, (a * i - c * g) * inv_det, (c * d - a * f) * inv_det],
+    [(d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det],
+  ]
+}
+
+/**
+ * Correctness-first periodic atom-radii fallback for small structures.
+ *
+ * It enumerates every lattice image that can lie inside `search_cutoff`,
+ * including positive-direction self images for one-atom primitive cells. The
+ * inverse-lattice bounds are conservative for skewed cells, while the final
+ * Cartesian-distance test removes false candidates. This mirrors Rust's
+ * pair/image dedup convention and is only used when WASM is unavailable.
+ */
+function atom_radii_periodic(
+  sites: Site[],
+  radii: number[],
+  matrix: readonly (readonly number[])[],
+  inverse: readonly (readonly number[])[],
+  pbc: readonly boolean[],
+  search_cutoff: number,
+  min_bond_dist: number,
+  pair_cutoff: (idx_a: number, idx_b: number) => number,
+): BondPair[] {
+  const bonds: BondPair[] = []
+  const min_dist_sq = min_bond_dist ** 2
+  const max_dist_sq = search_cutoff ** 2
+  // For row-vector coordinates, frac = cart · inverse. The norm of inverse's
+  // k-th column bounds the fractional component of any Cartesian vector whose
+  // length is at most search_cutoff.
+  const frac_reach = [0, 1, 2].map((axis) =>
+    search_cutoff * Math.hypot(
+      inverse[0][axis],
+      inverse[1][axis],
+      inverse[2][axis],
+    )
+  )
+  const eps = 1e-10
+
+  for (let idx_a = 0; idx_a < sites.length; idx_a++) {
+    const [x1, y1, z1] = sites[idx_a].xyz
+    for (let idx_b = idx_a; idx_b < sites.length; idx_b++) {
+      const [x2, y2, z2] = sites[idx_b].xyz
+      const dx = x2 - x1
+      const dy = y2 - y1
+      const dz = z2 - z1
+      const frac_delta = [0, 1, 2].map((axis) =>
+        dx * inverse[0][axis] +
+        dy * inverse[1][axis] +
+        dz * inverse[2][axis]
+      )
+      const ranges = [0, 1, 2].map((axis) => {
+        if (!pbc[axis]) return [0, 0] as const
+        return [
+          Math.ceil(-frac_delta[axis] - frac_reach[axis] - eps),
+          Math.floor(-frac_delta[axis] + frac_reach[axis] + eps),
+        ] as const
+      })
+
+      for (let na = ranges[0][0]; na <= ranges[0][1]; na++) {
+        for (let nb = ranges[1][0]; nb <= ranges[1][1]; nb++) {
+          for (let nc = ranges[2][0]; nc <= ranges[2][1]; nc++) {
+            if (idx_a === idx_b) {
+              // Keep one direction of a periodic self-image pair, matching
+              // Rust's lexicographically-positive image convention.
+              if (
+                na < 0 ||
+                (na === 0 && nb < 0) ||
+                (na === 0 && nb === 0 && nc <= 0)
+              ) continue
+            }
+            const ex = dx + na * matrix[0][0] + nb * matrix[1][0] + nc * matrix[2][0]
+            const ey = dy + na * matrix[0][1] + nb * matrix[1][1] + nc * matrix[2][1]
+            const ez = dz + na * matrix[0][2] + nb * matrix[1][2] + nc * matrix[2][2]
+            const dist_sq = ex * ex + ey * ey + ez * ez
+            if (dist_sq < min_dist_sq || dist_sq > max_dist_sq) continue
+            const dist = Math.sqrt(dist_sq)
+            if (dist > pair_cutoff(idx_a, idx_b)) continue
+            // Math.ceil(-0) preserves IEEE -0; normalize it because Rust's
+            // integer image wire format can only emit canonical +0.
+            const jimage: [number, number, number] = [na || 0, nb || 0, nc || 0]
+
+            bonds.push({
+              pos_1: sites[idx_a].xyz,
+              pos_2: sites[idx_b].xyz,
+              site_idx_1: idx_a,
+              site_idx_2: idx_b,
+              bond_length: dist,
+              strength: 1,
+              transform_matrix: compute_bond_transform(sites[idx_a].xyz, sites[idx_b].xyz),
+              jimage,
+            })
+          }
+        }
       }
     }
   }
