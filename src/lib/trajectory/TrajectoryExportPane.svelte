@@ -7,9 +7,15 @@
     type CropRegion,
   } from '$lib/io/export'
   import { download } from '$lib/io/fetch'
-  import { trajectory_to_xyz_str } from '$lib/structure/export'
+  import { structure_to_poscar_str } from '$lib/structure/export'
   import { select_active_render_canvas } from '$lib/structure/scene/render-surface'
-  import type { TrajectoryType } from '$lib/trajectory'
+  import type { TrajectoryFrame, TrajectoryFrameResolver, TrajectoryType } from '$lib/trajectory'
+  import {
+    create_poscar_frame_range_zip,
+    poscar_frame_filename,
+    serialize_extxyz_frame_range,
+    trajectory_export_basename,
+  } from '$lib/trajectory/file-export'
   import type { ComponentProps } from 'svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
@@ -29,6 +35,8 @@
     pane_props = {},
     toggle_props = {},
     flush_pending_ops = undefined,
+    resolve_frame = undefined,
+    current_frame_idx = 0,
     ...rest
   }: {
     // Control pane state
@@ -55,12 +63,18 @@
     // Parent (Trajectory.svelte) passes this so we can materialize lazy ops
     // before serializing — otherwise exported frames would be stale.
     flush_pending_ops?: () => void
+    // Fully resolve edited in-memory or streamed frames for structure exports.
+    resolve_frame?: TrajectoryFrameResolver
+    // The frame currently visible in the viewer (used by Current POSCAR).
+    current_frame_idx?: number
   } = $props()
 
   let is_exporting = $state(false)
   let export_progress = $state(0)
   let export_format = $state<`webm` | `mp4`>(`webm`)
   let export_error = $state<string | null>(null)
+  let is_exporting_structures = $state(false)
+  let structure_export_progress = $state(0)
 
   let total_frames_available = $derived(
     trajectory?.total_frames || trajectory?.frames?.length || 0,
@@ -210,19 +224,92 @@
     }
   }
 
-  function handle_xyz_export() {
+  async function export_frame(idx: number): Promise<TrajectoryFrame | null> {
+    if (resolve_frame) return resolve_frame(idx)
+    flush_pending_ops?.()
+    return trajectory?.frames?.[idx] ?? null
+  }
+
+  async function handle_trajectory_text_export(extension: `xyz` | `extxyz`) {
     export_error = null
     if (!trajectory || export_frame_count === 0) {
       export_error = !trajectory ? t('structure.no_trajectory') : t('structure.invalid_frame_range')
       return
     }
-    // Materialize any pending cross-frame ops before slicing — so the
-    // exported XYZ reflects the user's atom edits across every frame,
-    // not just the current one.
-    flush_pending_ops?.()
-    const frames = trajectory.frames.slice(start_frame, end_frame + 1)
-    const content = trajectory_to_xyz_str(frames)
-    download(content, `${filename}.xyz`, `chemical/x-xyz`)
+    is_exporting_structures = true
+    structure_export_progress = 0
+    try {
+      const content = await serialize_extxyz_frame_range(
+        start_frame,
+        end_frame,
+        export_frame,
+        (done, total) => (structure_export_progress = (done / total) * 100),
+      )
+      download(
+        content,
+        `${trajectory_export_basename(filename)}.${extension}`,
+        `chemical/x-xyz`,
+      )
+    } catch (error) {
+      export_error = error instanceof Error ? error.message : String(error)
+    } finally {
+      is_exporting_structures = false
+      structure_export_progress = 0
+    }
+  }
+
+  async function handle_current_poscar_export() {
+    export_error = null
+    if (!trajectory || total_frames_available === 0) {
+      export_error = t('structure.no_trajectory')
+      return
+    }
+    is_exporting_structures = true
+    try {
+      const idx = Math.max(0, Math.min(current_frame_idx, total_frames_available - 1))
+      const frame = await export_frame(idx)
+      if (!frame?.structure) throw new Error(`Trajectory frame ${idx} is not available for export`)
+      const content = `${structure_to_poscar_str(frame.structure)}\n`
+      download(
+        content,
+        poscar_frame_filename(filename, idx, total_frames_available),
+        `chemical/x-vasp-poscar`,
+      )
+    } catch (error) {
+      export_error = error instanceof Error ? error.message : String(error)
+    } finally {
+      is_exporting_structures = false
+    }
+  }
+
+  async function handle_poscar_sequence_export() {
+    export_error = null
+    if (!trajectory || export_frame_count === 0) {
+      export_error = !trajectory ? t('structure.no_trajectory') : t('structure.invalid_frame_range')
+      return
+    }
+    is_exporting_structures = true
+    structure_export_progress = 0
+    try {
+      const blob = await create_poscar_frame_range_zip(
+        start_frame,
+        end_frame,
+        export_frame,
+        filename,
+        total_frames_available,
+        (done, total) => (structure_export_progress = (done / total) * 100),
+      )
+      download(
+        blob,
+        `${trajectory_export_basename(filename)}_poscar_frames_${start_frame}-${end_frame}.zip`,
+        `application/zip`,
+      )
+    } catch (error) {
+      export_error = error instanceof Error ? error.message : String(error)
+    } finally {
+      is_exporting_structures = false
+      structure_export_progress = 0
+    }
   }
 
   let is_video_supported = $derived(
@@ -360,12 +447,54 @@
       <div style="display: flex; align-items: center; gap: 4pt">
         XYZ
         <button
+          class="trajectory-xyz-export"
           type="button"
-          onclick={handle_xyz_export}
-          disabled={is_exporting || is_exporting_pngs || !trajectory}
+          onclick={() => handle_trajectory_text_export(`xyz`)}
+          disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory}
           {@attach tooltip({ content: t('structure.export_xyz_hint', { start: start_frame, end: end_frame }) })}
         >
           ⬇
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 4pt">
+        extXYZ
+        <button
+          class="trajectory-extxyz-export"
+          type="button"
+          onclick={() => handle_trajectory_text_export(`extxyz`)}
+          disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory}
+          {@attach tooltip({ content: t('structure.export_extxyz_hint', { start: start_frame, end: end_frame }) })}
+        >
+          {#if is_exporting_structures && structure_export_progress > 0}
+            {structure_export_progress.toFixed(0)}%
+          {:else}⬇{/if}
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 4pt">
+        {t('structure.current_poscar')}
+        <button
+          class="current-poscar-export"
+          type="button"
+          onclick={handle_current_poscar_export}
+          disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory}
+          {@attach tooltip({ content: t('structure.export_current_poscar_hint', { frame: current_frame_idx }) })}
+        >⬇</button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 4pt">
+        {t('structure.poscar_sequence')}
+        <button
+          class="poscar-sequence-export"
+          type="button"
+          onclick={handle_poscar_sequence_export}
+          disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory}
+          {@attach tooltip({ content: t('structure.export_poscar_sequence_hint', { start: start_frame, end: end_frame }) })}
+        >
+          {#if is_exporting_structures && structure_export_progress > 0}
+            {structure_export_progress.toFixed(0)}%
+          {:else}⬇{/if}
         </button>
       </div>
 
@@ -374,7 +503,7 @@
         <button
           type="button"
           onclick={handle_png_sequence_export}
-          disabled={is_exporting || is_exporting_pngs || !trajectory || !has_canvas}
+          disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory || !has_canvas}
           {@attach tooltip({ content: t('structure.export_png_sequence_hint') })}
         >
           {#if is_exporting_pngs}
@@ -401,7 +530,7 @@
             <button
               type="button"
               onclick={() => handle_video_export(format)}
-              disabled={is_exporting || is_exporting_pngs || !trajectory || !has_canvas}
+              disabled={is_exporting || is_exporting_pngs || is_exporting_structures || !trajectory || !has_canvas}
               {@attach tooltip({ content: hint })}
             >
               {#if is_exporting && export_format === format}

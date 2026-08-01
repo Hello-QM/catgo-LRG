@@ -705,6 +705,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
       `request_trajectory_frame_source_safely(`,
     )
     expect(current_block).toContain(`report_prepared_failure(error)`)
+    expect(current_block).toContain(`!source?.topology_stable`)
+    expect(current_block).toContain(`if (!current_source.topology_stable)`)
   })
 
   test(`keeps the newer same-frame cold load authoritative when the older load rejects`, async () => {
@@ -906,6 +908,16 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(
       prefetch_block.slice(safe_request_start, source_guard),
     ).not.toContain(`getter?.(prefetch_idx)`)
+    expect(prefetch_block).toContain(
+      `new PreparedFrameTopologyChangeError(prefetch_idx)`,
+    )
+    const report_block = scene.slice(
+      scene.indexOf(`const report_prefetch_outcome =`),
+      scene.indexOf(`report_buffer(true)`),
+    )
+    expect(report_block).toContain(
+      `!is_prepared_frame_topology_change(outcome.error)`,
+    )
   })
 
   test(`admits unknown prefetch decode with a current-key-derived provisional key`, () => {

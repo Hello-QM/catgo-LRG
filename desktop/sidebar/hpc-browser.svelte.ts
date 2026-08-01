@@ -11,6 +11,10 @@ import { LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
 import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
 import { download } from '$lib/io/fetch'
 import type { RemoteFile } from '$lib/api/hpc'
+import {
+  decompress_binary_structure_data,
+  is_binary_structure_filename,
+} from '$lib/io/decompress'
 
 export interface HpcBrowserCallbacks {
   get_source: () => string
@@ -31,6 +35,15 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
   let hpc_files_error = $state(``)
   let hpc_file_tree_key = $state(0)
   let hpc_loading_file = $state<{ name: string; size?: number } | null>(null)
+
+  function base64_to_array_buffer(data: string): ArrayBuffer {
+    const binary = atob(data)
+    const bytes = new Uint8Array(binary.length)
+    for (let idx = 0; idx < binary.length; idx++) {
+      bytes[idx] = binary.charCodeAt(idx)
+    }
+    return bytes.buffer
+  }
 
   function set_hpc_merge_status(type: `success` | `error`, message: string) {
     hpc_merge_status = { type, message }
@@ -110,6 +123,27 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
           await callbacks.on_load_trajectory_stream(local, nm)
           return
         }
+      }
+      // Binary trajectories below the streaming threshold still need the
+      // binary read endpoint. Sending ASE ULM/HDF5 through read_file_content
+      // converts bytes to text and later fails as "Unsupported text format".
+      if (is_binary_structure_filename(file.name)) {
+        const binary = await read_binary_content(file)
+        if (!binary) {
+          set_hpc_merge_status(`error`, `Failed to read ${file.name}`)
+          return
+        }
+        const decoded = await decompress_binary_structure_data(
+          base64_to_array_buffer(binary.data),
+          file.name,
+        )
+        callbacks.on_load_file(
+          decoded.content,
+          decoded.filename,
+          file.path,
+          source,
+        )
+        return
       }
       const content = await read_file_content(file, true) // full read — no byte cap
       if (!content) return

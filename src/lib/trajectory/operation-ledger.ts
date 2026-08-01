@@ -45,6 +45,11 @@ function clone_op(op: TrajectoryEditOp): TrajectoryEditOp {
           [...op.displacements].map(([idx, delta]) => [idx, [...delta]]),
         ),
       }
+    case `set_selective_dynamics`:
+      return {
+        ...op,
+        values: op.values.map((value) => value ? [...value] : null),
+      }
     case `scale_geometry`:
       return { ...op }
   }

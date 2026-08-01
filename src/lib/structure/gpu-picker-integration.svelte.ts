@@ -79,7 +79,7 @@ export interface GpuPickerDeps {
    * legacy CPU-composed picker scene. Every replica of a base atom folds to
    * ONE base selection flag (visual-shared-base); bond picks resolve the base
    * bond GRAPH index through `get_slot_to_filtered_idx`.
-   */
+  */
   get_render_packet?: () => RenderPacket | null
   /**
    * Exact ordinary boundary spheres used by the packet visual layer, already
@@ -87,8 +87,19 @@ export interface GpuPickerDeps {
    * the picker scene's graph-derived compatibility path.
    */
   get_packet_boundary_atom_images?: () => ImageInstanceTable | null
+  /** End the camera pointer gesture before a packet click mutates selection.
+   *  Some embedded webviews consume pointerup before TrackballControls sees it. */
+  finish_packet_pointer_gesture?: (event: PointerEvent) => void
   on_packet_atom_click?: (site_idx: number, event: MouseEvent) => void
-  on_packet_bond_click?: (filtered_idx: number, event: MouseEvent) => void
+  on_packet_bond_click?: (
+    graph_idx: number,
+    filtered_idx: number | null,
+    event: MouseEvent,
+  ) => void
+  set_hovered_packet_bond?: (
+    graph_idx: number,
+    filtered_idx: number | null,
+  ) => void
   set_hovered_bond_idx?: (filtered_idx: number | null) => void
   get_bond_thickness: () => number
   get_external_dragging: () => boolean
@@ -620,7 +631,7 @@ export function setup_hover_detection(
           deps.set_active_tooltip(`atom`)
         }
       } else if (action?.type === `bond`) {
-        deps.set_hovered_bond_idx?.(action.filtered_idx)
+        deps.set_hovered_packet_bond?.(action.graph_idx, action.filtered_idx)
         if (deps.get_hovered_idx() !== null) {
           deps.set_hovered_idx(null)
           deps.set_active_tooltip(null)
@@ -722,11 +733,16 @@ export function setup_hover_detection(
   // A pointerdown/click distance guard keeps orbit drags from selecting.
   let click_down_x = 0
   let click_down_y = 0
+  let pending_packet_click: ReturnType<typeof setTimeout> | undefined
+  const targets_canvas_surface = (target: EventTarget | null): boolean =>
+    target === canvas || target === canvas.parentElement
   function handle_pointer_down(event: PointerEvent) {
+    if (!targets_canvas_surface(event.target)) return
     click_down_x = event.clientX
     click_down_y = event.clientY
   }
-  function handle_click(event: MouseEvent) {
+  function handle_pointer_up(event: PointerEvent) {
+    if (!targets_canvas_surface(event.target)) return
     const packet = deps.get_render_packet?.() ?? null
     if (packet === null || replica_picker === undefined) return
     if (
@@ -762,21 +778,46 @@ export function setup_hover_detection(
         deps.get_cutting_visibility_map(),
       )
     ) {
-      deps.on_packet_atom_click?.(action.site_idx, event)
+      deps.finish_packet_pointer_gesture?.(event)
+      // This listener runs in window capture, before TrackballControls sees
+      // pointerup on its DOM element. A microtask is still early enough in
+      // Chromium to stop that event's propagation, leaving TrackballControls
+      // in ROTATE with a captured pointer. Cross a task boundary so the camera
+      // gesture always finishes before selection mutates reactive state.
+      pending_packet_click = setTimeout(() => {
+        pending_packet_click = undefined
+        deps.on_packet_atom_click?.(action.site_idx, event)
+      }, 0)
     } else if (action?.type === `bond`) {
-      deps.on_packet_bond_click?.(action.filtered_idx, event)
+      deps.finish_packet_pointer_gesture?.(event)
+      pending_packet_click = setTimeout(() => {
+        pending_packet_click = undefined
+        deps.on_packet_bond_click?.(
+          action.graph_idx,
+          action.filtered_idx,
+          event,
+        )
+      }, 0)
     }
   }
 
   canvas.addEventListener(`pointermove`, handle_hover)
   canvas.addEventListener(`pointerleave`, handle_hover_leave)
-  canvas.addEventListener(`pointerdown`, handle_pointer_down)
-  canvas.addEventListener(`click`, handle_click)
+  // TrackballControls prevents the browser's synthetic `click`, and an
+  // earlier capture listener on this same canvas may stop pointer events
+  // immediately after it finds no CPU hitbox. Packet rendering intentionally
+  // unmounts those hitboxes, so listen from window capture (before the event
+  // reaches the canvas) and accept only events whose target is this canvas.
+  // This keeps picking event-driven (one 1×1 readback per click) without
+  // reintroducing per-frame CPU hitbox matrix updates.
+  window.addEventListener(`pointerdown`, handle_pointer_down, true)
+  window.addEventListener(`pointerup`, handle_pointer_up, true)
   return () => {
     canvas.removeEventListener(`pointermove`, handle_hover)
     canvas.removeEventListener(`pointerleave`, handle_hover_leave)
-    canvas.removeEventListener(`pointerdown`, handle_pointer_down)
-    canvas.removeEventListener(`click`, handle_click)
+    window.removeEventListener(`pointerdown`, handle_pointer_down, true)
+    window.removeEventListener(`pointerup`, handle_pointer_up, true)
+    if (pending_packet_click !== undefined) clearTimeout(pending_packet_click)
     if (raf_id !== 0) {
       cancelAnimationFrame(raf_id)
       raf_id = 0

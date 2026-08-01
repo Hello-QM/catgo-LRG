@@ -926,8 +926,9 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10, 11, 12]),
       ),
-    ).toEqual({ type: 'bond', filtered_idx: 12 })
-    // Orphan (-1), out-of-range, and missing maps degrade to null hits.
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: 12 })
+    // Orphan (-1), out-of-range, and missing legacy maps preserve the exact
+    // packet graph index so trajectory bond picking can bypass stale objects.
     expect(
       resolve_replica_pick_action(
         picked,
@@ -935,7 +936,7 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10, 11, -1]),
       ),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
     expect(
       resolve_replica_pick_action(
         picked,
@@ -943,10 +944,10 @@ describe('replica pick action resolution (base-site selection)', () => {
         site_ids,
         Int32Array.from([10]),
       ),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
     expect(
       resolve_replica_pick_action(picked, 'visual-shared-base', site_ids, null),
-    ).toBeNull()
+    ).toEqual({ type: 'bond', graph_idx: 2, filtered_idx: null })
   })
 
   test('miss and out-of-range logical sites resolve to null', () => {
@@ -1204,7 +1205,7 @@ describe('packet path picking wiring (source contract)', () => {
     expect(scene_source).toContain('on_packet_bond_click')
   })
 
-  test('picker integration owns the packet branch and canvas click routing', () => {
+  test('picker integration owns the packet branch and pointer gesture routing', () => {
     const integration_source = readFileSync(
       resolve(process.cwd(), 'src/lib/structure/gpu-picker-integration.svelte.ts'),
       'utf8',
@@ -1213,6 +1214,13 @@ describe('packet path picking wiring (source contract)', () => {
     expect(integration_source).toContain('get_packet_boundary_atom_images')
     expect(integration_source).toContain('boundary_atom_images:')
     expect(integration_source).toContain('resolve_replica_pick_action')
-    expect(integration_source).toMatch(/addEventListener\(\s*[`'"]click/)
+    expect(integration_source).toMatch(
+      /window\.addEventListener\(\s*[`'"]pointerdown[`'"]\s*,[^,]+,\s*true\s*\)/,
+    )
+    expect(integration_source).toMatch(
+      /window\.addEventListener\(\s*[`'"]pointerup[`'"]\s*,[^,]+,\s*true\s*\)/,
+    )
+    expect(integration_source).toContain('target === canvas.parentElement')
+    expect(integration_source).toContain('pending_packet_click = setTimeout')
   })
 })

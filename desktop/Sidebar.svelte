@@ -778,7 +778,7 @@
         if (typeof content === `string`) {
           on_open_editor!(content, name, ``, ``)
         }
-      }).catch(err => console.error(`Failed to fetch file for editor:`, err))
+      }, file.name).catch(err => console.error(`Failed to fetch file for editor:`, err))
     }
   }
 
@@ -799,7 +799,8 @@
 
   // ========== Handlers ==========
   function handle_local_click(file: LocalFile) {
-    // Strip .gz suffix — Vite plugin already decompressed .gz content at build time
+    // The URL loader decompresses .gz content; downstream format detection needs
+    // the uncompressed filename.
     const name = file.name.replace(/\.gz$/i, ``)
     if (file.content !== undefined) {
       on_load_file(file.content, name)
@@ -808,7 +809,7 @@
       load_from_url(file.url, (content, url_name) => {
         // Prefer our cleaned name over the URL-derived name
         on_load_file(content, name || url_name)
-      }).catch(err => console.error(`Failed to fetch trajectory:`, err))
+      }, file.name).catch(err => console.error(`Failed to fetch trajectory:`, err))
     }
   }
 

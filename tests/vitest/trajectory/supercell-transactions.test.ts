@@ -289,6 +289,25 @@ describe(`trajectory supercell transactions`, () => {
     expect(edited.structure.sites).toHaveLength(1)
   })
 
+  it(`drops the pre-supercell compact position packet`, () => {
+    const source = {
+      ...frame(0),
+      position_data: {
+        step: 0,
+        positions: new Float32Array(6),
+        forces: null,
+        lattice: null,
+      },
+    }
+    const edited = frame_with_supercell_execution(
+      source,
+      execute_supercell_op_sync(source.structure as PymatgenStructure, OP),
+    )
+
+    expect(edited.structure.sites).toHaveLength(2)
+    expect(edited.position_data).toBeUndefined()
+  })
+
   it(`preserves sequence order between current-only physical edits and all-frame supercells`, async () => {
     const ledger = new OperationLedger()
     ledger.append(

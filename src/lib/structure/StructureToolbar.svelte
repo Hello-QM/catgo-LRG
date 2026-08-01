@@ -86,6 +86,7 @@
     get_view_angles = undefined as (() => [number, number, number] | null) | undefined,
     set_view_angles = undefined as ((angles: [number, number, number]) => void) | undefined,
     delete_measurement = (_id: string) => {},
+    on_measurements_change = (_measurements: Measurement[]) => {},
     delete_selected_atoms = () => {},
     on_popout_chat = undefined as (() => void) | undefined,
     on_upload_to_hpc = undefined as (() => void) | undefined,
@@ -147,6 +148,7 @@
     get_view_angles?: () => [number, number, number] | null
     set_view_angles?: (angles: [number, number, number]) => void
     delete_measurement?: (id: string) => void
+    on_measurements_change?: (measurements: Measurement[]) => void
     delete_selected_atoms?: () => void
     on_popout_chat?: () => void
     on_upload_to_hpc?: () => void
@@ -795,7 +797,9 @@
             aria-label={t('structure.clear_all_measurements')}
             title={t('structure.clear_all_measurements')}
             onclick={() => {
-              measurements = []
+              const next_measurements: Measurement[] = []
+              measurements = next_measurements
+              on_measurements_change(next_measurements)
               measured_sites = []
               selected_measurement_id = null
             }}
@@ -846,7 +850,9 @@
                         sites: sites_to_measure
                       })
                     }
-                    measurements = [...measurements, ...new_measurements]
+                    const next_measurements = [...measurements, ...new_measurements]
+                    measurements = next_measurements
+                    on_measurements_change(next_measurements)
                     selected_sites = []
                   } else {
                     // Not enough atoms - enter continuous measurement mode

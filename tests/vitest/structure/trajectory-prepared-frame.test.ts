@@ -5,6 +5,8 @@ import type {
 } from '$lib/structure/scene/render-packet'
 import {
   create_prepared_frame_pipeline,
+  is_prepared_frame_topology_change,
+  PreparedFrameTopologyChangeError,
   prepared_frame_byte_size,
   prepared_frame_with_replicas,
   same_prepared_frame_key,
@@ -85,6 +87,14 @@ describe(`same_prepared_frame_key`, () => {
       expect(same_prepared_frame_key(key, changed)).toBe(false)
     }
   })
+})
+
+test(`classifies a topology-change prefetch boundary as a non-fatal sentinel`, () => {
+  const error = new PreparedFrameTopologyChangeError(4)
+
+  expect(error.message).toBe(`Trajectory frame 4 changed topology`)
+  expect(is_prepared_frame_topology_change(error)).toBe(true)
+  expect(is_prepared_frame_topology_change(new Error(error.message))).toBe(false)
 })
 
 describe(`same_prepared_frame_schedule`, () => {

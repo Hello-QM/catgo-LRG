@@ -10,7 +10,10 @@
  * [2026-03] desktop:serve fix: when Python backend is running, data CRUD operations
  * use HTTP instead of WASM.  The WASM db caches in-memory and doesn't see changes
  * made by the Python backend (e.g. MCP/CatBot workflow tools).  File management
- * operations (db_open, browse, etc.) still use WASM/Vite middleware.
+ * Database-open operations still use WASM/Tauri storage. Filesystem operations
+ * use the Python API whenever that backend is available; the `/__files/*`
+ * middleware only exists in Vite development and is not served by the bundled
+ * production SPA.
  */
 
 import { check_tauri } from '$lib/io/tauri'
@@ -33,6 +36,18 @@ async function getLocal() {
  * used instead.  Use this for data CRUD ops.  For file management ops (db_open,
  * browse_directory, etc.), use getLocal() directly. */
 async function getLocalForData() {
+  if (check_tauri()) return getLocal()
+  if (await desktop_backend_available()) return null
+  return getLocal()
+}
+
+/** Route host-filesystem operations through FastAPI in backend-served builds.
+ * A desktop production bundle still defines `__CATGO_DESKTOP__`, so blindly
+ * calling getLocal() selects db-wasm and its Vite-only `/__files/*` routes.
+ * FastAPI then serves index.html via the SPA fallback, which looks like a
+ * silent click and eventually fails JSON parsing on `<!DOCTYPE html>`.
+ */
+async function getLocalForFiles() {
   if (check_tauri()) return getLocal()
   if (await desktop_backend_available()) return null
   return getLocal()
@@ -368,7 +383,7 @@ export interface BrowseResult {
 }
 
 export async function browse_directory(dir = '~'): Promise<BrowseResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_browse_directory(dir)
   const response = await fetch(`${API_BASE}/workflow/db/browse?dir=${encodeURIComponent(dir)}`)
   return handle_response(response)
@@ -389,7 +404,7 @@ export interface FileBrowseResult {
 }
 
 export async function browse_files(dir = '~'): Promise<FileBrowseResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_browse_files(dir)
   const response = await fetch(`${API_BASE}/workflow/files/browse?dir=${encodeURIComponent(dir)}`)
   return handle_response(response)
@@ -402,7 +417,7 @@ export interface FileReadResult {
 }
 
 export async function read_file(path: string): Promise<FileReadResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_read_file(path)
   const response = await fetch(`${API_BASE}/workflow/files/read?path=${encodeURIComponent(path)}`)
   return handle_response(response)
@@ -414,7 +429,7 @@ export interface FileWriteResult {
 }
 
 export async function write_file(path: string, content: string): Promise<FileWriteResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_write_file(path, content)
   const response = await fetch(`${API_BASE}/workflow/files/write`, {
     method: `POST`,
@@ -435,7 +450,7 @@ export async function export_structure(
   path: string,
   format?: string,
 ): Promise<ExportStructureResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_export_structure(structure, path, format)
   const response = await fetch(`${API_BASE}/workflow/files/export-structure`, {
     method: `POST`,
@@ -455,7 +470,7 @@ export async function serialize_structure(
   structure: Record<string, unknown>,
   format: string = `cif`,
 ): Promise<SerializeStructureResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_serialize_structure(structure, format)
   const response = await fetch(`${API_BASE}/workflow/files/serialize-structure`, {
     method: `POST`,
@@ -473,7 +488,7 @@ export interface FileOpResult {
 }
 
 export async function fs_mkdir(path: string): Promise<FileOpResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_fs_mkdir(path)
   const response = await fetch(`${API_BASE}/workflow/files/mkdir`, {
     method: `POST`,
@@ -484,7 +499,7 @@ export async function fs_mkdir(path: string): Promise<FileOpResult> {
 }
 
 export async function fs_delete(path: string): Promise<FileOpResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_fs_delete(path)
   const response = await fetch(`${API_BASE}/workflow/files/delete`, {
     method: `POST`,
@@ -495,7 +510,7 @@ export async function fs_delete(path: string): Promise<FileOpResult> {
 }
 
 export async function fs_rename(old_path: string, new_path: string): Promise<FileOpResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_fs_rename(old_path, new_path)
   const response = await fetch(`${API_BASE}/workflow/files/rename`, {
     method: `POST`,
@@ -506,7 +521,7 @@ export async function fs_rename(old_path: string, new_path: string): Promise<Fil
 }
 
 export async function fs_copy(source: string, destination: string): Promise<FileOpResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_fs_copy(source, destination)
   const response = await fetch(`${API_BASE}/workflow/files/copy`, {
     method: `POST`,
@@ -517,7 +532,7 @@ export async function fs_copy(source: string, destination: string): Promise<File
 }
 
 export async function fs_move(source: string, destination: string): Promise<FileOpResult> {
-  const db = await getLocal()
+  const db = await getLocalForFiles()
   if (db) return db.db_fs_move(source, destination)
   const response = await fetch(`${API_BASE}/workflow/files/move`, {
     method: `POST`,

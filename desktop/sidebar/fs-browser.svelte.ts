@@ -9,6 +9,10 @@ import { browse_files, read_file, export_structure } from '$lib/api/project'
 import type { FileBrowseItem } from '$lib/api/project'
 import { is_structure_file, is_db_file } from '../sidebar-utils'
 import { check_tauri } from '$lib/io/tauri'
+import {
+  decompress_binary_structure_data,
+  is_binary_structure_filename,
+} from '$lib/io/decompress'
 
 export interface FsBrowserCallbacks {
   on_load_file: (content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) => void
@@ -159,6 +163,24 @@ export function create_fs_browser_state(callbacks: FsBrowserCallbacks) {
         await callbacks.on_load_trajectory_stream(item.path, item.name)
         return
       }
+    }
+
+    // Small ASE/HDF5 trajectories do not meet the backend streaming threshold,
+    // but they are still binary. The generic project `read_file` endpoint is
+    // text-only and irreversibly turns ULM bytes into mojibake.
+    if (is_binary_structure_filename(item.name)) {
+      try {
+        const bytes = await read_local_bytes(item.path)
+        const raw = bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer
+        const decoded = await decompress_binary_structure_data(raw, item.name)
+        callbacks.on_load_file(decoded.content, decoded.filename, item.path)
+      } catch (e) {
+        fs_error = e instanceof Error ? e.message : `Cannot read binary trajectory`
+      }
+      return
     }
 
     // Text-based files: read content

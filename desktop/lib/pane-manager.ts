@@ -19,6 +19,7 @@ import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
+import { download } from '$lib/io/fetch'
 import {
   cancel_pending_library_removal,
   commit_pending_library_removal,
@@ -132,7 +133,8 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
   const pane = leaf ? structurePane(leaf) : null
   if (!pane) return
   const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
-  if (!structure) {
+  const trajectory_save = pane.trajectory_save_handler
+  if (!structure && !trajectory_save) {
     close_panel(deps, tab_id, leaf_id)
     return
   }
@@ -143,12 +145,34 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
   const local_fmt = pane.local_file_path ? save_format_from_path(pane.local_file_path) : null
   exp.close_saving = true
   try {
-    if (exp.close_save_target === `local` && pane.local_file_path && local_fmt) {
+    if (trajectory_save) {
+      const saved = await trajectory_save()
+      if (exp.close_save_target === `hpc` && pane.remote_origin) {
+        if (/\.(gz|bz2|xz|zst)$/i.test(pane.remote_origin.file_path)) {
+          throw new Error(`Compressed remote trajectories cannot be overwritten yet. Export the edited extXYZ instead.`)
+        }
+        const result = await writeRemoteFile(
+          pane.remote_origin.session_id,
+          pane.remote_origin.file_path,
+          saved.content,
+        )
+        if (!result.success) throw new Error(result.message || `Remote trajectory save failed`)
+      } else if (exp.close_save_target === `local` && pane.local_file_path) {
+        if (/\.(gz|bz2|xz|zst)$/i.test(pane.local_file_path)) {
+          throw new Error(`Compressed trajectories cannot be overwritten from the desktop editor yet. Export the edited extXYZ instead.`)
+        }
+        await write_file(pane.local_file_path, saved.content)
+      } else if (exp.close_save_target === `local`) {
+        download(saved.content, saved.filename || `trajectory.extxyz`, `chemical/x-xyz`)
+      } else {
+        throw new Error(`Trajectory database save is not supported. Choose Local to download the edited extXYZ.`)
+      }
+    } else if (exp.close_save_target === `local` && pane.local_file_path && local_fmt) {
       // Known source file with a faithful serializer → silently overwrite it in
       // its original format. Plan constraint: the close-prompt "Save" never
       // opens a dialog (that's "Save As", a separate explicit action) and never
       // changes the format. Uses the same write seam as the close-all flow.
-      await write_file(pane.local_file_path, await serialize_structure_content(structure, local_fmt))
+      await write_file(pane.local_file_path, await serialize_structure_content(structure!, local_fmt))
     } else if (exp.close_save_target === `local`) {
       // No known source path, OR a source format with no faithful serializer →
       // fall back to the export dialog (Save As), where the user explicitly
@@ -156,8 +180,8 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
       // completes (exp.close_after). Never silently rewrite as CIF.
       exp.close_after = { tab_id, leaf_id }
       ts.close_confirm_leaf_id = null
-      const name = _auto_name(structure)
-      exp.pending_structure = structure
+      const name = _auto_name(structure!)
+      exp.pending_structure = structure!
       exp.error = ``
       exp.dialog = { mode: `file`, filename: `${name}.cif`, format: `cif` }
       deps.export_fs_browse(sidebar.fs_path || `~`)
@@ -173,7 +197,7 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
         const base = pane.remote_origin.file_path.split(/[/\\]/).pop() || pane.remote_origin.file_path
         throw new Error(`Cannot save "${base}" in place: its format has no serializer. Use Save As to export it in a supported format.`)
       }
-      const content = await serialize_structure_content(structure, remote_fmt)
+      const content = await serialize_structure_content(structure!, remote_fmt)
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else {
       // Reached only when the user CONSCIOUSLY picks "CatGO DB" in the close
@@ -182,7 +206,7 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
       // above), so there is no silent DB write on close. The silent-DB batch
       // save lives on in the Close-All flow (execute_close_all_saves), whose
       // per-entry checklist makes the DB target an explicit opt-in.
-      await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
+      await save_structure_to_db(structure!, _auto_name(structure!), exp.close_save_project_id || undefined)
     }
     // Pane-scoped save success: only clear the tab flag when this pane is the
     // tab's sole content-bearing pane — a dirty sibling must keep it set.

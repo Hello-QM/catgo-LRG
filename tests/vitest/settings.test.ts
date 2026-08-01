@@ -72,6 +72,7 @@ describe(`Settings`, () => {
       expect(typeof DEFAULTS.color_scheme).toBe(`string`)
       expect(typeof DEFAULTS.background_opacity).toBe(`number`)
       expect(typeof DEFAULTS.structure.show_gizmo).toBe(`boolean`)
+      expect(DEFAULTS.trajectory.display_mode).toBe(`structure`)
 
       // Check nested structure types
       expect(typeof DEFAULTS.structure.atom_radius).toBe(`number`)

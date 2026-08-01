@@ -22,7 +22,7 @@ test('run_command captures real terminal output via the registry', async ({ page
   // of reaching the graceful `test.skip` below when no backend/PTY is present
   // (the CI e2e job runs the frontend dev server only). Give it room to skip.
   test.setTimeout(60_000)
-  await page.goto(BASE)
+  await page.goto(BASE, { waitUntil: `domcontentloaded` })
 
   // Open a local terminal from the landing grid.
   await page.evaluate(() => {

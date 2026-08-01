@@ -6,19 +6,19 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
+const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
 const CITATION_REQUEST =
   'If CatGo contributes to your work, please acknowledge and cite it as ' +
   'described below. This request is not an additional condition of ' +
   'AGPL-3.0-or-later.'
 const ENGLISH_FOOTER =
   'CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your ' +
-  'work, please include “This work used CatGo (https://catgo-ucsd.org).” and ' +
+  'work, please include “This work used CatGo (https://app.catgo-ucsd.org).” and ' +
   'the preferred citation in CITATION.cff. This request is not an additional ' +
   'condition of the AGPL license.'
 const CHINESE_FOOTER =
   'CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明 ' +
-  '“This work used CatGo (https://catgo-ucsd.org).”并引用 CITATION.cff ' +
+  '“This work used CatGo (https://app.catgo-ucsd.org).”并引用 CITATION.cff ' +
   '中的首选文献；该请求不构成 AGPL 许可的附加条件。'
 
 test('active documentation footers request citation without adding AGPL conditions', () => {

@@ -442,14 +442,9 @@ export function create_pencil_mode_controller(deps: PencilModeDeps) {
       }))
       deps.get_atom_fast_ops?.()?.try_add(specs, next_structure.sites)
       deps.set_structure(next_structure)
-      // Plan v3 follow-up: fragment add must fire on_atom_added so
-      // Trajectory.svelte's W5 resume_disabled flag is set when the user
-      // adds a fragment during paused trajectory playback. Single-atom
-      // path at line 383 does this; the fragment path was missing the
-      // call (false-negative for resume_disabled). The callback receives
-      // a representative atom (the first one) — Trajectory.svelte's
-      // handler only uses the call as a topology-altered signal, not the
-      // payload contents.
+      // Notify trajectory owners that the frame topology changed. The
+      // trajectory layer invalidates compact position packets and switches
+      // frame-scoped edits to its variable-topology playback path.
       const first = atoms_to_add[0]
       if (first) {
         deps.get_on_atom_added()?.({ element: first.element, position: first.xyz })

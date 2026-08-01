@@ -148,6 +148,26 @@ describe(`VASP OUTCAR`, () => {
   })
 })
 
+describe(`ORCA output`, () => {
+  it(`loads the last Cartesian optimization geometry`, () => {
+    const content = `O   R   C   A
+CARTESIAN COORDINATES (ANGSTROEM)
+---------------------------------
+C 0 0 0
+H 1 0 0
+
+CARTESIAN COORDINATES (ANGSTROEM)
+---------------------------------
+C 2 0 0
+H 3 0 0
+`
+    const structure = parse_structure_file(content, `orca.out`)
+    expect(structure?.sites).toHaveLength(2)
+    expect(structure?.sites[0].species[0].element).toBe(`C`)
+    expect(structure?.sites[1].xyz).toEqual([3, 0, 0])
+  })
+})
+
 describe(`dispatch routing`, () => {
   const cell = `%BLOCK LATTICE_CART\n3 0 0\n0 3 0\n0 0 3\n%ENDBLOCK LATTICE_CART\n%BLOCK POSITIONS_FRAC\nH 0 0 0\n%ENDBLOCK POSITIONS_FRAC\n`
   it(`routes .cell, .fdf, scf.in, OUTCAR by name`, () => {

@@ -101,6 +101,10 @@ export function parse_structure_file(
 
     // ORCA input (explicit extension)
     if (ext === `orcainp`) return parse_orca(content)
+    if ((ext === `out` || ext === `log`) && /CARTESIAN COORDINATES\s*\(ANGSTROE?M\)/i.test(content)) {
+      const orca = parse_orca(content)
+      if (orca) return orca
+    }
 
     // Gaussian input
     if (ext === `gjf` || ext === `com`) return parse_gaussian_input(content)
@@ -210,6 +214,10 @@ export function parse_structure_file(
 
   // ORCA detection: Cartesian geometry opener
   if (/^\s*\*\s*xyz\b/im.test(content)) {
+    const result = parse_orca(content)
+    if (result) return result
+  }
+  if (/CARTESIAN COORDINATES\s*\(ANGSTROE?M\)/i.test(content)) {
     const result = parse_orca(content)
     if (result) return result
   }

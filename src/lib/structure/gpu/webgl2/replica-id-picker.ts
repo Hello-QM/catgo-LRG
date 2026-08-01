@@ -352,7 +352,7 @@ export type ScenePickResult = {
 
 export type ReplicaPickAction =
   | { type: 'atom'; site_idx: number }
-  | { type: 'bond'; filtered_idx: number }
+  | { type: 'bond'; graph_idx: number; filtered_idx: number | null }
 
 /**
  * Map one scene pick onto the viewer's selection surfaces.
@@ -362,11 +362,11 @@ export type ReplicaPickAction =
  *                                     every replica cell resolves to the same
  *                                     site id.
  * - atom + `physical-distinct-sites`→ the distinct physical id, unmapped.
- * - bond                            → the base bond GRAPH index routed through
- *                                     `slot_to_filtered_idx`; orphan (-1),
- *                                     out-of-range, or missing maps degrade to
- *                                     null (no hit), mirroring the decorator
- *                                     hitbox contract.
+ * - bond                            → always retains the exact packet GRAPH
+ *                                     index. A current legacy map additionally
+ *                                     supplies `filtered_idx`; stale/missing
+ *                                     maps leave it null so packet trajectories
+ *                                     remain directly pickable.
  */
 export function resolve_replica_pick_action(
   picked: ScenePickResult,
@@ -375,14 +375,20 @@ export function resolve_replica_pick_action(
   slot_to_filtered_idx: Int32Array | null,
 ): ReplicaPickAction | null {
   const { pick, logical_site } = picked
-  if (pick.kind === 'miss' || logical_site < 0) return null
+  if (pick.kind === 'miss') return null
   if (pick.kind === 'bond') {
-    if (slot_to_filtered_idx === null) return null
     const graph_index = pick.base_site
-    if (graph_index < 0 || graph_index >= slot_to_filtered_idx.length) return null
-    const filtered_idx = slot_to_filtered_idx[graph_index]
-    return filtered_idx < 0 ? null : { type: 'bond', filtered_idx }
+    if (graph_index < 0) return null
+    const mapped = slot_to_filtered_idx !== null && graph_index < slot_to_filtered_idx.length
+      ? slot_to_filtered_idx[graph_index]
+      : -1
+    return {
+      type: 'bond',
+      graph_idx: graph_index,
+      filtered_idx: mapped >= 0 ? mapped : null,
+    }
   }
+  if (logical_site < 0) return null
   if (semantics === 'physical-distinct-sites') {
     return { type: 'atom', site_idx: logical_site }
   }

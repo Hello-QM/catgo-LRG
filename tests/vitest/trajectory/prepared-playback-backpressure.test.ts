@@ -6,6 +6,7 @@ import {
   advance_playback_deadline,
   may_advance_playback,
   may_start_prepared_playback,
+  needs_prepared_playback_warmup,
   playback_poll_interval_ms,
   request_playback_frame,
   type PreparedPlaybackState,
@@ -62,6 +63,12 @@ describe(`prepared playback backpressure`, () => {
     expect(may_start_prepared_playback(2, 2)).toBe(true)
   })
 
+  test(`known variable topology bypasses the fixed-topology warmup gate`, () => {
+    expect(needs_prepared_playback_warmup(`bonds`, false)).toBe(true)
+    expect(needs_prepared_playback_warmup(`bonds`, true)).toBe(false)
+    expect(needs_prepared_playback_warmup(`never`, false)).toBe(false)
+  })
+
   test(`single-frame, pause, and edit-stable states remain immediately usable`, () => {
     const state = initial()
     expect(may_advance_playback(state)).toBe(true)
@@ -94,5 +101,11 @@ describe(`prepared playback backpressure`, () => {
     const acknowledgement = source.slice(ack_start, ack_end)
     expect(acknowledgement).toContain(`schedule_acknowledged_playback_pump()`)
     expect(source).toContain(`clearTimeout(playback_ack_timer)`)
+    expect(source).toContain(`compact && !frame_topology_changed && !force_slow_path &&`)
+    expect(source).toContain(`!frame_scoped_structure_ops`)
+    expect(source).toContain(`schedule_slow_path_presentation(`)
+    expect(source).toContain(
+      `requestAnimationFrame(() => requestAnimationFrame(acknowledge))`,
+    )
   })
 })

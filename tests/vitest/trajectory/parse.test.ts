@@ -436,6 +436,19 @@ describe(`VASP XDATCAR Parser`, () => {
 })
 
 describe(`XYZ Trajectory Format`, () => {
+  it(`parses the bundled compressed Ag extXYZ trajectory`, async () => {
+    const content = read_test_file(`ase-images-Ag-0-to-97.xyz.gz`)
+    expect(is_trajectory_file(`ase-images-Ag-0-to-97.xyz`, content)).toBe(true)
+
+    const trajectory = await parse_trajectory_data(
+      content,
+      `ase-images-Ag-0-to-97.xyz`,
+    )
+    expect(trajectory.metadata?.source_format).toBe(`xyz_trajectory`)
+    expect(trajectory.frames).toHaveLength(51)
+    expect(trajectory.frames[0].structure.sites).toHaveLength(119)
+  })
+
   it.each([
     [
       `multi-frame`,

@@ -29,7 +29,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **AGPL license and citation request** — CatGo 1.4.6 distributions use `AGPL-3.0-or-later`. If CatGo contributes to your work, please include `This work used CatGo (https://catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. This request is not an additional condition of the AGPL license. Third-party materials retain their own licenses, and historical AGPL grants remain in effect.
+- **AGPL license and citation request** — CatGo 1.4.6 distributions use `AGPL-3.0-or-later`. If CatGo contributes to your work, please include `This work used CatGo (https://app.catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. This request is not an additional condition of the AGPL license. Third-party materials retain their own licenses, and historical AGPL grants remain in effect.
 - **Cloudflare-only app acquisition and updates** — normal in-app downloads, Linux update checks, and signed Tauri updater packages use the dedicated Cloudflare domain instead of the GitHub API or release pages.
 - **Release integrity gates** — every platform workflow contributes only to a draft release; the R2 mirror selects stable CatGo app tags, publishes root metadata only for the latest app release, and excludes the independent STT accelerator series.
 

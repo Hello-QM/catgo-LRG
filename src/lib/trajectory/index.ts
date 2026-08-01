@@ -26,6 +26,20 @@ export interface TrajectoryFrame {
   position_data?: FramePositionData
 }
 
+/** Resolve one fully materialized frame for editing/export consumers. */
+export type TrajectoryFrameResolver = (
+  frame_idx: number,
+) => Promise<TrajectoryFrame | null>
+
+/** Source-format save result registered by the trajectory viewer. */
+export interface TrajectorySaveContent {
+  content: string
+  filename: string
+  is_binary: boolean
+}
+
+export type TrajectorySaveHandler = () => Promise<TrajectorySaveContent>
+
 export interface FrameIndex {
   frame_number: number
   byte_offset: number
@@ -109,6 +123,8 @@ export type TrajectoryDataExtractor = (
 
 export interface FrameLoader {
   fork?: () => FrameLoader
+  /** Release file descriptors or remote resources held by a runtime loader. */
+  dispose?: () => void | Promise<void>
   /** Optional constant-topology display path that skips full site objects. */
   load_frame_positions?: (
     data: string | ArrayBuffer,

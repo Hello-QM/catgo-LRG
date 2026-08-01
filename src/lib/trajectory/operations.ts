@@ -23,6 +23,10 @@ export type TrajectoryEditOp =
   | { kind: `add`; element: ElementSymbol; position: Vec3 }
   | { kind: `replace`; site_indices: number[]; new_element: ElementSymbol }
   | { kind: `manipulate`; displacements: Map<number, Vec3> }
+  | {
+    kind: `set_selective_dynamics`
+    values: Array<[boolean, boolean, boolean] | null>
+  }
   | SupercellOp
 
 /**
@@ -67,6 +71,17 @@ export function apply_trajectory_edit_op(
         sites: apply_displacements(structure.sites, op.displacements, inverse),
       }
     }
+    case `set_selective_dynamics`:
+      return {
+        ...structure,
+        sites: structure.sites.map((site, idx) => {
+          const value = op.values[idx]
+          const properties = { ...site.properties }
+          if (value) properties.selective_dynamics = [...value]
+          else delete properties.selective_dynamics
+          return { ...site, properties }
+        }),
+      }
     case `supercell`:
       return execute_supercell_op_sync(
         structure as PymatgenStructure,
@@ -89,9 +104,18 @@ export function apply_trajectory_edit_op_to_frame(
       op.kind === `replace` || op.kind === `manipulate`
     ? break_frame_supercell_provenance(frame)
     : frame
+  const structure = apply_trajectory_edit_op(source.structure, op)
   return {
     ...source,
-    structure: apply_trajectory_edit_op(source.structure, op),
+    structure,
+    // Compact packets describe the pre-edit frame. Keeping one after a
+    // physical/topology edit lets the exact trajectory renderer combine, for
+    // example, 304×3 old coordinates with a new 305-atom topology. Drop it so
+    // the edited structure becomes the source of truth; the frame-position
+    // cache will rebuild a correctly-sized typed packet when appropriate.
+    position_data: op.kind === `set_selective_dynamics`
+      ? source.position_data
+      : undefined,
   }
 }
 
@@ -101,13 +125,36 @@ export function topology_signature(structure: AnyStructure): string {
     .join(`,`)
 }
 
+/**
+ * Return whether two structures can safely share one rendered atom topology.
+ *
+ * Position-only trajectory rendering keeps the first frame's atom objects and
+ * swaps typed coordinate packets underneath them. That is only valid when the
+ * atom count and element order are identical. Comparing the sites directly
+ * avoids allocating the large comma-separated signatures used by validation
+ * messages on every playback/cache decision.
+ */
+export function structures_share_topology(
+  left: AnyStructure | null | undefined,
+  right: AnyStructure | null | undefined,
+): boolean {
+  if (!left || !right || left.sites.length !== right.sites.length) return false
+  for (let idx = 0; idx < left.sites.length; idx++) {
+    const left_site = left.sites[idx]
+    const right_site = right.sites[idx]
+    const left_element = left_site.species?.[0]?.element ?? left_site.label ?? `?`
+    const right_element = right_site.species?.[0]?.element ?? right_site.label ?? `?`
+    if (left_element !== right_element) return false
+  }
+  return true
+}
+
 export function validate_uniform_topology(trajectory: TrajectoryType): string | null {
   const first = trajectory.frames[0]?.structure
   if (!first) return `Trajectory has no loaded frame.`
-  const signature = topology_signature(first)
   for (let i = 1; i < trajectory.frames.length; i++) {
     const frame = trajectory.frames[i]
-    if (!frame?.structure || topology_signature(frame.structure) !== signature) {
+    if (!structures_share_topology(first, frame?.structure)) {
       return `Frame ${i} has a different atom count or element order; an all-frame topology edit would be unsafe.`
     }
   }

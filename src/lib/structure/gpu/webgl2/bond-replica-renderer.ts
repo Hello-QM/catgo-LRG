@@ -342,6 +342,7 @@ const VERTEX_COMMON = /* glsl */ `
   flat varying float vImpRadiusSq;
   flat varying float vImpLen;
   flat varying float vImpCollapse;
+  flat varying float vOpenTip;
 
   vec3 fetchBasePosition(float site) {
     int idx = int(site + 0.5);
@@ -358,12 +359,13 @@ const VERTEX_COMMON = /* glsl */ `
 
 // Shared vertex tail: map the unit OBB (position in [-1,1]^3) onto the
 // half-cylinder anchor→tip and hand the view-space frame to the ray-cast.
-// Expects `anchor`, `tip`, `collapse` from the head.
+// Expects `anchor`, `tip`, `collapse`, and `open_tip` from the head.
 const VERTEX_TAIL = /* glsl */ `
   vec3 seg = tip - anchor;
   float seg_len = length(seg);
   collapse = collapse || !(seg_len > 1e-6);
   vImpCollapse = collapse ? 1.0 : 0.0;
+  vOpenTip = open_tip ? 1.0 : 0.0;
   if (collapse) {
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // off-screen (clipped)
     vImpBase = vec3(0.0);
@@ -427,6 +429,11 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
     // half complete toward the ghost image and collapses the B half (the
     // ghost-side half is the sparse second draw).
     bool collapse = !inside && (uPolicy == 1 || (uPolicy == 2 && is_b_half));
+    // Complete halves meet another half at their midpoint. Leave that
+    // internal cap open so two differently-coloured, exactly coplanar caps do
+    // not z-fight into a jagged seam when the bond is magnified. A boundary
+    // stub has a genuinely exposed endpoint and therefore keeps its cap.
+    bool open_tip = inside || (!inside && uPolicy == 2 && !is_b_half);
     vec3 d = partner - anchor;
     vec3 tip = anchor + d * 0.5;
     if (!inside && uPolicy == 0) tip = anchor + d * (0.5 * uStubScale);
@@ -456,6 +463,9 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
     float scale = 0.5 * (g_stub > 0.5 ? uStubScale : 1.0);
     vec3 tip = anchor + (partner - anchor) * scale;
     bool collapse = false;
+    // Full decorator halves meet at an internal midpoint and leave that cap
+    // open; an incomplete boundary stub has a real exposed tip and keeps it.
+    bool open_tip = g_stub < 0.5;
     vColor = fetchBaseColor(g_site.x);
     ${VERTEX_TAIL}
   }
@@ -485,6 +495,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   flat varying float vImpRadiusSq;
   flat varying float vImpLen;
   flat varying float vImpCollapse;
+  flat varying float vOpenTip;
   out vec4 fragColor;
 
   vec3 linear_to_srgb(vec3 linear) {
@@ -518,11 +529,19 @@ const FRAGMENT_SHADER = /* glsl */ `
     float axial = 0.0;
 
     if (ln < 1e-7 * vImpLen) {
-      float t = dot(RC, rd);
-      float v = dot(RC, RC);
-      if (v - t * t > vImpRadiusSq) discard;
-      hit = ray_origin - t * rd;
-      nrm = -A;
+      vec3 axis_dir = A / vImpLen;
+      vec3 radial = RC - axis_dir * dot(RC, axis_dir);
+      if (dot(radial, radial) > vImpRadiusSq) discard;
+      bool enter_base = dot(rd, axis_dir) > 0.0;
+      axial = enter_base ? 0.0 : 1.0;
+      // Looking into the open midpoint should hit the real atom-side base cap
+      // behind it, not resurrect the internal seam cap.
+      if (!enter_base && vOpenTip > 0.5) axial = 0.0;
+      vec3 cap_center = B + axial * A;
+      float cap_t = dot(cap_center - ray_origin, axis_dir) /
+        dot(rd, axis_dir);
+      hit = ray_origin + cap_t * rd;
+      nrm = axial < 0.5 ? -A : A;
     } else {
       n /= ln;
       float dd = dot(RC, n);
@@ -544,12 +563,23 @@ const FRAGMENT_SHADER = /* glsl */ `
         vec3 farp = ray_origin + tfar * rd;
         float afar = dot(farp - B, A) / len2;
         if (anear < 0.0 && afar > 0.0) {
-          hit = ray_origin + (tnear + (anear / (anear - afar)) * 2.0 * s) * rd;
+          hit = mix(hit, farp, anear / (anear - afar));
           nrm = -A;
+          axial = 0.0;
         } else if (anear > 1.0 && afar < 1.0) {
-          hit = ray_origin + (tnear + ((anear - 1.0) / (anear - afar)) * 2.0 * s) * rd;
-          nrm = A;
-          axial = 1.0;
+          if (vOpenTip < 0.5) {
+            hit = mix(hit, farp, (anear - 1.0) / (anear - afar));
+            nrm = A;
+            axial = 1.0;
+          } else if (afar >= 0.0) {
+            hit = farp;
+            nrm = farp - (B + afar * A);
+            axial = afar;
+          } else {
+            hit = mix(hit, farp, anear / (anear - afar));
+            nrm = -A;
+            axial = 0.0;
+          }
         } else discard;
       }
     }

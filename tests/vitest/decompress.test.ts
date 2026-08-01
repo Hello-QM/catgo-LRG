@@ -1,11 +1,23 @@
 import {
+  decompress_binary_structure_data,
   decompress_data,
   decompress_file,
   detect_compression_format,
+  is_binary_structure_filename,
 } from '$lib/io/decompress'
 import { describe, expect, test } from 'vitest'
 
 describe(`decompress utility functions`, () => {
+  test.each([
+    [`sample.traj`, true],
+    [`sample.traj.gz`, true],
+    [`sample.h5`, true],
+    [`sample.hdf5.gzip`, true],
+    [`sample.extxyz.gz`, false],
+  ])(`binary structure routing for %s`, (filename, expected) => {
+    expect(is_binary_structure_filename(filename)).toBe(expected)
+  })
+
   describe(`detect_compression_format`, () => {
     test.each([
       [`test.json.gz`, `gzip`],
@@ -85,6 +97,32 @@ describe(`decompress utility functions`, () => {
         expect(decompressed).toBe(test_string)
       },
     )
+  })
+
+  describe(`decompress_binary_structure_data`, () => {
+    test(`preserves ASE bytes and removes a gzip suffix`, async () => {
+      if (!globalThis.CompressionStream || !globalThis.DecompressionStream) return
+      const original = Uint8Array.from([
+        0x2d, 0x20, 0x6f, 0x66, 0x20, 0x55, 0x6c, 0x6d,
+        0x00, 0xff, 0x80, 0x01,
+      ])
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(original)
+          controller.close()
+        },
+      })
+      const compressed = await new Response(
+        stream.pipeThrough(new CompressionStream(`gzip`)),
+      ).arrayBuffer()
+
+      const result = await decompress_binary_structure_data(
+        compressed,
+        `sample.traj.gz`,
+      )
+      expect(result.filename).toBe(`sample.traj`)
+      expect(new Uint8Array(result.content)).toEqual(original)
+    })
   })
 
   describe(`decompress_file`, () => {

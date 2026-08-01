@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const ACKNOWLEDGEMENT =
-  'This work used CatGo (https://catgo-ucsd.org).'
+  'This work used CatGo (https://app.catgo-ucsd.org).'
 export const ACKNOWLEDGEMENT_NOTICE =
   `${ACKNOWLEDGEMENT}\n\nRequested acknowledgement and citation; ` +
   `not an additional condition of AGPL-3.0-or-later.\n`
