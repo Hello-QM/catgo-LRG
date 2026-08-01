@@ -332,7 +332,7 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License and citation
-            CatGo 1.4.8 distributions use **AGPL-3.0-or-later**.
+            CatGo 1.4.9 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
@@ -362,10 +362,10 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.8
-            - **Consistent periodic structures in both rendering modes** — standard WebGL and Large System Performance Mode now share atom, bond, boundary, camera, and visual-state data.
-            - **Database search works again across the app and VS Code** — Materials Project, OPTIMADE, and PubChem now use current provider APIs, pagination, and extension-host routing.
-            - **Large System Performance Mode remains WebGPU-accelerated** — the shared rendering contract removes visual drift while retaining the fast path and live interaction updates.
+            ### New in 1.4.9
+            - **Large trajectories open and edit across every CatGo surface** — indexed structure-only streaming now covers the web app, desktop app, VS Code, and Antigravity, including variable-topology edits and per-frame POSCAR export.
+            - **CatBot verifies physics before numerical results are trusted** — provenance, workflow-consistency, and scientific gates catch silent failures and guard HPC submission.
+            - **Structure tools are customizable per pane** — collapse the toolbar, choose visible tools, and keep periodic bonds correct even when the frontend uses the JavaScript fallback.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
@@ -531,8 +531,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
 
-      - name: Finalize canonical release body
+      - name: Finalize canonical v1.4.8 release body
         if: env.CATGO_RELEASE_TAG == 'v1.4.8'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Finalize canonical release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.9'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
