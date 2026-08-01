@@ -299,13 +299,17 @@ export function trajectory_frame_to_extxyz_str(frame: TrajectoryFrame): string {
       ? { ...site, properties: { ...site.properties, force } }
       : site
   })
-  const structure = {
+  const structure: AnyStructure & {
+    step: number
+    energy?: number
+    fmax?: number
+  } = {
     ...frame.structure,
     sites,
     step: frame.step,
     ...(typeof metadata.energy === `number` ? { energy: metadata.energy } : {}),
     ...(typeof metadata.force_max === `number` ? { fmax: metadata.force_max } : {}),
-  } as AnyStructure
+  }
   const lines = structure_to_xyz_str(structure, true).split(`\n`)
 
   // Preserve remaining scalar plot metadata. Arrays/objects are represented
