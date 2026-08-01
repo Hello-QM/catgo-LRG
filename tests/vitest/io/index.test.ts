@@ -1,4 +1,5 @@
 import { handle_url_drop, load_from_url } from '$lib/io'
+import { gzipSync } from 'node:zlib'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 globalThis.fetch = vi.fn()
@@ -129,6 +130,27 @@ describe(`load_from_url`, () => {
     )
   })
 
+  test(`filename hint preserves an inlined production ASE trajectory as binary`, async () => {
+    const data_url = `data:application/octet-stream;base64,AAECAwQFBgc=`
+    const content = new ArrayBuffer(8)
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      create_mock_response(content, {
+        'content-type': `application/octet-stream`,
+      }),
+    )
+
+    let received_content: string | ArrayBuffer | null = null
+    let received_filename: string | null = null
+    await load_from_url(data_url, (loaded, filename) => {
+      received_content = loaded
+      received_filename = filename
+    }, `ase-LiMnO2-chgnet-relax.traj`)
+
+    expect(received_content).toBeInstanceOf(ArrayBuffer)
+    expect(received_filename).toBe(`ase-LiMnO2-chgnet-relax.traj`)
+    expect(fetch).toHaveBeenCalledWith(data_url)
+  })
+
   test.each([
     [`https://example.com/data.txt`, `data.txt`],
     [`https://example.com/config.json`, `config.json`],
@@ -157,7 +179,7 @@ describe(`load_from_url`, () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1) // Only one fetch for known text formats
   })
 
-  test(`gzip files with content-encoding are handled as text`, async () => {
+  test(`already-decoded gzip responses are handled as text`, async () => {
     const mock_response = new Response(`decompressed content`, {
       headers: { 'content-encoding': `gzip` },
     })
@@ -173,17 +195,37 @@ describe(`load_from_url`, () => {
 
     expect(typeof received_content).toBe(`string`)
     expect(received_content).toBe(`decompressed content`)
-    expect(received_filename).toBe(`file.xyz.gz`)
+    expect(received_filename).toBe(`file.xyz`)
+  })
+
+  test(`literal gzip bytes are decompressed even when content-encoding is set`, async () => {
+    const compressed = gzipSync(`two\nframes\n`)
+    const buffer = compressed.buffer.slice(
+      compressed.byteOffset,
+      compressed.byteOffset + compressed.byteLength,
+    )
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      create_mock_response(buffer, { 'content-encoding': `gzip` }),
+    )
+
+    let received_content: string | ArrayBuffer | null = null
+    let received_filename: string | null = null
+    await load_from_url(`https://example.com/file.xyz.gz`, (content, filename) => {
+      received_content = content
+      received_filename = filename
+    })
+
+    expect(received_content).toBe(`two\nframes\n`)
+    expect(received_filename).toBe(`file.xyz`)
   })
 
   test(`gzip files without content-encoding are decompressed`, async () => {
-    // Mock the decompress module
-    const mock_decompress = vi.fn().mockResolvedValue(`decompressed content`)
-    vi.doMock(`$lib/io/decompress`, () => ({
-      decompress_data: mock_decompress,
-    }))
-
-    const mock_response = create_mock_response(new ArrayBuffer(8), {
+    const compressed = gzipSync(`decompressed content`)
+    const buffer = compressed.buffer.slice(
+      compressed.byteOffset,
+      compressed.byteOffset + compressed.byteLength,
+    )
+    const mock_response = create_mock_response(buffer, {
       'content-type': `application/octet-stream`,
     })
     globalThis.fetch = vi.fn().mockResolvedValue(mock_response)
@@ -199,7 +241,6 @@ describe(`load_from_url`, () => {
     expect(typeof received_content).toBe(`string`)
     expect(received_content).toBe(`decompressed content`)
     expect(received_filename).toBe(`file.xyz`)
-    expect(mock_decompress).toHaveBeenCalledWith(new ArrayBuffer(8), `gzip`)
   })
 
   test.each([
