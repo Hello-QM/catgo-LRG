@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { TERMINAL_TOOLS } from '../../src/lib/chat/terminal-tools'
 import {
   register_terminal, _reset_registry_for_test, mark_terminal_active,
@@ -23,7 +23,19 @@ function handle(): TerminalHandle {
 }
 
 describe('terminal tools', () => {
-  beforeEach(() => { _reset_registry_for_test(); calls.length = 0; register_terminal(handle()); mark_terminal_active('h') })
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      decision: 'allow', reason: '', guarded: false,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    _reset_registry_for_test()
+    calls.length = 0
+    register_terminal(handle())
+    mark_terminal_active('h')
+  })
 
   it('exposes the four tools with correct kinds', () => {
     expect(find('read_terminal').def.kind).toBe('read')
