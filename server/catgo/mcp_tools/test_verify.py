@@ -270,6 +270,8 @@ def test_terminal_scheduler_submit_classifier_covers_wrappers_and_paths():
         {"action": "run", "command": "timeout --signal TERM 5s srun vasp_std"},
         {"action": "run", "command": "setsid --wait /usr/bin/sbatch job.sh"},
         {"action": "run", "command": "printf 'a\\n' | xargs -n 1 /usr/bin/qsub"},
+        {"action": "run", "command": "parallel -j 2 sbatch ::: a.sh b.sh"},
+        {"action": "run", "command": "watch -n 2 /usr/bin/qsub job.pbs"},
         {"action": "run", "command": "flux submit job.sh"},
         {"action": "run", "command": "flux mini run calculation.toml"},
         {"action": "run", "command": "echo ready\nllsubmit job.cmd"},
@@ -284,6 +286,8 @@ def test_terminal_scheduler_classifier_keeps_diagnostics_free():
     allowed = [
         {"action": "read", "lines": 100},
         {"action": "run", "command": "squeue -u $USER"},
+        {"action": "run", "command": "qstat -u $USER"},
+        {"action": "run", "command": "sacct -j 123"},
         {"action": "run", "command": "tail -f slurm-123.out"},
         {"action": "run", "command": "grep sbatch scheduler.log"},
         {"action": "run", "command": "command -v sbatch"},

@@ -142,6 +142,11 @@ export interface ClientTool {
   input_schema: Record<string, unknown>
 }
 
+/** Request-local context for browser-executed client tools. */
+export interface ToolExecutionContext {
+  tab_id?: string
+}
+
 /** A tool call parsed from the model's response. */
 export interface ToolCall {
   id: string
