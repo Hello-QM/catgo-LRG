@@ -171,3 +171,40 @@ def test_user_modified_global_job_params_still_override_cluster():
 
     assert jd["partition"] == "gpu-shared"   # user choice wins over cluster
     assert jd["ntasks"] == 40
+
+
+def test_scanner_preserves_top_level_custodian_settings():
+    class DB:
+        def get_workflow(self, workflow_id):
+            return {"run_config_json": json.dumps({
+                "use_custodian": False,
+                "custodian_max_errors": 9,
+            })}
+
+    merged = WorkflowEngine(
+        db=DB(),
+        config={"hpc": {"use_custodian": True, "custodian_max_errors": 2}},
+    )._merged_config("wf")
+    assert merged["hpc"]["use_custodian"] is False
+    assert merged["hpc"]["custodian_max_errors"] == 9
+
+
+def test_scanner_preserves_nested_custodian_settings():
+    from catgo.models.workflow_run import WorkflowRunConfig
+    from catgo.routers.workflow import _run_config_to_engine_config
+
+    stored = _run_config_to_engine_config(WorkflowRunConfig(
+        use_custodian=True,
+        custodian_max_errors=7,
+    ))
+
+    class DB:
+        def get_workflow(self, workflow_id):
+            return {"config_json": json.dumps(stored)}
+
+    merged = WorkflowEngine(
+        db=DB(),
+        config={"hpc": {"use_custodian": False, "custodian_max_errors": 3}},
+    )._merged_config("wf")
+    assert merged["hpc"]["use_custodian"] is True
+    assert merged["hpc"]["custodian_max_errors"] == 7

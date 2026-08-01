@@ -5,9 +5,53 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+class VerificationApprovalRequest(BaseModel):
+    approval_id: str
+    tab_id: str | None = None
+    mcp_session_id: str | None = None
+
+
+@router.post("/verification/approve-override")
+def approve_verification_override(
+    request: VerificationApprovalRequest,
+    approval_secret: str | None = Header(
+        default=None, alias="X-CatGo-Approval-Secret"
+    ),
+):
+    """Trusted bridge callback after a human accepts the PermissionCard.
+
+    The challenge id is intentionally insufficient: it is visible to the model.
+    Only a local host process holding the shared random capability may approve it.
+    """
+    from catgo.mcp_tools import verify_enforcement as enforcement
+
+    if not enforcement.verify_approval_secret(approval_secret):
+        raise HTTPException(status_code=403, detail="invalid approval capability")
+    if request.tab_id:
+        session_key = f"http:tab:{request.tab_id}"
+    elif request.mcp_session_id:
+        session_key = f"http:mcp:{request.mcp_session_id}"
+    else:
+        raise HTTPException(status_code=400, detail="verification session is required")
+    try:
+        challenge = enforcement.approve_override(
+            request.approval_id,
+            session_key=session_key,
+            approved_by="catgo-permission-card",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "approved": True,
+        "approval_id": challenge["approval_id"],
+        "expires_at": challenge["expires_at"],
+    }
 
 # Repo root: server/catgo/routers/system.py -> parents[3] == repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]

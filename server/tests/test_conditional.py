@@ -47,7 +47,7 @@ class TestConditionalExecution:
         assert task2["status"] == TaskState.SKIPPED.value
 
     def test_conditional_pass(self, db):
-        """t1 -> t2 (condition: t1.converged == True), t1 result converged=True -> t2 READY."""
+        """A satisfied condition advances an HPC task to the review gate."""
         wf_id = db.create_workflow("test")
         t1 = db.create_task(wf_id, "geo_opt", params={})
         t2 = db.create_task(wf_id, "freq", params={})
@@ -61,14 +61,14 @@ class TestConditionalExecution:
         db.update_task(t1, status=TaskState.COMPLETED.value)
         db.store_result(t1, wf_id, outputs_json=json.dumps({"converged": True}))
 
-        # Advance: t2 should be READY
+        # HPC tasks require review unless the workflow opts into auto-submit.
         advanced = advance_waiting_tasks(db, wf_id)
         assert t2 in advanced
         task2 = db.get_task(t2)
-        assert task2["status"] == TaskState.READY.value
+        assert task2["status"] == TaskState.PENDING_REVIEW.value
 
     def test_no_condition_advances_normally(self, db):
-        """Task without condition_json should advance to READY as usual."""
+        """An unconditional HPC task still advances to the review gate."""
         wf_id = db.create_workflow("test")
         t1 = db.create_task(wf_id, "geo_opt", params={})
         t2 = db.create_task(wf_id, "freq", params={})
@@ -78,7 +78,7 @@ class TestConditionalExecution:
         advanced = advance_waiting_tasks(db, wf_id)
         assert t2 in advanced
         task2 = db.get_task(t2)
-        assert task2["status"] == TaskState.READY.value
+        assert task2["status"] == TaskState.PENDING_REVIEW.value
 
     def test_skipped_parent_allows_advance(self, db):
         """t1 -> t2 -> t3: if t2 is SKIPPED, t3 should still advance to READY."""
@@ -100,7 +100,7 @@ class TestConditionalExecution:
         assert task3["status"] == TaskState.READY.value
 
     def test_condition_with_missing_result(self, db):
-        """If the source task has no result, condition is assumed met (advance to READY)."""
+        """A missing result assumes the condition met, then applies the review gate."""
         wf_id = db.create_workflow("test")
         t1 = db.create_task(wf_id, "geo_opt", params={})
         t2 = db.create_task(wf_id, "freq", params={})
@@ -115,7 +115,7 @@ class TestConditionalExecution:
         advanced = advance_waiting_tasks(db, wf_id)
         assert t2 in advanced
         task2 = db.get_task(t2)
-        assert task2["status"] == TaskState.READY.value
+        assert task2["status"] == TaskState.PENDING_REVIEW.value
 
 
 class TestDBSchemaExtensions:

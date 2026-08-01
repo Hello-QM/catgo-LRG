@@ -738,7 +738,7 @@ export async function send_message(
             CLIENT_TOOLS,
             slice.abort_controller?.signal,
           ),
-        execute: execute_tool,
+        execute: (name, input) => execute_tool(name, input, { tab_id }),
         kind_of: tool_kind,
         request_permission: (call) =>
           new Promise<boolean>((resolve) => {

@@ -4,13 +4,92 @@
  * it. Registered into CLIENT_TOOLS by structure-tools.ts. Mutating tools are
  * gated by the existing PermissionCard flow (kind: 'mutate').
  */
-import type { ClientTool } from './types'
+import type { ClientTool, ToolExecutionContext } from './types'
 import { ensure_active_terminal } from '../structure/terminal-registry.svelte'
 import { resolve_keys } from '../structure/terminal-capture'
+import { API_BASE } from '$lib/api/config'
 
 export interface TerminalToolEntry {
   def: ClientTool
-  run: (input: Record<string, unknown>) => Promise<unknown>
+  run: (
+    input: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ) => Promise<unknown>
+}
+
+type VerificationDecision = `allow` | `prompt` | `forbidden`
+
+interface VerificationPrecheck {
+  decision: VerificationDecision
+  reason: string
+  guarded: boolean
+}
+
+/**
+ * Ask the backend's shared verification policy before touching the PTY.
+ *
+ * This intentionally runs for every client-direct run/send_keys request.  A
+ * local TypeScript heuristic would either drift from the MCP policy or permit
+ * a new shell wrapper the Python classifier already knows.  Network/protocol
+ * failures reject the tool call: executing first and checking later would make
+ * the gate advisory instead of fail-closed.
+ */
+export async function verification_precheck(
+  action: `run` | `send_keys`,
+  input: Record<string, unknown>,
+  context?: ToolExecutionContext,
+): Promise<VerificationPrecheck> {
+  const body = {
+    action,
+    ...(action === `run`
+      ? { command: String(input.command ?? ``) }
+      : { keys: String(input.keys ?? ``) }),
+    ...(context?.tab_id ? { panel_id: context.tab_id } : {}),
+  }
+  let resp: Response
+  try {
+    resp = await fetch(`${API_BASE}/terminal/verification-precheck`, {
+      method: `POST`,
+      headers: {
+        'Content-Type': `application/json`,
+        ...(context?.tab_id ? { 'X-CatGo-Tab-Id': context.tab_id } : {}),
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (err) {
+    throw new Error(
+      `Terminal verification precheck unavailable; command was not executed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+  }
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => `${resp.status}`)
+    throw new Error(
+      `Terminal verification precheck failed (${resp.status}); command was not executed: ${detail}`,
+    )
+  }
+  let result: Partial<VerificationPrecheck>
+  try {
+    result = await resp.json() as Partial<VerificationPrecheck>
+  } catch {
+    throw new Error(`Terminal verification precheck returned invalid JSON; command was not executed.`)
+  }
+  const decision = result.decision
+  if (decision !== `allow` && decision !== `prompt` && decision !== `forbidden`) {
+    throw new Error(`Terminal verification precheck returned an invalid decision; command was not executed.`)
+  }
+  if (decision !== `allow`) {
+    const fallback = decision === `prompt`
+      ? `Terminal scheduler submission requires an authenticated verification override; command was not executed.`
+      : `Terminal scheduler submission is blocked by verification policy.`
+    throw new Error(result.reason || fallback)
+  }
+  return {
+    decision,
+    reason: typeof result.reason === `string` ? result.reason : ``,
+    guarded: result.guarded === true,
+  }
 }
 
 async function active() {
@@ -51,7 +130,8 @@ export const TERMINAL_TOOLS: TerminalToolEntry[] = [
         required: ['command'],
       },
     },
-    run: async (input) => {
+    run: async (input, context) => {
+      await verification_precheck(`run`, input, context)
       const h = await active()
       const r = await h.run_command(String(input.command ?? ''))
       return { ...r, ...info(h) }
@@ -68,7 +148,8 @@ export const TERMINAL_TOOLS: TerminalToolEntry[] = [
         required: ['keys'],
       },
     },
-    run: async (input) => {
+    run: async (input, context) => {
+      await verification_precheck(`send_keys`, input, context)
       const h = await active()
       await h.send_keys(resolve_keys(String(input.keys ?? '')))
       await new Promise((r) => setTimeout(r, 200))

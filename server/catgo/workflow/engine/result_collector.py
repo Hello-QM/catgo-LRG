@@ -4,8 +4,13 @@ Reads output structures, energies, frequencies, and engine-specific results
 from HPC work directories after job completion.
 """
 
+import hashlib
+import hmac
 import json
 import logging
+import math
+import re
+import shlex
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -204,6 +209,668 @@ async def _try_read_sella_results(
     return results
 
 
+_VASP_META_MARKERS = {
+    "__CATGO_INCAR__": "incar",
+    "__CATGO_POSCAR__": "poscar",
+    "__CATGO_KPOINTS__": "kpoints",
+    "__CATGO_INPUT_MANIFEST__": "input_manifest",
+    "__CATGO_INPUT_HASHES__": "input_hashes",
+    "__CATGO_OUTCAR_META__": "outcar",
+    "__CATGO_FORCES__": "forces",
+    "__CATGO_FMAX__": "fmax",
+}
+_VASP_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?"
+
+
+def _positive_incar_float(text: str, tag: str) -> float | None:
+    """Return the final active, finite, positive scalar assignment."""
+    matches: list[str] = []
+    pattern = re.compile(
+        rf"(?:^|[;\s]){re.escape(tag)}\s*=\s*([^;\s]+)",
+        re.I,
+    )
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].split("!", 1)[0]
+        matches.extend(match.group(1) for match in pattern.finditer(line))
+    if not matches:
+        return None
+    try:
+        value = float(matches[-1].replace("D", "E").replace("d", "e"))
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _quote_remote_dir(work_dir: str) -> str:
+    """Quote a remote path WITHOUT killing a leading `~`.
+
+    `shlex.quote("~/calculations")` yields `'~/calculations'`, and a quoted tilde
+    is a literal directory name — the default work root then resolves to nothing
+    and no TOTEN/manifest metadata comes back. Quote only the part after the
+    tilde so expansion still happens on the remote shell.
+    """
+    if work_dir == "~" or work_dir.startswith("~/"):
+        rest = work_dir[2:]
+        return "~/" + shlex.quote(rest) if rest else "~"
+    return shlex.quote(work_dir)
+
+
+def _vasp_metadata_command(work_dir: str) -> str:
+    """Read realized VASP metadata in two OUTCAR passes and one SSH call."""
+    safe_dir = _quote_remote_dir(work_dir)
+    fields = (
+        "free  energy|NIONS|ions per type|NELECT|EDIFFG|IBRION|NSW|POTCAR:|TITEL|"
+        "LEXCH|GGA|LHFCALC|AEXX|HFSCREEN|LSOL|EB_K|TAU|LAMBDA_D_K|NC_K|"
+        "generate[[:space:]]+k-points[[:space:]]+for:"
+    )
+    # OUTCAR is commonly appended across restarts. Keep only the final VASP
+    # invocation's compact metadata so an old run cannot supply current provenance.
+    metadata = (
+        "awk '"
+        "BEGIN{buf=\"\"} "
+        "/^[[:space:]]*vasp\\.[0-9]/{buf=\"\"} "
+        f"$0 ~ /{fields}/{{buf=buf $0 ORS}} "
+        "END{printf \"%s\",buf}' "
+        f"{safe_dir}/OUTCAR 2>/dev/null"
+    )
+    # Emit forces only for the latest complete TOTAL-FORCE block, with exactly
+    # NIONS rows, and only when the final invocation has one force block per TOTEN.
+    # A partial appended ionic step must not pair a stale force with a newer energy.
+    forces = (
+        "awk '"
+        "/^[[:space:]]*vasp\\.[0-9]/{inside=0;nions=0;ntoten=0;nforce=0;"
+        "latest_complete=0;next} "
+        "/NIONS[[:space:]]*=/{for(i=1;i<=NF;i++)if($i==\"NIONS\"){j=i+1;"
+        "if($(j)==\"=\")j++;nions=$(j)+0}} "
+        "/free[[:space:]]+energy[[:space:]]+TOTEN/{ntoten++} "
+        "/TOTAL-FORCE/{inside=1;dash=0;max=0;n=0;nforce++;block_valid=1;"
+        "latest_complete=0;next} "
+        "inside && /^ *-+/{dash++;if(dash==2){latest_complete="
+        "(block_valid && nions>0 && n==nions);"
+        "if(latest_complete){last_n=n;for(k=1;k<=n;k++){"
+        "last_x[k]=cur_x[k];last_y[k]=cur_y[k];last_z[k]=cur_z[k]}};"
+        "inside=0};next} "
+        "inside && dash==1 && NF>=6{num=\"^[-+]?([0-9]+(\\\\.[0-9]*)?|"
+        "\\\\.[0-9]+)([EeDd][-+]?[0-9]+)?$\";"
+        "if($4!~num || $5!~num || $6!~num){block_valid=0}else{"
+        "n++;x=$4;y=$5;z=$6;gsub(/[Dd]/,\"E\",x);gsub(/[Dd]/,\"E\",y);"
+        "gsub(/[Dd]/,\"E\",z);cur_x[n]=x;cur_y[n]=y;cur_z[n]=z}} "
+        "END{if(latest_complete && ntoten==nforce){printf \"N %d\\n\",last_n;"
+        "for(k=1;k<=last_n;k++)printf \"%s %s %s\\n\","
+        "last_x[k],last_y[k],last_z[k]}}' "
+        f"{safe_dir}/OUTCAR 2>/dev/null"
+    )
+    live_hashes = (
+        "for catgo_file in INCAR POSCAR POTCAR KPOINTS; do "
+        f"catgo_path={safe_dir}/\"$catgo_file\"; catgo_hash=''; "
+        "if [ -f \"$catgo_path\" ]; then "
+        "if command -v sha256sum >/dev/null 2>&1; then "
+        "catgo_hash=$(sha256sum \"$catgo_path\" | awk '{print $1}'); "
+        "elif command -v shasum >/dev/null 2>&1; then "
+        "catgo_hash=$(shasum -a 256 \"$catgo_path\" | awk '{print $1}'); "
+        "elif command -v openssl >/dev/null 2>&1; then "
+        "catgo_hash=$(openssl dgst -sha256 \"$catgo_path\" | sed 's/^.*= //'); "
+        "fi; "
+        "printf '%s %s\\n' \"$catgo_file\" \"${catgo_hash:-UNAVAILABLE}\"; "
+        "else "
+        "printf '%s %s\\n' \"$catgo_file\" 'ABSENT'; "
+        "fi; "
+        "done"
+    )
+    return (
+        "printf '%s\\n' '__CATGO_INCAR__'; "
+        f"cat {safe_dir}/INCAR 2>/dev/null; "
+        "printf '\\n%s\\n' '__CATGO_POSCAR__'; "
+        f"cat {safe_dir}/POSCAR 2>/dev/null; "
+        "printf '\\n%s\\n' '__CATGO_KPOINTS__'; "
+        f"cat {safe_dir}/KPOINTS 2>/dev/null; "
+        "printf '\\n%s\\n' '__CATGO_INPUT_MANIFEST__'; "
+        f"cat {safe_dir}/catgo_vasp_input_manifest.json 2>/dev/null; "
+        "printf '\\n%s\\n' '__CATGO_INPUT_HASHES__'; "
+        f"{live_hashes}; "
+        "printf '\\n%s\\n' '__CATGO_OUTCAR_META__'; "
+        f"{metadata}; "
+        "printf '\\n%s\\n' '__CATGO_FORCES__'; "
+        f"{forces}; "
+        "printf '\\n%s\\n' '__CATGO_FMAX__'; "
+        "true"
+    )
+
+
+def _vasp_selective_mask(poscar: str, n_atoms: int):
+    """Return whole-atom mobility, or None for unsafe mixed-coordinate masks.
+
+    VASP interprets T/F flags along direct lattice vectors even when positions
+    are written in Cartesian mode.  OUTCAR forces are Cartesian, so component-
+    wise zipping is wrong for a rotated/non-orthogonal cell.  Whole-atom TTT/FFF
+    masks are basis independent; mixed masks fail closed until we carry a
+    lattice-aware force projection.
+    """
+    lines = [line.strip() for line in (poscar or "").splitlines() if line.strip()]
+    try:
+        if len(lines) < 8 or n_atoms <= 0:
+            return None
+        first = lines[5].split()
+        if first and all(token.isdigit() for token in first):
+            counts_index = 5
+        else:
+            counts_index = 6
+        counts = [int(token) for token in lines[counts_index].split()]
+        if not counts or sum(counts) != n_atoms:
+            return None
+        mode_index = counts_index + 1
+        selective = lines[mode_index].lower().startswith("s")
+        if selective:
+            mode_index += 1
+        if not lines[mode_index].lower().startswith(("d", "c", "k")):
+            return None
+        if not selective:
+            return [(True, True, True)] * n_atoms
+        mask = []
+        for line in lines[mode_index + 1:mode_index + 1 + n_atoms]:
+            tokens = line.split()
+            if len(tokens) < 6:
+                return None
+            flags = tuple(token.upper() == "T" for token in tokens[3:6])
+            if any(token.upper() not in {"T", "F"} for token in tokens[3:6]):
+                return None
+            if any(flags) and not all(flags):
+                return None
+            mask.append(flags)
+        return mask if len(mask) == n_atoms else None
+    except (IndexError, ValueError):
+        return None
+
+
+def _parse_vasp_metadata(raw: str) -> dict:
+    """Parse only fields explicitly present in realized VASP files."""
+    sections = {name: [] for name in _VASP_META_MARKERS.values()}
+    current = None
+    for line in (raw or "").splitlines():
+        marker = _VASP_META_MARKERS.get(line.strip())
+        if marker:
+            current = marker
+        elif current:
+            sections[current].append(line)
+
+    incar = "\n".join(sections["incar"])
+    poscar = "\n".join(sections["poscar"])
+    kpoints = "\n".join(sections["kpoints"])
+    manifest_text = "\n".join(sections["input_manifest"]).strip()
+    outcar = "\n".join(sections["outcar"])
+    result: dict = {}
+    field_sources: dict[str, str] = {}
+    kspacing = _positive_incar_float(incar, "KSPACING")
+
+    manifest_errors = []
+    manifest = None
+    validated_input_policy = None
+    try:
+        manifest = json.loads(manifest_text) if manifest_text else None
+    except (ValueError, TypeError):
+        manifest_errors.append("manifest_json_invalid")
+    if not isinstance(manifest, dict):
+        if not manifest_errors:
+            manifest_errors.append("manifest_missing")
+    else:
+        if manifest.get("schema_version") != 1:
+            manifest_errors.append("schema_version")
+        if manifest.get("engine") != "vasp":
+            manifest_errors.append("engine")
+        if manifest.get("ready") is not True:
+            manifest_errors.append("ready")
+        if manifest.get("binary_declared") is not True:
+            manifest_errors.append("binary_declared")
+        if manifest.get("hash_algorithm") != "sha256":
+            manifest_errors.append("hash_algorithm")
+        if manifest.get("hash_available") is not True:
+            manifest_errors.append("hash_available")
+        if type(manifest.get("use_custodian")) is not bool:
+            manifest_errors.append("use_custodian")
+        if manifest.get("missing_mandatory_inputs") != []:
+            manifest_errors.append("missing_mandatory_inputs")
+        command = manifest.get("resolved_run_command")
+        binary = manifest.get("binary_token")
+        if not isinstance(command, str) or not command.strip():
+            manifest_errors.append("resolved_run_command")
+        if not isinstance(binary, str) or not binary.strip():
+            manifest_errors.append("binary_token")
+        if manifest.get("binary") != binary:
+            manifest_errors.append("binary_alias")
+        if (
+            isinstance(command, str)
+            and command.strip()
+            and isinstance(binary, str)
+            and binary.strip()
+        ):
+            from .vasp_submission import _extract_vasp_binary_token
+
+            if _extract_vasp_binary_token(command) != binary:
+                manifest_errors.append("binary_command_mismatch")
+        if not isinstance(manifest.get("command_source"), str) or not manifest[
+            "command_source"
+        ].strip():
+            manifest_errors.append("command_source")
+
+        input_policy = manifest.get("input_policy")
+        policy_materialized_hash = None
+        policy_kpoints = None
+        if "input_policy" in manifest and input_policy is None:
+            manifest_errors.append("input_policy")
+        elif input_policy is not None:
+            if not isinstance(input_policy, dict):
+                manifest_errors.append("input_policy")
+            else:
+                if input_policy.get("schema_version") != 1:
+                    manifest_errors.append("input_policy.schema_version")
+                required_keys = input_policy.get("required_keys")
+                if required_keys is not None:
+                    if not isinstance(required_keys, list) or not required_keys:
+                        manifest_errors.append("input_policy.required_keys")
+                    elif any(
+                        not isinstance(key, str)
+                        or key != key.strip().upper()
+                        or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key)
+                        for key in required_keys
+                    ) or len(set(required_keys)) != len(required_keys):
+                        manifest_errors.append("input_policy.required_keys")
+                policy_kpoints = input_policy.get("kpoints_policy")
+                if policy_kpoints not in {
+                    "vasp_default", "explicit_regular_mesh",
+                }:
+                    manifest_errors.append("input_policy.kpoints_policy")
+                if input_policy.get("artifact_kind") != "exact":
+                    manifest_errors.append("input_policy.artifact_kind")
+                materialization = input_policy.get("materialization")
+                if not isinstance(materialization, dict):
+                    manifest_errors.append("input_policy.materialization")
+                else:
+                    if materialization.get("strategy") != "exact":
+                        manifest_errors.append(
+                            "input_policy.materialization.strategy"
+                        )
+                    if materialization.get("resolved") is not True:
+                        manifest_errors.append(
+                            "input_policy.materialization.resolved"
+                        )
+                    if materialization.get("base_sha256") is not None:
+                        manifest_errors.append(
+                            "input_policy.materialization.base_sha256"
+                        )
+                    if materialization.get("overlay_sha256") != []:
+                        manifest_errors.append(
+                            "input_policy.materialization.overlay_sha256"
+                        )
+                    policy_materialized_hash = materialization.get(
+                        "materialized_sha256"
+                    )
+                    if (
+                        not isinstance(policy_materialized_hash, str)
+                        or not re.fullmatch(
+                            r"[0-9a-f]{64}", policy_materialized_hash
+                        )
+                    ):
+                        manifest_errors.append(
+                            "input_policy.materialization.materialized_sha256"
+                        )
+                if input_policy.get("checked") is not True:
+                    manifest_errors.append("input_policy.checked")
+                expected_p17 = "SKIP" if required_keys is None else "PASS"
+                if input_policy.get("verdicts") != {
+                    "P4": "PASS", "P17": expected_p17,
+                }:
+                    manifest_errors.append("input_policy.verdicts")
+                if input_policy.get("violations") != []:
+                    manifest_errors.append("input_policy.violations")
+                validated_input_policy = input_policy
+
+        live_hashes = {}
+        for line in sections["input_hashes"]:
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in {
+                "INCAR", "POSCAR", "POTCAR", "KPOINTS"
+            }:
+                live_hashes[parts[0]] = (
+                    None if parts[1] == "ABSENT" else parts[1]
+                )
+        manifest_inputs = manifest.get("inputs")
+        if not isinstance(manifest_inputs, dict):
+            manifest_errors.append("inputs")
+        else:
+            # The remote manifest is evidence, not an independent trust anchor.
+            # Record a custodian-mode divergence for diagnosis, but fail closed:
+            # a future submission ledger must bind the mode and correction before
+            # rewritten inputs can be certified. POTCAR is never rewritable.
+            under_custodian = manifest.get("use_custodian") is True
+            rewritable = {"INCAR", "KPOINTS", "POSCAR"} if under_custodian else set()
+            rewritten: dict[str, dict[str, str | None]] = {}
+            for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS"):
+                entry = manifest_inputs.get(name)
+                if not isinstance(entry, dict):
+                    manifest_errors.append(f"inputs.{name}")
+                    continue
+                recorded_hash = entry.get("sha256")
+                live_hash = live_hashes.get(name)
+                declared_mandatory = entry.get("mandatory")
+                exists = entry.get("exists")
+                if type(declared_mandatory) is not bool:
+                    manifest_errors.append(f"inputs.{name}.mandatory")
+                    declared_mandatory = True
+                if type(exists) is not bool:
+                    manifest_errors.append(f"inputs.{name}.exists")
+                    exists = False
+                if name != "KPOINTS" and declared_mandatory is not True:
+                    manifest_errors.append(f"inputs.{name}.mandatory")
+                if (
+                    name == "KPOINTS"
+                    and declared_mandatory is False
+                    and kspacing is None
+                ):
+                    manifest_errors.append(
+                        "inputs.KPOINTS.optional_without_kspacing"
+                    )
+                if declared_mandatory and exists is not True:
+                    manifest_errors.append(f"inputs.{name}.exists")
+                if name not in live_hashes:
+                    manifest_errors.append(f"inputs.{name}.live_status")
+                if exists is False:
+                    if recorded_hash is not None:
+                        manifest_errors.append(f"inputs.{name}.sha256")
+                    if live_hash is None:
+                        continue
+                    if not isinstance(live_hash, str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", live_hash
+                    ):
+                        manifest_errors.append(f"inputs.{name}.live_hash")
+                    elif name in rewritable:
+                        rewritten[name] = {"submitted": None, "ran": live_hash}
+                        manifest_errors.append(
+                            f"inputs.{name}.unanchored_rewrite"
+                        )
+                    else:
+                        manifest_errors.append(
+                            f"inputs.{name}.unexpected_live_file"
+                        )
+                    continue
+                if not isinstance(recorded_hash, str) or not re.fullmatch(
+                    r"[0-9a-f]{64}", recorded_hash
+                ):
+                    manifest_errors.append(f"inputs.{name}.sha256")
+                elif (
+                    not isinstance(live_hash, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", live_hash)
+                ):
+                    manifest_errors.append(f"inputs.{name}.live_hash")
+                elif not hmac.compare_digest(recorded_hash, live_hash):
+                    if name in rewritable:
+                        rewritten[name] = {"submitted": recorded_hash, "ran": live_hash}
+                        manifest_errors.append(
+                            f"inputs.{name}.unanchored_rewrite"
+                        )
+                    else:
+                        manifest_errors.append(f"inputs.{name}.live_hash")
+            if rewritten:
+                result["custodian_rewritten_inputs"] = rewritten
+            if validated_input_policy is not None:
+                incar_entry = manifest_inputs.get("INCAR")
+                incar_hash = (
+                    incar_entry.get("sha256")
+                    if isinstance(incar_entry, dict)
+                    else None
+                )
+                if policy_materialized_hash != incar_hash:
+                    manifest_errors.append(
+                        "input_policy.materialization.incar_hash_mismatch"
+                    )
+                kpoints_entry = manifest_inputs.get("KPOINTS")
+                if (
+                    policy_kpoints == "explicit_regular_mesh"
+                    and (
+                        not isinstance(kpoints_entry, dict)
+                        or kpoints_entry.get("mandatory") is not True
+                        or kpoints_entry.get("exists") is not True
+                    )
+                ):
+                    manifest_errors.append(
+                        "input_policy.explicit_kpoints_not_mandatory"
+                    )
+
+        if not manifest_errors:
+            canonical = json.dumps(
+                manifest,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            result["submission_manifest_digest"] = (
+                f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+            )
+            result["input_hashes"] = {
+                name: manifest["inputs"][name]["sha256"]
+                for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS")
+            }
+            result["vasp_binary"] = manifest["binary_token"]
+            result["resolved_run_command"] = manifest["resolved_run_command"]
+            result["command_source"] = manifest["command_source"]
+            result["input_manifest_schema_version"] = manifest["schema_version"]
+            result["input_manifest_validated"] = True
+            if validated_input_policy is not None:
+                result["input_policy"] = validated_input_policy
+            field_sources.update({
+                "submission_manifest_digest": (
+                    "catgo_vasp_input_manifest.json:canonical_sha256"
+                ),
+                "input_hashes": (
+                    "catgo_vasp_input_manifest.json+live_files:"
+                    "sha256_match_or_declared_absent"
+                ),
+                "vasp_binary": "catgo_vasp_input_manifest.json:binary_token",
+                "resolved_run_command": (
+                    "catgo_vasp_input_manifest.json:resolved_run_command"
+                ),
+            })
+            if validated_input_policy is not None:
+                field_sources["input_policy"] = (
+                    "catgo_vasp_input_manifest.json:input_policy"
+                )
+    if manifest_errors:
+        result["input_manifest_validated"] = False
+        result["input_manifest_errors"] = sorted(set(manifest_errors))
+
+    def floats(pattern: str) -> list[float]:
+        matches = re.findall(pattern + rf"\s*({_VASP_NUMBER})", outcar, re.I)
+        return [
+            float(value.replace("D", "E").replace("d", "e"))
+            for value in matches
+        ]
+
+    def last_float(pattern: str):
+        values = floats(pattern)
+        return values[-1] if values else None
+
+    energy = last_float(r"free\s+energy\s+TOTEN\s*=")
+    if energy is not None:
+        result["energy"] = energy
+        result["energy_source"] = "OUTCAR:TOTEN"
+        field_sources["energy"] = "OUTCAR:last_TOTEN"
+
+    nions = re.findall(r"\bNIONS\s*=\s*(\d+)", outcar)
+    if nions:
+        result["n_atoms"] = int(nions[-1])
+        field_sources["n_atoms"] = "OUTCAR:NIONS"
+    else:
+        ion_rows = re.findall(r"ions per type\s*=\s*([0-9 ]+)", outcar, re.I)
+        if ion_rows:
+            result["n_atoms"] = sum(int(x) for x in ion_rows[-1].split())
+            field_sources["n_atoms"] = "OUTCAR:ions_per_type"
+
+    ediffg = last_float(r"\bEDIFFG\s*=")
+    if ediffg is not None:
+        result["ediffg"] = ediffg
+        field_sources["ediffg"] = "OUTCAR:EDIFFG"
+    for tag in ("IBRION", "NSW"):
+        values = re.findall(rf"\b{tag}\s*=\s*(-?\d+)", outcar, re.I)
+        if values:
+            key = tag.lower()
+            result[key] = int(values[-1])
+            field_sources[key] = f"OUTCAR:{tag}"
+    nelect_values = floats(r"\bNELECT\s*=")
+    if nelect_values:
+        result["nelect"] = nelect_values[-1]
+        field_sources["nelect"] = "OUTCAR:last_NELECT"
+        if nelect_values[0] != nelect_values[-1]:
+            result["nelect_initial"] = nelect_values[0]
+            result["nelect_final"] = nelect_values[-1]
+            field_sources["nelect_initial"] = "OUTCAR:first_NELECT"
+            field_sources["nelect_final"] = "OUTCAR:last_NELECT"
+
+    titles = []
+    for line in outcar.splitlines():
+        match = re.search(r"\bPOTCAR:\s*(.+?)\s*$", line)
+        if not match:
+            match = re.search(r"\bTITEL\s*=\s*(.+?)\s*$", line)
+        if match and match.group(1) not in titles:
+            titles.append(match.group(1))
+    if titles:
+        result["potcar_titels"] = titles
+        field_sources["potcar_titels"] = "OUTCAR:POTCAR_or_TITEL"
+
+    xc = {}
+    for tag in ("GGA", "METAGGA", "LEXCH", "LHFCALC", "AEXX", "HFSCREEN"):
+        values = re.findall(
+            rf"(?<![A-Za-z0-9_]){tag}\s*=\s*([^\s;]+)", outcar, re.I
+        )
+        if values:
+            xc[tag] = values[-1]
+    if xc:
+        result["xc_tags"] = xc
+        field_sources["xc_tags"] = "OUTCAR:raw_tags"
+        # Exact realized fingerprint, not a guessed marketing name ("PBE",
+        # "HSE06", etc.). This lets provenance compare XC identity without
+        # normalizing an incomplete set of raw VASP tags.
+        result["xc_functional"] = ";".join(
+            f"{tag}={value}" for tag, value in xc.items()
+        )
+        field_sources["xc_functional"] = "OUTCAR:raw_xc_fingerprint"
+
+    solvation = {}
+    for tag in ("LSOL", "EB_K", "TAU", "LAMBDA_D_K", "NC_K"):
+        values = re.findall(
+            rf"(?<![A-Za-z0-9_]){tag}\s*=\s*([^\s;]+)", outcar, re.I
+        )
+        if values:
+            solvation[tag] = values[-1]
+    if solvation:
+        result["solvation"] = solvation
+        field_sources["solvation"] = "OUTCAR:raw_tags"
+
+    # An explicit KPOINTS file takes precedence over KSPACING in INCAR.
+    lines = [line.strip() for line in kpoints.splitlines() if line.strip()]
+    if lines:
+        result["kpoint_source"] = "KPOINTS"
+        field_sources["kpoint_source"] = "KPOINTS:present"
+    if len(lines) >= 4:
+        try:
+            automatic = int(lines[1].split()[0]) == 0
+            mesh = [int(x) for x in lines[3].split()[:3]]
+        except (ValueError, IndexError):
+            automatic, mesh = False, []
+        if automatic and len(mesh) == 3 and all(x > 0 for x in mesh):
+            result["kgrid"] = mesh
+            field_sources["kgrid"] = "KPOINTS:automatic_mesh"
+    elif not lines and kspacing is not None:
+        result["kpoint_source"] = "INCAR:KSPACING"
+        result["kspacing"] = kspacing
+        field_sources["kpoint_source"] = "INCAR:KSPACING"
+        field_sources["kspacing"] = "INCAR:KSPACING"
+        generated = re.findall(
+            r"(?im)^\s*generate\s+k-points\s+for\s*:\s*"
+            r"(\d+)\s+(\d+)\s+(\d+)\s*$",
+            outcar,
+        )
+        if generated:
+            mesh = [int(value) for value in generated[-1]]
+            if all(value > 0 for value in mesh):
+                result["kgrid"] = mesh
+                field_sources["kgrid"] = "OUTCAR:last_generate_k-points_for"
+
+    force_lines = [line.strip() for line in sections["forces"] if line.strip()]
+    if force_lines and re.fullmatch(r"N\s+\d+", force_lines[0]):
+        declared_count = int(force_lines[0].split()[1])
+        vectors = []
+        for line in force_lines[1:]:
+            tokens = line.split()
+            if len(tokens) != 3 or not all(
+                re.fullmatch(_VASP_NUMBER, token) for token in tokens
+            ):
+                vectors = []
+                break
+            vectors.append(tuple(
+                float(token.replace("D", "E").replace("d", "e"))
+                for token in tokens
+            ))
+        mask = _vasp_selective_mask(poscar, declared_count)
+        if (
+            result.get("n_atoms") == declared_count
+            and len(vectors) == declared_count
+            and mask is not None
+        ):
+            free_norms = [
+                sum(
+                    component * component
+                    for component, is_free in zip(vector, flags)
+                    if is_free
+                ) ** 0.5
+                for vector, flags in zip(vectors, mask)
+                if any(flags)
+            ]
+            if free_norms:
+                result["fmax"] = max(free_norms)
+                field_sources["fmax"] = (
+                    "OUTCAR:last_complete_ionic_step"
+                    "+POSCAR:selective_dynamics"
+                )
+    else:
+        # Backward-compatible parser path for stored compact fixtures produced
+        # before @3. New remote collection always emits full force vectors.
+        fmax_lines = [line.strip() for line in sections["fmax"] if line.strip()]
+        fmax_parts = fmax_lines[-1].split() if fmax_lines else []
+        if (
+            len(fmax_parts) == 2
+            and re.fullmatch(_VASP_NUMBER, fmax_parts[0])
+            and fmax_parts[1].isdigit()
+            and result.get("n_atoms") == int(fmax_parts[1])
+        ):
+            result["fmax"] = float(
+                fmax_parts[0].replace("D", "E").replace("d", "e")
+            )
+            field_sources["fmax"] = "OUTCAR:last_complete_ionic_step:legacy"
+
+    units = {}
+    if "energy" in result:
+        units["energy"] = "eV"
+    if "fmax" in result:
+        units["fmax"] = "eV/Angstrom"
+    if "ediffg" in result:
+        units["ediffg"] = "eV/Angstrom" if result["ediffg"] < 0 else "eV"
+    if units:
+        result["units"] = units
+    if field_sources:
+        result["field_sources"] = field_sources
+        result["metadata_parser"] = (
+            "catgo.workflow.engine.result_collector._parse_vasp_metadata@6"
+        )
+    return result
+
+
+async def _try_read_vasp_metadata(hpc: Any, work_dir: str) -> dict:
+    response = await hpc.run_on_owner(
+        lambda: hpc.conn.run(_vasp_metadata_command(work_dir), check=False)
+    )
+    return _parse_vasp_metadata(response.stdout or "")
+
+
 async def collect_completed_results(
     hpc, work_dir: str, node_id: str, node_type: str, params: dict,
     session_id: str, job_id: str,
@@ -271,10 +938,24 @@ async def collect_completed_results(
             logger.warning("Failed to read MLP energy for %s: %s", node_id, exc)
 
     # Extract VASP final energy from OUTCAR for downstream nodes (gibbs_energy etc.)
+    if engine_key == "vasp":
+        try:
+            metadata = await _try_read_vasp_metadata(hpc, work_dir)
+            result.update(metadata)
+            if metadata:
+                logger.info(
+                    "VASP realized metadata for %s: %s",
+                    node_id, sorted(metadata),
+                )
+        except Exception as exc:
+            logger.warning("Failed to extract VASP metadata for %s: %s", node_id, exc)
+
+    # Backward-compatible energy fallback if the metadata pass found no TOTEN.
     if engine_key == "vasp" and "energy" not in result:
         try:
+            safe_dir = _quote_remote_dir(work_dir)
             grep_result = await hpc.run_on_owner(lambda: hpc.conn.run(
-                f"grep 'free  energy   TOTEN' {work_dir}/OUTCAR | tail -1",
+                f"grep 'free  energy   TOTEN' {safe_dir}/OUTCAR | tail -1",
                 check=False,
             ))
             if grep_result.exit_status == 0 and grep_result.stdout.strip():

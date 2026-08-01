@@ -32,10 +32,18 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-# Ensure server/ is on sys.path so plugin_loader and mcp_tools are importable
-_server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _server_dir not in sys.path:
-    sys.path.insert(0, _server_dir)
+# Ensure server/ is on sys.path so plugin_loader and mcp_tools are importable.
+# This file is server/catgo/mcp_tools/<this>, so server/ is three levels up. Two
+# levels put server/catgo/ at sys.path[0] instead, which SHADOWS the real packages:
+# server/catgo/workflow/ then wins over server/workflow/, so every
+# `from workflow.catalysis...` import died with "No module named 'workflow.catalysis'"
+# and catgo_catalysis answered "Catalysis module not available" for every call.
+_server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_bundled_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "_bundled")
+for _runtime_dir in (_server_dir, _bundled_dir):
+    if os.path.isdir(_runtime_dir) and _runtime_dir not in sys.path:
+        sys.path.insert(0, _runtime_dir)
 
 from plugin_loader import get_plugin_tool_defs, dispatch_plugin
 from catgo.mcp_tools.tools import TOOLS
@@ -56,6 +64,8 @@ from catgo.mcp_tools.structure_tools import (
     _handle_fetch_molecule,
 )
 from catgo.mcp_tools.plugin_tools import _handle_plugin_analyzer, _handle_plugin_reader
+# Reuse one verification lifecycle so the two MCP entry points cannot drift.
+from catgo.mcp_tools.server_claude_code import _handle_verify, run_with_verification
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +381,51 @@ async def handle_list_tools() -> list[Tool]:
         "and ~/.catgo/tools/ (trust=sandboxed or user)."
     )
 
+    all_tools.append(Tool(
+        name="catgo_verify",
+        description=(
+            "Physics sanity-check an agent-produced computational-chemistry RESULT "
+            "before trusting or reporting it. Catches SILENT errors — the run exits 0, "
+            "the numbers look normal, but the physics is wrong: PAW/POTCAR mismatch, "
+            "binding energy outside the physical window, gas-phase step missing "
+            "translational/rotational entropy, ZPE zero-fill, a STALE convergence flag, "
+            "a mid-run energy, a COMPLETED job whose products never appeared, a corrupted "
+            "Hessian n_imag cannot detect, a stale-geometry freq run, residual imaginary "
+            "modes, an out-of-range limiting potential, or an MLIP whose absolute force "
+            "RMSE flatters a poor relative fit. Every gate reports PASS/FAIL/SKIP. With "
+            "`claims`, a claim lacking provenance is flagged UNVERIFIABLE (refuse to "
+            "certify), not passed silently. Use after analysis/harvest, before concluding."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "result": {"type": "object", "description": (
+                    "Parsed result dict OR a numeric tool's {value, provenance, claim} "
+                    "envelope (auto-unwrapped and its claim auto-included). Optional keys: "
+                    "dG, species; ads_titels, "
+                    "bare_titels; nelect_ads, nelect_bare, zval_adsorbate; fmax, ediffg; "
+                    "energy, n_atoms; opt_conv; products_found, products_expected; "
+                    "hessian_max_asym; freq_frame0_maxdev; n_imag, imag_max_cm; ul_v; "
+                    "ladder{species:{zpe,gcorr,gas_thermo_full}}; rmse_f, force_std.")},
+                "require": {"type": "array", "items": {"type": "string"},
+                            "description": "Gate names that MUST run (error if inputs absent)."},
+                "claims": {"type": "array", "items": {"type": "string"},
+                           "description": "Claim types asserted (energy, binding_Eads, binding_dG, her_dGH, "
+                                          "band_gap, field_energy, stratified, converged_E, "
+                                          "limiting_potential) for the verifiability check. "
+                                          "An envelope's claim is always included."},
+                "override": {"type": "array", "items": {"type": "string"},
+                             "description": "Gate name(s) whose FAIL you assert is a false alarm. "
+                                            "Waives the submit block ONCE for exactly those gates "
+                                            "(only if actually failing); requires justification and "
+                                            "is recorded. Prefer fixing the result."},
+                "justification": {"type": "string",
+                                  "description": "Why the overridden FAIL is a false alarm "
+                                                 "(≥20 chars, physics or provenance). Recorded."},
+            },
+            "required": ["result"],
+        },
+    ))
     all_tools.extend([
         Tool(name="catgo_create_tool", description=_CREATE_TOOL_DESC, inputSchema={
             "type": "object",
@@ -502,6 +557,15 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
+    return await run_with_verification(name, arguments, _dispatch_tool)
+
+
+async def _dispatch_tool(name: str, arguments: dict | None) -> list[TextContent]:
+    arguments = arguments or {}
+
+    # verification layer (pure-local, no backend): audit + verifiability
+    if name == "catgo_verify":
+        return _handle_verify(arguments)
 
     # Find tool definition
     tool_def = next((t for t in TOOLS if t["name"] == name), None)

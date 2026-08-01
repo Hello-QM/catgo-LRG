@@ -8,7 +8,7 @@ This script:
 1. Creates a v2 workflow with structure_input → geo_opt
 2. Starts the engine scanner
 3. Verifies structure_input completes locally
-4. Verifies geo_opt advances to READY
+4. Verifies geo_opt advances to PENDING_REVIEW
 5. (Does NOT submit to HPC — that requires a running HPC session pool)
 
 For full HPC submission, use the MCP tool via Claude Code.
@@ -81,7 +81,7 @@ def test_local_workflow():
 
 
 def test_chained_workflow():
-    """Test chained workflow: structure_input → geo_opt (stops at READY since no HPC)."""
+    """Test chained workflow: structure_input → geo_opt (stops at review gate)."""
     print("\n" + "=" * 60)
     print("V2 Engine E2E Test — Chained (structure_input → geo_opt)")
     print("=" * 60)
@@ -106,7 +106,7 @@ def test_chained_workflow():
         for t in db.get_all_tasks(wf.workflow_id):
             print(f"  {t['task_type']:20s} → {t['status']}")
 
-        # Cycle 2: advance geo_opt WAITING→READY
+        # Cycle 2: advance geo_opt WAITING→PENDING_REVIEW
         print("--- Scan cycle 2 ---")
         asyncio.run(engine.scan_cycle())
         for t in db.get_all_tasks(wf.workflow_id):
@@ -117,9 +117,9 @@ def test_chained_workflow():
         geo = [t for t in tasks if t["task_type"] == "geo_opt"][0]
 
         assert si["status"] == TaskState.COMPLETED.value
-        assert geo["status"] == TaskState.READY.value
+        assert geo["status"] == TaskState.PENDING_REVIEW.value
         print(f"\n✓ structure_input: COMPLETED")
-        print(f"✓ geo_opt: READY (waiting for HPC submission)")
+        print(f"✓ geo_opt: PENDING_REVIEW (waiting for user confirmation)")
 
         # Check DAG
         dag = db.get_dag(wf.workflow_id)

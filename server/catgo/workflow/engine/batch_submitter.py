@@ -25,6 +25,12 @@ from catgo.workflow.engine.hpc_utils import (
 from catgo.workflow.engine.resolver import resolve_task_inputs, primary_structure_input
 from catgo.workflow.engine.job_script import generate_job_script
 from catgo.workflow.engine.engine_registry import get_engine_generator
+from catgo.workflow.engine.vasp_submission import (
+    resolve_vasp_command,
+    resolve_vasp_input_policy,
+    resolve_vasp_use_custodian,
+    write_vasp_input_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +58,41 @@ async def submit_batch_tasks(
 
     tasks = [db.get_task(tid) for tid in task_ids]
     first_task = tasks[0]
-    params = json.loads(first_task.get("params_json", "{}") or "{}")
+    task_params_list = [
+        json.loads(task.get("params_json", "{}") or "{}")
+        for task in tasks
+    ]
+    params = task_params_list[0]
     resolved_type, engine_key = map_task_type_to_engine(first_task["task_type"], params)
+
+    # One array script executes one command in every directory. Mixed VASP
+    # command/binary/custodian fingerprints would make manifests lie.
+    vasp_resolutions = []
+    vasp_input_policies = []
+    if engine_key == "vasp":
+        vasp_resolutions = [
+            resolve_vasp_command(task_params, config)
+            for task_params in task_params_list
+        ]
+        vasp_input_policies = [
+            resolve_vasp_input_policy(task_params, config)
+            for task_params in task_params_list
+        ]
+        fingerprints = {
+            (
+                resolution.command,
+                resolution.binary_token,
+                resolve_vasp_use_custodian(task_params, config),
+            )
+            for resolution, task_params in zip(
+                vasp_resolutions, task_params_list,
+            )
+        }
+        if len(fingerprints) != 1:
+            raise ValueError(
+                "VASP array submission requires identical resolved run commands, "
+                "binary tokens, and custodian modes for every task"
+            )
 
     # Get HPC connection from the first task
     hpc = await get_hpc_connection(first_task, config)
@@ -83,8 +122,7 @@ async def submit_batch_tasks(
 
     await hpc.run_on_owner(lambda: hpc.conn.run(f"mkdir -p {batch_dir}", check=True))
 
-    for i, task in enumerate(tasks):
-        task_params = json.loads(task.get("params_json", "{}") or "{}")
+    for i, (task, task_params) in enumerate(zip(tasks, task_params_list)):
         inputs = resolve_task_inputs(db, task["id"])
         structure_str = primary_structure_input(inputs.get("structure")) or ""
         if engine_key == "lammps":
@@ -100,20 +138,28 @@ async def submit_batch_tasks(
         # Upload custodian script if needed (same as _submit_one in submitter.py)
         if engine_key == "vasp":
             from catgo.workflow.engine.job_script import generate_custodian_script
-            hpc_cfg = config.get("hpc", {})
-            vasp_cmd = hpc_cfg.get("run_commands", {}).get(engine_key) or "srun vasp_std"
-            custodian_py = generate_custodian_script(vasp_cmd, task_params, config)
+            vasp_resolution = vasp_resolutions[i]
+            custodian_py = generate_custodian_script(
+                vasp_resolution.command, task_params, config,
+            )
             if custodian_py:
                 await hpc.run_on_owner(lambda wd=work_dir, py=custodian_py: hpc.conn.run(
                     f"cat > {wd}/run_custodian.py << 'CATGO_EOF'\n{py}\nCATGO_EOF",
                     check=True,
                 ))
             # Generate POTCAR
-            from catgo.workflow.engine.submitter import _generate_potcar
-            potcar_root = hpc_cfg.get("potcar_root", "")
-            potcar_func = hpc_cfg.get("potcar_functional", "potpaw_PBE")
+            from catgo.workflow.engine.submitter import (
+                _generate_potcar,
+                _resolve_potcar_settings,
+            )
+            potcar_root, potcar_func = _resolve_potcar_settings(config)
             if potcar_root:
                 await _generate_potcar(hpc, work_dir, potcar_root, potcar_func)
+            await write_vasp_input_manifest(
+                hpc, work_dir, vasp_resolution,
+                use_custodian=resolve_vasp_use_custodian(task_params, config),
+                input_policy=vasp_input_policies[i],
+            )
 
         db.update_task(task["id"], status=TaskState.UPLOADING.value)
 

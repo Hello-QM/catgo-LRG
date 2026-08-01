@@ -2,6 +2,7 @@
 """Tests for auto job script generation."""
 import pytest
 from catgo.workflow.engine.job_script import generate_job_script
+from catgo.workflow.engine.vasp_submission import resolve_vasp_command
 
 
 @pytest.fixture
@@ -73,6 +74,79 @@ def test_vasp_executable_override(task, config):
     params = {"vasp_executable": "vasp_gam"}
     script = generate_job_script("vasp", "/work/test", task, params, config)
     assert "vasp_gam" in script
+
+
+def test_vasp_executable_override_preserves_configured_binary_directory():
+    config = {
+        "hpc": {
+            "job_defaults": {
+                "vasp_command": "srun $VASP_HOME/bin/vasp_std",
+            },
+        },
+    }
+    resolved = resolve_vasp_command({"vasp_executable": "vasp_ncl"}, config)
+    assert resolved.command == "srun $VASP_HOME/bin/vasp_ncl"
+    assert resolved.binary_token == "$VASP_HOME/bin/vasp_ncl"
+
+
+def test_vasp_binary_token_keeps_cp_build_identity():
+    resolved = resolve_vasp_command(
+        {"run_command": "srun /opt/vasp/bin/vasp.6.4.2-cp"},
+        {},
+    )
+    assert resolved.binary_token == "/opt/vasp/bin/vasp.6.4.2-cp"
+
+
+def test_vasp_binary_token_uses_launcher_executable_not_trailing_argument():
+    resolved = resolve_vasp_command(
+        {"run_command": "mpirun -np 32 custom_vasp input.dat > vasp.out"},
+        {},
+    )
+    assert resolved.binary_token == "custom_vasp"
+
+
+def test_vasp_binary_token_is_unknown_when_wrapper_is_ambiguous():
+    resolved = resolve_vasp_command(
+        {"run_command": "bash run_calculation.sh"},
+        {},
+    )
+    assert resolved.binary_token is None
+
+
+def test_vasp_binary_token_rejects_opaque_wrapper_declaration():
+    resolved = resolve_vasp_command(
+        {
+            "run_command": "bash run_calculation.sh",
+            "vasp_executable": "vasp.6.4.2-cp",
+        },
+        {},
+    )
+    assert resolved.command == "bash run_calculation.sh"
+    assert resolved.binary_token is None
+
+
+def test_vasp_command_resolver_precedence(task):
+    config = {
+        "hpc": {
+            "job_defaults": {"vasp_command": "srun jd_vasp"},
+            "run_commands": {"vasp": "srun rc_vasp"},
+        },
+    }
+
+    resolved = resolve_vasp_command({"run_command": "srun param_vasp"}, config)
+    assert resolved.command == "srun param_vasp"
+    assert resolved.source == "params.run_command"
+
+    resolved = resolve_vasp_command({}, config)
+    assert resolved.command == "srun jd_vasp"
+    assert resolved.source == "hpc.job_defaults.vasp_command"
+    assert "srun jd_vasp" in generate_job_script("vasp", "/work/test", task, {}, config)
+
+    del config["hpc"]["job_defaults"]["vasp_command"]
+    assert resolve_vasp_command({}, config).command == "srun rc_vasp"
+
+    del config["hpc"]["run_commands"]["vasp"]
+    assert resolve_vasp_command({}, config).command == "srun vasp_std"
 
 
 def test_custom_template(task, config):

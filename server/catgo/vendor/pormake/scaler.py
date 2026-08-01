@@ -251,7 +251,7 @@ class Scaler:
             fun=fun,
             method="L-BFGS-B",
             bounds=bounds,
-            options={"maxiter": 1000, "disp": False},
+            options={"maxiter": 1000},
         )
 
         n = topology.n_slots

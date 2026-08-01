@@ -16,6 +16,13 @@ from catgo.workflow.states import TaskState
 from catgo.workflow.engine.hpc_utils import get_hpc_connection, resolve_work_dir, map_task_type_to_engine
 from catgo.workflow.engine.resolver import resolve_task_inputs, primary_structure_input
 from catgo.workflow.engine.batch_submitter import ARRAY_JOB_THRESHOLD
+from catgo.workflow.engine.vasp_submission import (
+    VaspCommandResolution,
+    resolve_vasp_command,
+    resolve_vasp_input_policy,
+    resolve_vasp_use_custodian,
+    write_vasp_input_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +226,7 @@ async def _submit_one(
     elif inputs.get("product_structure"):
         # Legacy fallback — older workflows may use "product_structure" as key
         params["_resolved_product_structure"] = inputs["product_structure"]
-    elif resolved_type in ("neb", "mlp_neb", "orca_neb_ts"):
+    elif resolved_type in ("neb", "vasp_neb", "mlp_neb", "orca_neb_ts"):
         # NEB endpoints wired to the same `structure` port (two parents:
         # reactant_opt + product_opt) rather than structure/structure_product.
         # Take the second structure as the product endpoint.
@@ -306,13 +313,12 @@ async def _submit_one(
 
     # 7. Build or use explicit job script
     session_id = task.get("hpc_session_id") or ""
-    cluster_cfg = _resolve_cluster_config(wf_config, session_id or getattr(hpc, 'session_id', ''))
     from catgo.workflow.engine.job_script import generate_job_script, generate_custodian_script
-    hpc_cfg = config.get("hpc", {})
-    vasp_cmd = (
-        cluster_cfg.get("vasp_command")
-        or hpc_cfg.get("run_commands", {}).get(engine_key)
-        or "srun vasp_std"
+    vasp_resolution = resolve_vasp_command(params, config) if engine_key == "vasp" else None
+    vasp_input_policy = (
+        resolve_vasp_input_policy(params, config)
+        if engine_key == "vasp"
+        else None
     )
 
     # Pick a template source. If a previous Run-dialog click stamped
@@ -325,7 +331,14 @@ async def _submit_one(
     has_placeholders = "{{" in job_script_param and "}}" in job_script_param
 
     if job_script_param and _has_scheduler_directives(job_script_param) and not has_placeholders:
-        # Fully-substituted explicit script — pass through unchanged.
+        # Fully-substituted explicit script — pass through only when its VASP
+        # execution line agrees with the same resolver used by the manifest.
+        if vasp_resolution:
+            _validate_explicit_vasp_job_script(
+                job_script_param,
+                vasp_resolution,
+                resolve_vasp_use_custodian(params, config),
+            )
         job_script = job_script_param
     else:
         template_source = ""
@@ -345,7 +358,10 @@ async def _submit_one(
             job_script = generate_job_script(engine_key, work_dir, task, params_no_stale_js, config)
 
     # Upload custodian script if needed
-    custodian_py = generate_custodian_script(vasp_cmd, params, config)
+    custodian_py = (
+        generate_custodian_script(vasp_resolution.command, params, config)
+        if vasp_resolution else None
+    )
     if custodian_py:
         await hpc.run_on_owner(lambda: hpc.conn.run(
             f"cat > {work_dir}/run_custodian.py << 'CATGO_EOF'\n{custodian_py}\nCATGO_EOF",
@@ -360,8 +376,15 @@ async def _submit_one(
         else:
             logger.warning(
                 "Task %s: VASP node but no potcar_root in config (hpc root or "
-                "job_defaults) — POTCAR NOT generated, the job will fail on a "
-                "missing POTCAR", task_id)
+                "job_defaults) — POTCAR not generated; preflight will reject "
+                "submission unless the work directory already contains one",
+                task_id,
+            )
+        await write_vasp_input_manifest(
+            hpc, work_dir, vasp_resolution,
+            use_custodian=resolve_vasp_use_custodian(params, config),
+            input_policy=vasp_input_policy,
+        )
 
     success, message, job_id = await _submit_job(
         hpc, work_dir, resolved_type, job_script, params, config,
@@ -460,6 +483,16 @@ async def _submit_job(
 
 def _has_scheduler_directives(job_script: str) -> bool:
     return _scheduler_directive_kind(job_script) is not None
+
+
+def _validate_explicit_vasp_job_script(
+    job_script: str,
+    resolution: VaspCommandResolution,
+    use_custodian: bool,
+) -> None:
+    """Reject opaque VASP scripts whose execution path cannot be verified."""
+    from catgo.workflow.engine.vasp_submission import validate_vasp_job_script
+    validate_vasp_job_script(job_script, resolution, use_custodian)
 
 
 def _scheduler_directive_kind(job_script: str) -> str | None:

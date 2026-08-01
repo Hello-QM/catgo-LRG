@@ -30,7 +30,7 @@ __all__ = [
 # Node types that produce VASP calculations
 VASP_CALC_NODES = {
     "vasp_relax", "vasp_static", "vasp_md", "bulk_opt", "slab_relax",
-    "frequency", "electronic", "reference_mol", "slow_growth", "neb",
+    "frequency", "electronic", "reference_mol", "slow_growth", "vasp_neb",
 }
 
 # Unified node types (software chosen by params.software)
@@ -51,11 +51,6 @@ LOCAL_NODES = {
     "export_data",
     # High-throughput screening nodes (local orchestration)
     "batch_generate", "batch_slab_gen", "batch_coverage_gen", "map", "aggregate",
-    # Build/transform nodes (local structure operations)
-    "doping_gen", "defect_gen", "supercell_gen", "strain_deform",
-    "intercalation", "heterostructure_build", "nanotube_build",
-    "water_solvate", "passivate",
-    "polymer_build", "polymer_crosslink",
 }
 
 # Node types that use ML potentials (submitted as HPC jobs too)
@@ -198,7 +193,7 @@ def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, s
         ("single_point", "xtb"): "xtb_static",
         ("single_point", "mlp"): "mlp_single_point",
         ("freq", "mlp"): "mlp_vibrations",
-        ("neb", "vasp"): "neb",
+        ("neb", "vasp"): "vasp_neb",
         ("neb", "mlp"): "mlp_neb",
         ("ts_search", "mlp"): "mlp_neb",
         ("cell_opt", "vasp"): "bulk_opt",

@@ -234,7 +234,7 @@ def api_quickbuild_recipes():
 
 
 @router.post("/quickbuild")
-async def api_quickbuild(req: QuickBuildRequest):
+async def api_quickbuild(req: QuickBuildRequest, request: Request):
     """Build a complete workflow from a recipe name in one HTTP request.
 
     Identical recipe registry as the catgo_quickbuild MCP tool — same nodes,
@@ -244,8 +244,24 @@ async def api_quickbuild(req: QuickBuildRequest):
     import httpx
     from catgo.mcp_tools.server_claude_code import _handle_quickbuild
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        result = await _handle_quickbuild(client, req.model_dump(exclude_none=True))
+    # The endpoint is already running inside the CatGo ASGI app.  Route its
+    # workflow/viewer calls back through that app instead of opening a second
+    # TCP connection to localhost:8000.  Keep a normal network client for the
+    # optional OPTIMADE material prefetch.
+    transport = httpx.ASGITransport(app=request.app)
+    async with (
+        httpx.AsyncClient(timeout=30.0) as external_client,
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://catgo.internal",
+            timeout=30.0,
+        ) as internal_client,
+    ):
+        result = await _handle_quickbuild(
+            external_client,
+            req.model_dump(exclude_none=True),
+            workflow_client=internal_client,
+        )
         text = result[0].text if result else ""
         # The handler returns a one-sentence confirmation; surface it
         # plus the workflow id (extracted from the confirmation string)
@@ -961,6 +977,7 @@ def _run_config_to_engine_config(config: WorkflowRunConfig) -> dict:
             "default_session_id": config.default_session_id,
             "base_work_dir": config.base_work_dir,
             "use_custodian": config.use_custodian,
+            "custodian_max_errors": config.custodian_max_errors,
             "potcar_root": "",
         },
         "execution_mode": config.execution_mode,

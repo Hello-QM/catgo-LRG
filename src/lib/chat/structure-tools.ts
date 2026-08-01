@@ -1,5 +1,5 @@
 import type { AnyStructure } from '$lib'
-import type { ClientTool, ToolKind } from './types'
+import type { ClientTool, ToolExecutionContext, ToolKind } from './types'
 import {
   client_load_or_card,
   get_current_structure,
@@ -78,7 +78,10 @@ function clone_structure(): MutStructure {
   return JSON.parse(JSON.stringify(require_structure())) as MutStructure
 }
 
-type Executor = (input: Record<string, unknown>) => Promise<unknown> | unknown
+type Executor = (
+  input: Record<string, unknown>,
+  context?: ToolExecutionContext,
+) => Promise<unknown> | unknown
 
 interface ToolEntry {
   def: ClientTool
@@ -1729,6 +1732,7 @@ function missing_required(def: ClientTool, input: Record<string, unknown>): stri
 export async function execute_tool(
   name: string,
   input: Record<string, unknown>,
+  context?: ToolExecutionContext,
 ): Promise<string> {
   const entry = REGISTRY.get(name)
   if (!entry) return JSON.stringify({ error: `Unknown tool: ${name}` })
@@ -1742,7 +1746,7 @@ export async function execute_tool(
     })
   }
   try {
-    const result = await entry.run(input)
+    const result = await entry.run(input, context)
     return JSON.stringify(result ?? { ok: true })
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : String(err) })

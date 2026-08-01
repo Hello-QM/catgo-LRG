@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 @pytest.mark.asyncio
-async def test_orca_freq_results_stored_and_retrieved():
+async def test_orca_freq_results_stored_and_retrieved(monkeypatch):
     """Test that ORCA freq results are stored in task_results and retrievable via API."""
 
     # This test validates that the entire pipeline works:
@@ -39,23 +39,19 @@ async def test_orca_freq_results_stored_and_retrieved():
         db = WorkflowDB(db_path)
 
         # Create test workflow and task
-        workflow = db.create_workflow(
-            name="test_freq_workflow",
-            description="Test ORCA frequency workflow",
-            graph={"nodes": [], "edges": []}
-        )
-        workflow_id = workflow["id"]
+        workflow_id = db.create_workflow("test_freq_workflow")
 
-        task = db.create_task(
+        task_id = db.create_task(
             workflow_id=workflow_id,
             task_type="orca_freq",
             params={"software": "orca", "method": "B3LYP"},
+            software="orca",
             system_name="H2O"
         )
-        task_id = task["id"]
 
         # Simulate ORCA parser output (what OrcaFreqOutput.get_summary() would return)
         orca_parser_result = {
+            "type": "orca_freq",
             "frequencies": [
                 {"index": 1, "frequency_cm": 3755.2, "imaginary": False, "ir_intensity_km_mol": 0.5},
                 {"index": 2, "frequency_cm": 1594.3, "imaginary": False, "ir_intensity_km_mol": 82.3},
@@ -73,6 +69,7 @@ async def test_orca_freq_results_stored_and_retrieved():
 
         # Test Step 1: Store result in database (what result_handler and collector do)
         _store_result(db, task_id, workflow_id, orca_parser_result)
+        db.update_task(task_id, status="COMPLETED")
 
         # Verify storage
         conn = sqlite3.connect(db_path)
@@ -92,6 +89,7 @@ async def test_orca_freq_results_stored_and_retrieved():
         assert result_row["imag_freqs_json"] is not None, "imag_freqs_json not stored"
         assert result_row["zpe"] == pytest.approx(0.0215), "ZPE not stored correctly"
         assert result_row["gibbs"] == pytest.approx(-0.0050), "Gibbs not stored correctly"
+        assert result_row["energy"] == pytest.approx(-2080.5), "Energy not normalized to eV"
 
         # Check full output
         assert result_row["outputs_json"] is not None, "outputs_json not stored"
@@ -103,10 +101,13 @@ async def test_orca_freq_results_stored_and_retrieved():
         real_freqs = json.loads(result_row["real_freqs_json"])
         assert len(real_freqs) == 3
         assert real_freqs[0] == pytest.approx(3755.2)
+        assert json.loads(result_row["imag_freqs_json"]) == []
 
         conn.close()
 
         # Test Step 2: Retrieve via query (what API does)
+        import catgo.routers.workflow_engine as workflow_engine_router
+        monkeypatch.setattr(workflow_engine_router, "_db", db)
         from catgo.services.workflow_results import fetch_v2_task_results_by_workflow
 
         task_rows = fetch_v2_task_results_by_workflow(workflow_id)
@@ -132,7 +133,7 @@ async def test_orca_freq_results_stored_and_retrieved():
 
 
 @pytest.mark.asyncio
-async def test_orca_opt_convergence_stored_and_retrieved():
+async def test_orca_opt_convergence_stored_and_retrieved(monkeypatch):
     """Test that ORCA opt convergence is stored and can be retrieved."""
 
     from catgo.workflow.db import WorkflowDB
@@ -147,23 +148,19 @@ async def test_orca_opt_convergence_stored_and_retrieved():
     try:
         db = WorkflowDB(db_path)
 
-        workflow = db.create_workflow(
-            name="test_opt_workflow",
-            description="Test ORCA optimization workflow",
-            graph={"nodes": [], "edges": []}
-        )
-        workflow_id = workflow["id"]
+        workflow_id = db.create_workflow("test_opt_workflow")
 
-        task = db.create_task(
+        task_id = db.create_task(
             workflow_id=workflow_id,
             task_type="orca_opt",
             params={"software": "orca"},
+            software="orca",
             system_name="H2O"
         )
-        task_id = task["id"]
 
         # Simulate ORCA opt parser output
         orca_parser_result = {
+            "type": "orca_opt",
             "energy_eh": -76.4185,
             "energy_ev": -2080.5,
             "converged": True,
@@ -176,6 +173,7 @@ async def test_orca_opt_convergence_stored_and_retrieved():
         }
 
         _store_result(db, task_id, workflow_id, orca_parser_result)
+        db.update_task(task_id, status="COMPLETED")
 
         # Verify storage
         conn = sqlite3.connect(db_path)
@@ -194,6 +192,8 @@ async def test_orca_opt_convergence_stored_and_retrieved():
         conn.close()
 
         # Retrieve via query
+        import catgo.routers.workflow_engine as workflow_engine_router
+        monkeypatch.setattr(workflow_engine_router, "_db", db)
         from catgo.services.workflow_results import fetch_v2_task_results_by_workflow
 
         task_rows = fetch_v2_task_results_by_workflow(workflow_id)
@@ -201,6 +201,8 @@ async def test_orca_opt_convergence_stored_and_retrieved():
 
         result_dict = part_c_results[0]
         assert result_dict["node_type"] == "orca_opt"
+        assert result_dict["converged"] is True
+        assert result_dict["n_steps"] == 3
         assert "convergence_points" in result_dict
         assert len(result_dict["convergence_points"]) == 3
         assert result_dict["energy"] == pytest.approx(-2080.5)

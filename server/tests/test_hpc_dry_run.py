@@ -41,7 +41,8 @@ def _create_geo_opt_workflow(db: WorkflowDB) -> str:
     wf = Workflow("HPC Dry Run", db=db)
     t1 = wf.add_task("structure_input", structure='{"lattice": {"a": 3.0}}')
     t2 = wf.add_task("geo_opt", structure=t1.output.structure, software="vasp")
-    wf.submit()
+    # This suite explicitly tests submission machinery with mocked HPC.
+    wf.submit(auto_submit=True)
     return wf.workflow_id
 
 
@@ -232,11 +233,12 @@ def test_poller_marks_remote_error_when_no_connection(db, config):
     assert "connection lost" in geo_task["error_message"].lower()
 
 
-def test_poller_lost_connection_triggers_retry_to_ready(db, config):
-    """Full cycle: RUNNING -> (no connection) -> REMOTE_ERROR -> READY (retry).
+def test_poller_lost_connection_waits_for_reconnection(db, config):
+    """Full cycle: RUNNING -> (no connection) -> transient REMOTE_ERROR.
 
-    Verifies the fix for the bug where tasks get stuck in RUNNING when the
-    HPC session is recycled.
+    A lost connection does not prove the remote job failed.  The task must
+    retain its job identity and wait for the scanner's reconnect probe rather
+    than submitting a duplicate job or consuming a compute retry.
     """
     from catgo.workflow.engine.poller import poll_active_tasks
     from catgo.workflow.engine.error_handler import handle_errors
@@ -266,12 +268,14 @@ def test_poller_lost_connection_triggers_retry_to_ready(db, config):
 
     assert db.get_task(geo_id)["status"] == TaskState.REMOTE_ERROR.value
 
-    # Step 2: Error handler retries -> READY
+    # Step 2: Error handler leaves transient failures for reconnect recovery.
     handle_errors(db, wf_id, config)
 
     geo_task = db.get_task(geo_id)
-    assert geo_task["status"] == TaskState.READY.value
-    assert geo_task["retry_count"] == 1
+    assert geo_task["status"] == TaskState.REMOTE_ERROR.value
+    assert geo_task["retry_count"] == 0
+    assert geo_task["hpc_job_id"] == "99999"
+    assert geo_task["error_type"] == "transient"
 
 
 def test_hpc_config_default_session_key(db, config):

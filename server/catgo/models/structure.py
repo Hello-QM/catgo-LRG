@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Literal, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CalculatorType(str, Enum):
@@ -124,8 +124,7 @@ class PymatgenStructure(BaseModel):
     sites: list[Site]
     charge: Optional[float] = None
 
-    class Config:
-        extra = "allow"  # Allow additional fields from frontend
+    model_config = ConfigDict(extra="allow")
 
 
 class OptimizationStep(BaseModel):

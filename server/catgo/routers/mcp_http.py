@@ -14,14 +14,17 @@ _push_structure() and _get_current_structure() which normally make HTTP
 requests to /view/* endpoints — but those endpoints are served by the same
 worker, causing a deadlock.
 
-Solution: Monkey-patch the two viewer helpers to use direct in-process access
-via view_state.py (the shared state module). Computation endpoints like
-/structure-ops/supercell are fine because they don't call back into /view/*.
+Solution: bind two request-local ContextVar overrides so viewer helpers use
+direct in-process access via view_state.py.  A global monkey-patch is unsafe:
+it leaks into stdio/test clients and makes concurrent transports interfere.
+Computation endpoints like /structure-ops/supercell remain ordinary HTTP.
 """
 
 import logging
+import inspect
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 
@@ -31,8 +34,9 @@ from mcp.types import TextContent, Tool
 
 logger = logging.getLogger(__name__)
 
-# Ensure server dir on path for mcp_tools imports
-_server_dir = str(Path(__file__).resolve().parent.parent)
+# This file is server/catgo/routers/<this>; server/ is three parents up.
+# Adding server/catgo/ shadows server/workflow/ with catgo/workflow/.
+_server_dir = str(Path(__file__).resolve().parents[2])
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 
@@ -56,11 +60,13 @@ from catgo.mcp_tools.server_claude_code import (
     _handle_skills,
     _handle_campaign,
     _handle_terminal,
+    _handle_verify,
+    _handle_validate_config,
     API_BASE,
 )
 
 # ---------------------------------------------------------------------------
-# Patch viewer helpers to use in-process state (avoids self-HTTP deadlock)
+# Direct viewer helpers used through request-local overrides
 # ---------------------------------------------------------------------------
 
 import catgo.mcp_tools.server_claude_code as _mcp_mod
@@ -158,10 +164,6 @@ async def _push_structure_direct(
         return str(exc)
 
 
-# Apply patches so all tool handlers use direct access
-_mcp_mod._get_current_structure = _get_current_structure_direct  # type: ignore[attr-defined]
-_mcp_mod._push_structure = _push_structure_direct  # type: ignore[attr-defined]
-
 import json as _json
 
 
@@ -187,23 +189,61 @@ async def _handle_view_direct(client: httpx.AsyncClient, args: dict) -> list[Tex
     return [T(type="text", text=f"Unknown view action '{action}'. Valid: get_state, selection, screenshot")]
 
 
-# (Duplicate patch block removed — the assignments above at lines 79-80
-#  already applied these patches. `_handle_view_direct` is dispatched
-#  directly by name from `call_tool` below and does not need a module
-#  patch on `_mcp_mod._handle_view`.)
-
-logger.info("MCP HTTP: patched viewer helpers for in-process access")
+logger.info("MCP HTTP: request-local viewer helper overrides enabled")
 
 
 # --- MCP Server + Session Manager (module-level singletons) ---
 
 mcp_server = Server("catgo-claude-code-http")
 
-session_manager = StreamableHTTPSessionManager(
-    app=mcp_server,
-    json_response=True,
-    stateless=True,
-)
+_SESSION_IDLE_TIMEOUT_SECONDS = 3600.0
+
+
+def _make_session_manager(
+    manager_cls: Callable[..., Any] = StreamableHTTPSessionManager,
+) -> Any:
+    """Build the HTTP session manager across the supported MCP 1.x range.
+
+    ``session_idle_timeout`` was added after MCP 1.26.  CatGo supports
+    ``mcp>=1,<2``, so passing the newer keyword unconditionally makes this
+    module fail at import time on otherwise-supported installations.  Keep
+    the useful timeout where the installed constructor advertises it, and
+    omit only that optional keyword on older releases.
+    """
+    kwargs: dict[str, Any] = {
+        "app": mcp_server,
+        "json_response": True,
+        # Stateful mode gives headless clients a standards-defined
+        # Mcp-Session-Id. Stateless mode created no protocol session id, so
+        # every no-panel client shared one verification ledger in this process.
+        "stateless": False,
+    }
+    try:
+        parameters = inspect.signature(manager_cls).parameters.values()
+    except (TypeError, ValueError):
+        logger.warning(
+            "MCP HTTP: cannot inspect StreamableHTTPSessionManager; "
+            "idle-session timeout disabled for compatibility",
+        )
+    else:
+        accepts_timeout = any(
+            parameter.name == "session_idle_timeout"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if accepts_timeout:
+            # CLI processes can die without the protocol DELETE. Bound
+            # abandoned transports where the installed MCP exposes support.
+            kwargs["session_idle_timeout"] = _SESSION_IDLE_TIMEOUT_SECONDS
+        else:
+            logger.info(
+                "MCP HTTP: installed MCP has no session_idle_timeout; "
+                "using its legacy session lifecycle",
+            )
+    return manager_cls(**kwargs)
+
+
+session_manager = _make_session_manager()
 
 
 @mcp_server.list_tools()
@@ -213,8 +253,21 @@ async def list_tools() -> list[Tool]:
 
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
-    arguments = arguments or {}
+    # Same verification lifecycle as the stdio server. Without this the HTTP path
+    # — which is what the desktop app and every HTTP client use — advertised
+    # catgo_verify in TOOLS, answered "Unknown tool", and ran no precheck or
+    # postmark, so nothing on this transport was ever gated.
+    return await _mcp_mod.run_with_verification(name, arguments or {}, _dispatch)
+
+
+async def _dispatch(name: str, arguments: dict) -> list[TextContent]:
     T = TextContent
+    get_token = _mcp_mod._get_current_structure_override.set(
+        _get_current_structure_direct,
+    )
+    push_token = _mcp_mod._push_structure_override.set(
+        _push_structure_direct,
+    )
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if name == "catgo_structure":
@@ -282,6 +335,12 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
                 return await _handle_campaign(arguments)
             elif name == "catgo_terminal":
                 return await _handle_terminal(arguments)
+            elif name == "catgo_verify":
+                return _handle_verify(arguments)
+            elif name == "catgo_validate_config":
+                # advertised in TOOLS with no branch here either — the review
+                # named catgo_verify, the same hole covered two tools
+                return await _handle_validate_config(client, arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:
@@ -299,6 +358,9 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     except Exception as exc:
         logger.error("MCP tool %s unexpected error: %s", name, exc, exc_info=True)
         return [T(type="text", text=f"{name} encountered an internal error. Check server logs for details.")]
+    finally:
+        _mcp_mod._push_structure_override.reset(push_token)
+        _mcp_mod._get_current_structure_override.reset(get_token)
 
 
 async def mcp_asgi_app(scope, receive, send):
@@ -322,12 +384,17 @@ async def mcp_asgi_app(scope, receive, send):
         await session_manager.handle_request(scope, receive, send)
         return
 
-    from catgo.mcp_tools.helpers import current_panel_id
+    from catgo.mcp_tools.helpers import (
+        current_panel_id,
+        current_verification_session_id,
+    )
 
     # ASGI headers are a list of (bytes, bytes) tuples; compare case-insensitive.
     tab_id = ""
+    mcp_session_id = ""
     for header_name, header_value in scope.get("headers", []):
-        if header_name == b"x-catgo-tab-id":
+        lowered = header_name.lower()
+        if lowered == b"x-catgo-tab-id":
             try:
                 tab_id = header_value.decode("latin-1").strip()
             except UnicodeDecodeError:
@@ -340,13 +407,23 @@ async def mcp_asgi_app(scope, receive, send):
                     header_value,
                 )
                 tab_id = ""
-            break
+        elif lowered == b"mcp-session-id":
+            mcp_session_id = header_value.decode("latin-1").strip()
 
-    if tab_id:
-        token = current_panel_id.set(tab_id)
-        try:
-            await session_manager.handle_request(scope, receive, send)
-        finally:
-            current_panel_id.reset(token)
-    else:
+    panel_token = current_panel_id.set(tab_id) if tab_id else None
+    verification_key = (
+        f"http:tab:{tab_id}"
+        if tab_id
+        else (f"http:mcp:{mcp_session_id}" if mcp_session_id else None)
+    )
+    verification_token = (
+        current_verification_session_id.set(verification_key)
+        if verification_key else None
+    )
+    try:
         await session_manager.handle_request(scope, receive, send)
+    finally:
+        if verification_token is not None:
+            current_verification_session_id.reset(verification_token)
+        if panel_token is not None:
+            current_panel_id.reset(panel_token)

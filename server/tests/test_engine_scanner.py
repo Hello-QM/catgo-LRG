@@ -21,13 +21,13 @@ class TestScanner:
     def engine(self, db, config):
         return WorkflowEngine(db=db, config=config)
 
-    def test_scan_advances_waiting_to_ready(self, engine, db):
+    def test_scan_advances_waiting_hpc_task_to_review(self, engine, db):
         wf_id = db.create_workflow("test")
         db.update_workflow(wf_id, status="running")
-        t1 = db.create_task(wf_id, "geo_opt", params={})  # HPC task stays READY
+        t1 = db.create_task(wf_id, "geo_opt", params={})
         asyncio.run(engine.scan_cycle())
         task = db.get_task(t1)
-        assert task["status"] == TaskState.READY.value
+        assert task["status"] == TaskState.PENDING_REVIEW.value
 
     def test_scan_chain_local_tasks(self, engine, db):
         """structure_input (local) should complete in one cycle."""

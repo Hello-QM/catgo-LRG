@@ -22,6 +22,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _disable_external_material_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep this backend integration test hermetic.
+
+    OPTIMADE transport has its own tests.  Quickbuild only needs to prove that
+    a failed optional prefetch still builds a valid workflow.
+    """
+    async def _not_found(*_args, **_kwargs):
+        return None
+
+    from catgo.mcp_tools import workflow_tools
+    monkeypatch.setattr(workflow_tools, "_fetch_structure_by_mp_id", _not_found)
+
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     # Tests run with cwd=server/ (pytest.ini's rootdir), so `main` resolves

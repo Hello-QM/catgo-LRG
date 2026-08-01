@@ -6,6 +6,11 @@ import { dirname, join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '../types.js'
+import {
+  approvalId,
+  approveCatgoOverride,
+  isGuardedCatgoCall,
+} from '../verification-approval.js'
 
 // ---------------------------------------------------------------------------
 // Claude Code CLI discovery.
@@ -292,8 +297,14 @@ export function assistant_text_fallback(
 export function decide_tool_permission(
   toolName: string,
   skipPermissions: boolean | undefined,
+  input: Record<string, unknown> = {},
 ): 'allow' | 'gate' {
-  if (toolName.startsWith('mcp__catgo__') || toolName.startsWith('catgo_')) return 'allow'
+  const isCatgo = toolName.startsWith('mcp__catgo__') || toolName.startsWith('catgo_')
+  // The first release attempt is safe to auto-allow: backend precheck blocks it
+  // and returns a challenge.  A retry carrying that model-visible challenge
+  // must always reach the human card, even in skip-permissions mode.
+  if (isCatgo && isGuardedCatgoCall(toolName, input) && approvalId(input)) return 'gate'
+  if (isCatgo) return 'allow'
   if (skipPermissions === true) return 'allow'
   return 'gate'
 }
@@ -349,9 +360,10 @@ export function createClaudeAdapter(): AgentAdapter {
           agentID?: string
         },
       ): Promise<any> => {
-        // Auto-allow CatGo MCP tools and session-scoped skip-permission opt-out.
+        // Auto-allow ordinary CatGo tools and the safe override preflight.
+        // An override retry carrying a challenge falls through to the human card.
         // decide_tool_permission is the single source of truth for this gate.
-        if (decide_tool_permission(toolName, skipPermissions) === 'allow') {
+        if (decide_tool_permission(toolName, skipPermissions, input) === 'allow') {
           return { behavior: 'allow' }
         }
 
@@ -367,6 +379,26 @@ export function createClaudeAdapter(): AgentAdapter {
         const result = await permissionCallback(req)
 
         if (result.behavior === 'allow') {
+          const challengeId = approvalId(input)
+          const guardedApproval = isGuardedCatgoCall(toolName, input) && challengeId
+          if (guardedApproval) {
+            try {
+              if (!mcpServerUrl) throw new Error('CatGo MCP URL is unavailable')
+              await approveCatgoOverride(mcpServerUrl, challengeId, tabId)
+            } catch (error) {
+              return {
+                behavior: 'deny',
+                message: error instanceof Error
+                  ? error.message
+                  : 'CatGo human approval failed closed',
+              }
+            }
+            // Never install a reusable SDK allow-rule for one-shot HPC approval.
+            return {
+              behavior: 'allow',
+              ...(result.updatedInput ? { updatedInput: result.updatedInput } : {}),
+            }
+          }
           // If SDK provided suggestions, pass them through.
           // Otherwise, construct a session-scoped rule so "Allow Session"
           // actually prevents future prompts for this tool.
@@ -411,7 +443,6 @@ export function createClaudeAdapter(): AgentAdapter {
           includePartialMessages: true,
           mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
           permissionMode: 'default',
-          allowedTools: ['mcp__catgo__*'],
           canUseTool,
           // Don't load global settings — prevents loading ~/.claude/mcp.json
           // stdio catgo server (we provide HTTP-mode catgo MCP above) and

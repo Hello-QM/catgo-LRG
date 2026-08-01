@@ -1,0 +1,119 @@
+name: verify-layer-python
+
+# Focused Python regression gate for verification, submission, and result provenance.
+
+on:
+  push:
+    paths:
+      - "server/catgo/mcp_tools/**"
+      - "server/catgo/routers/mcp_http.py"
+      - "server/catgo/routers/workflow.py"
+      - "server/catgo/workflow/engine/**"
+      - "server/workflow/engines/analysis.py"
+      - "server/tests/test_adsorption_energy_zpe.py"
+      - "server/tests/test_batch_submit.py"
+      - "server/tests/test_claude_code_mcp.py"
+      - "server/tests/test_job_script.py"
+      - "server/tests/test_engine_merge.py"
+      - "server/tests/test_review_findings.py"
+      - "server/tests/test_vasp_result_provenance.py"
+      - "server/tests/test_vasp_submission.py"
+      - "server/pyproject.toml"
+      - "server/requirements.txt"
+      - "server/pytest.ini"
+      - ".github/workflows/verify-python.yml"
+  pull_request:
+    paths:
+      - "server/catgo/mcp_tools/**"
+      - "server/catgo/routers/mcp_http.py"
+      - "server/catgo/routers/workflow.py"
+      - "server/catgo/workflow/engine/**"
+      - "server/workflow/engines/analysis.py"
+      - "server/tests/test_adsorption_energy_zpe.py"
+      - "server/tests/test_batch_submit.py"
+      - "server/tests/test_claude_code_mcp.py"
+      - "server/tests/test_job_script.py"
+      - "server/tests/test_engine_merge.py"
+      - "server/tests/test_review_findings.py"
+      - "server/tests/test_vasp_result_provenance.py"
+      - "server/tests/test_vasp_submission.py"
+      - "server/pyproject.toml"
+      - "server/requirements.txt"
+      - "server/pytest.ini"
+      - ".github/workflows/verify-python.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        # Install what the server DECLARES rather than a hand-written list:
+        # bare `mcp` resolved to 2.0.0, which drops Server.list_tools and
+        # makes catgo/mcp_tools/server.py unimportable. The cap lives in
+        # requirements.txt so a fresh install is protected too.
+        run: |
+          python -m pip install -r server/requirements.txt
+          python -m pip install pytest pytest-asyncio build
+      - name: Module self-tests (python <module>.py — PR #546 review found these were never executed in CI)
+        working-directory: server/catgo/mcp_tools
+        run: |
+          python verify_enforcement.py
+          python provenance.py
+      - name: Run focused Python regression gate
+        working-directory: server
+        env:
+          PYTHONPATH: .
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            catgo/mcp_tools/test_verify.py \
+            catgo/mcp_tools/test_server_paths.py \
+            tests/test_adsorption_energy_zpe.py \
+            tests/test_batch_submit.py \
+            tests/test_claude_code_mcp.py \
+            tests/test_engine_merge.py \
+            tests/test_job_script.py \
+            tests/test_review_findings.py \
+            tests/test_vasp_result_provenance.py \
+            tests/test_vasp_submission.py
+      - name: Build and import installed wheel
+        working-directory: server
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m build --wheel --outdir /tmp/catgo-dist
+          python -m pip install --no-deps --force-reinstall /tmp/catgo-dist/*.whl
+          cd /tmp
+          PYTHONPATH= python -I - <<'PY'
+          import importlib.metadata
+          import catgo
+          import jinja2
+          from catgo.cli._legacy import _ensure_sys_path
+          from catgo.mcp_tools import provenance, verify_enforcement, verify_gates
+          from catgo.workflow.engine import result_collector, vasp_submission
+
+          _ensure_sys_path()
+          from workflow.engine_runtime import _render_template
+
+          requirements = importlib.metadata.requires("catgo") or []
+          assert any(req.lower().startswith("pyyaml") for req in requirements)
+          assert any(req.lower().startswith("jinja2") for req in requirements)
+          rendered = _render_template(
+              "mlp/run_mlp.py.j2",
+              params={"model": "mace-mp-0"},
+              structure_str=None,
+              node_type="mlp_relax",
+          )
+          assert "mace_mp" in rendered
+          assert "binding_Eads" in provenance.NEEDS
+          assert "vasp_energy" in provenance.NEEDS
+          assert verify_gates.audit({})["coverage"]["gates_total"] >= 27
+          assert verify_enforcement.ALLOW == "allow"
+          assert result_collector.__name__.endswith("result_collector")
+          assert vasp_submission.__name__.endswith("vasp_submission")
+          print("installed wheel import smoke: PASS")
+          PY

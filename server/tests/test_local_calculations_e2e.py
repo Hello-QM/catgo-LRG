@@ -8,6 +8,7 @@ Requires: tblite, mace-torch, ase, lammps (conda install)
 """
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -408,6 +409,8 @@ class TestLammpsMD:
     @pytest.fixture(autouse=True)
     def setup(self):
         # Check lmp is available
+        if shutil.which("conda") is None:
+            pytest.skip("conda is not installed; cannot probe the catgo LAMMPS env")
         result = subprocess.run(["conda", "run", "-n", "catgo", "which", "lmp"],
                                 capture_output=True, text=True)
         if result.returncode != 0:

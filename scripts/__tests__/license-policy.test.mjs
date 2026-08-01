@@ -132,6 +132,7 @@ const workflowInventory = {
     '.github/workflows/lint.yml',
     '.github/workflows/tauri-test-build.yml',
     '.github/workflows/test.yml',
+    '.github/workflows/verify-python.yml',
   ],
 }
 

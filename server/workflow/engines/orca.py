@@ -61,7 +61,7 @@ async def generate_orca_inputs(
         product_structure_str = _resolve_neb_product(step_id, edges, step_results)
 
     files = generate_orca_input_files(node_type, params, structure_str, product_structure_str)
-    from utils.job_parser import write_remote_files
+    from catgo.utils.job_parser import write_remote_files
     await write_remote_files(hpc.conn, {f"{work_dir}/{k}": v for k, v in files.items()})
 
 
@@ -116,7 +116,7 @@ def generate_orca_input_files(
         neb_files = {}
         # NEB-TS still needs reactant.xyz / product.xyz even with custom .inp
         if node_type == "orca_neb_ts":
-            from utils.orca_input import _structure_to_xyz_file_content
+            from catgo.utils.orca_input import _structure_to_xyz_file_content
             struct = _parse_structure(structure_str, Structure, Molecule) if structure_str else None
             if struct is not None:
                 neb_files["reactant"] = params.get("custom_reactant_xyz") or \
@@ -130,8 +130,16 @@ def generate_orca_input_files(
                 neb_files["product"] = params["custom_product_xyz"]
     else:
         # Generate ORCA.inp from parameters
-        from utils.orca_input import generate_orca_inputs as _gen_orca, generate_orca_neb_inputs, generate_orca_irc_inputs
-        from routers.orca import ORCAInputRequest, OrcaNebInputRequest, OrcaIrcInputRequest
+        from catgo.utils.orca_input import (
+            generate_orca_inputs as _gen_orca,
+            generate_orca_irc_inputs,
+            generate_orca_neb_inputs,
+        )
+        from catgo.routers.orca import (
+            ORCAInputRequest,
+            OrcaIrcInputRequest,
+            OrcaNebInputRequest,
+        )
 
         # Parse input structure
         if not structure_str:
@@ -256,7 +264,7 @@ def generate_orca_input_files(
         elif node_type == "orca_uvvis":
             # UV-Vis spectroscopy (TD-DFT or STEOM)
             import types
-            from utils.orca_input import generate_orca_uvvis_inputs
+            from catgo.utils.orca_input import generate_orca_uvvis_inputs
             request = types.SimpleNamespace(
                 structure=pymatgen_struct,
                 method=params.get("method", "CAM-B3LYP"),
@@ -328,5 +336,3 @@ def generate_orca_input_files(
             logger.error("NEB-TS: product XYZ is empty/missing! neb_files=%s", list(neb_files.keys()))
         logger.info("NEB-TS: returning %d files: %s", len(files), list(files.keys()))
     return files
-
-

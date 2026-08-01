@@ -4,8 +4,10 @@ Handles DOS analysis, COHP analysis, MD analysis, convergence checks,
 and energy comparisons.
 """
 
+import hashlib
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -14,6 +16,77 @@ import httpx
 from catgo.models.workflow import StepStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _lineage_normalize(value: Any) -> Any:
+    """Deterministic JSON-safe normalization for parent-result lineage."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return {"__nonfinite_float__": "NaN"}
+        if math.isinf(value):
+            return {"__nonfinite_float__": "Infinity" if value > 0 else "-Infinity"}
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _lineage_normalize(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_lineage_normalize(item) for item in value]
+    if isinstance(value, set):
+        items = [_lineage_normalize(item) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ),
+        )
+    return {
+        "__python_type__": f"{type(value).__module__}.{type(value).__qualname__}",
+        "__repr__": repr(value),
+    }
+
+
+def _parent_result_digest(step_id: str, parent: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        _lineage_normalize({
+            "schema": "catgo.adsorption-parent-result.v1",
+            "step_id": step_id,
+            "result": parent,
+        }),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _adsorption_operand_record(entry: dict[str, Any]) -> dict[str, Any]:
+    """Compact, self-contained record of every parent field used by E_ads."""
+    record = {
+        "schema": "catgo.adsorption-operand.v1",
+        "task_id": entry["step_id"],
+        "energy_eV": entry["energy"],
+        "n_atoms": entry.get("n_atoms"),
+        "work_dir": entry.get("work_dir"),
+        "potcar_titels": entry.get("potcar_titels"),
+        "nelect": entry.get("nelect"),
+    }
+    return {key: value for key, value in record.items() if value is not None}
+
+
+def _adsorption_operand_digest(record: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        _lineage_normalize(record),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def _get_api_base() -> str:
@@ -1404,10 +1477,11 @@ def _analyze_adsorption_energy(
     With optional ZPE correction from freq/vibration parent nodes:
     E_ads_ZPE = E_ads + ZPE(slab+ads) - ZPE(slab) - coefficient * ZPE(ref)
 
-    Identifies parents by atom count: the parent with the most atoms is
-    slab+adsorbate, the next is clean slab, and the smallest is the
-    gas-phase reference molecule. Freq nodes are paired with their
-    corresponding energy node by matching atom count.
+    Explicit role parameters take priority. Otherwise, parents are identified
+    by atom count: the parent with the most atoms is slab+adsorbate, the next
+    is clean slab, and the smallest is the gas-phase reference molecule. Freq
+    nodes are paired with their corresponding energy node by matching atom
+    count.
     """
     # --- Collect energies from non-freq parents ---
     entries: list[dict[str, Any]] = []
@@ -1417,6 +1491,8 @@ def _analyze_adsorption_energy(
     for pid in parent_ids:
         parent = step_results.get(pid, {})
         parent_node_type = parent.get("node_type", "")
+        summary = parent.get("summary", {}) or {}
+        work_dir = parent.get("work_dir") or summary.get("work_dir")
 
         # Classify: freq/vibration nodes go to zpe_entries, rest to energy entries
         if parent_node_type in _FREQ_NODE_TYPES or (
@@ -1440,17 +1516,23 @@ def _analyze_adsorption_energy(
                     atoms = _try_load_atoms(parent)
                     if atoms is not None:
                         n_atoms = len(atoms)
-                zpe_entries.append({"step_id": pid, "zpe": float(zpe_val), "n_atoms": n_atoms})
+                zpe_entries.append({
+                    "step_id": pid,
+                    "zpe": float(zpe_val),
+                    "n_atoms": n_atoms,
+                    "work_dir": work_dir,
+                    "source_record_digest": _parent_result_digest(pid, parent),
+                })
             continue
 
         # --- Energy source ---
-        energy = parent.get("energy") or parent.get("final_energy")
+        energy = parent.get("energy")
         if energy is None:
-            summary = parent.get("summary", {})
-            energy = (
-                summary.get("energy")
-                or summary.get("final_energy")
-            )
+            energy = parent.get("final_energy")
+        if energy is None:
+            energy = summary.get("energy")
+        if energy is None:
+            energy = summary.get("final_energy")
         if energy is None:
             stdout = parent.get("stdout", "")
             if "Final energy:" in stdout:
@@ -1469,11 +1551,27 @@ def _analyze_adsorption_energy(
             if atoms is not None:
                 n_atoms = len(atoms)
 
-        entries.append({
+        entry = {
             "step_id": pid,
             "energy": energy,
             "n_atoms": n_atoms,
-        })
+            "work_dir": work_dir,
+            "potcar_titels": (
+                parent.get("potcar_titels")
+                if parent.get("potcar_titels") is not None
+                else summary.get("potcar_titels")
+            ),
+            "nelect": (
+                parent.get("nelect")
+                if parent.get("nelect") is not None
+                else summary.get("nelect")
+            ),
+        }
+        entry["lineage_record"] = _adsorption_operand_record(entry)
+        entry["source_record_digest"] = _adsorption_operand_digest(
+            entry["lineage_record"]
+        )
+        entries.append(entry)
 
     if len(entries) < 2:
         return {
@@ -1487,21 +1585,65 @@ def _analyze_adsorption_energy(
     slab_id = params.get("clean_slab_step")
     ref_id = params.get("reference_step")
 
-    if slab_ads_id and slab_id:
-        e_slab_ads = next((e for e in entries if e["step_id"] == slab_ads_id), None)
-        e_slab = next((e for e in entries if e["step_id"] == slab_id), None)
-        e_ref = next((e for e in entries if e["step_id"] == ref_id), None) if ref_id else None
+    entries_by_id = {e["step_id"]: e for e in entries}
+    declared_roles = {
+        "slab_adsorbate_step": slab_ads_id,
+        "clean_slab_step": slab_id,
+        "reference_step": ref_id,
+    }
+    for role, step_id in declared_roles.items():
+        if step_id and step_id not in entries_by_id:
+            return {
+                "status": "error",
+                "analysis_type": "adsorption_energy",
+                "error": f"Declared {role}={step_id!r} is not an energy parent.",
+            }
+
+    declared_ids = [step_id for step_id in declared_roles.values() if step_id]
+    if len(declared_ids) != len(set(declared_ids)):
+        return {
+            "status": "error",
+            "analysis_type": "adsorption_energy",
+            "error": "Declared adsorption-energy roles must use distinct parent steps.",
+        }
+
+    e_slab_ads = entries_by_id.get(slab_ads_id) if slab_ads_id else None
+    e_slab = entries_by_id.get(slab_id) if slab_id else None
+    e_ref = entries_by_id.get(ref_id) if ref_id else None
+
+    assigned_ids = set(declared_ids)
+    remaining = [e for e in entries if e["step_id"] not in assigned_ids]
+    with_atoms = [e for e in remaining if e["n_atoms"] is not None]
+    without_atoms = [e for e in remaining if e["n_atoms"] is None]
+    if with_atoms:
+        with_atoms.sort(key=lambda x: x["n_atoms"], reverse=True)
+        remaining = with_atoms + without_atoms
+        heuristic_mode = (
+            "heuristic_atom_count"
+            if not without_atoms
+            else "heuristic_atom_count_then_parent_order"
+        )
     else:
-        with_atoms = [e for e in entries if e["n_atoms"] is not None]
-        if with_atoms:
-            with_atoms.sort(key=lambda x: x["n_atoms"], reverse=True)
-            e_slab_ads = with_atoms[0]
-            e_slab = with_atoms[1] if len(with_atoms) > 1 else None
-            e_ref = with_atoms[2] if len(with_atoms) > 2 else None
-        else:
-            e_slab_ads = entries[0]
-            e_slab = entries[1] if len(entries) > 1 else None
-            e_ref = entries[2] if len(entries) > 2 else None
+        heuristic_mode = "heuristic_parent_order"
+
+    # Explicit role declarations win independently. Fill only unspecified roles.
+    if e_slab_ads is None and remaining:
+        e_slab_ads = remaining.pop(0)
+    if e_slab is None and remaining:
+        e_slab = remaining.pop(0)
+    # Preserve the existing explicit two-role behavior: no gas reference is
+    # inferred when both surface roles were declared and reference_step was not.
+    if e_ref is None and remaining and not (slab_ads_id and slab_id):
+        e_ref = remaining.pop(0)
+
+    explicit_count = sum(bool(step_id) for step_id in declared_roles.values())
+    assigned_count = 2 + (1 if e_ref else 0)
+    if explicit_count == assigned_count:
+        pairing_mode = "explicit_roles"
+    elif explicit_count:
+        pairing_mode = "mixed_explicit_heuristic"
+    else:
+        pairing_mode = heuristic_mode
 
     if e_slab_ads is None or e_slab is None:
         return {
@@ -1522,20 +1664,56 @@ def _analyze_adsorption_energy(
         "status": "completed",
         "analysis_type": "adsorption_energy",
         "E_ads_eV": E_ads,
+        "E_ads_unit": "eV",
         "E_slab_adsorbate_eV": E_slab_ads,
         "E_clean_slab_eV": E_slab,
         "n_atoms_slab_adsorbate": e_slab_ads.get("n_atoms"),
         "n_atoms_clean_slab": e_slab.get("n_atoms"),
+        "slab_adsorbate_task_id": e_slab_ads["step_id"],
+        "slab_adsorbate_digest": e_slab_ads["source_record_digest"],
+        "clean_slab_task_id": e_slab["step_id"],
+        "clean_slab_digest": e_slab["source_record_digest"],
+        # Backward-compatible clean-slab alias.
+        "reference_task_id": e_slab["step_id"],
+        "reference_digest": e_slab["source_record_digest"],
+        "pairing_mode": pairing_mode,
+        "lineage_digest_schema": "catgo.adsorption-operand.v1",
+        "lineage_records": {
+            "slab_adsorbate": e_slab_ads["lineage_record"],
+            "clean_slab": e_slab["lineage_record"],
+        },
+        "declared_role_bindings": {
+            role: step_id
+            for role, step_id in declared_roles.items()
+            if step_id
+        },
     }
+    if e_slab_ads.get("potcar_titels") and e_slab.get("potcar_titels"):
+        result["ads_titels"] = e_slab_ads["potcar_titels"]
+        result["bare_titels"] = e_slab["potcar_titels"]
+    if e_slab_ads.get("nelect") is not None and e_slab.get("nelect") is not None:
+        result["nelect_ads"] = e_slab_ads["nelect"]
+        result["nelect_bare"] = e_slab["nelect"]
+    if e_slab.get("work_dir"):
+        result["reference_dir"] = e_slab["work_dir"]
 
     if e_ref:
         result["E_reference_eV"] = E_ref
         result["reference_coefficient"] = ref_coefficient
         result["n_atoms_reference"] = e_ref.get("n_atoms")
+        result["gas_reference_task_id"] = e_ref["step_id"]
+        result["gas_reference_digest"] = e_ref["source_record_digest"]
+        result["lineage_records"]["gas_reference"] = e_ref["lineage_record"]
+        if e_ref.get("work_dir"):
+            result["gas_reference_dir"] = e_ref["work_dir"]
 
     # --- ZPE Correction ---
     include_zpe = params.get("include_zpe", True)
     if include_zpe and zpe_entries:
+        result["zpe_source_digests"] = {
+            entry["step_id"]: entry["source_record_digest"]
+            for entry in zpe_entries
+        }
         # Pair ZPE entries with energy entries by atom count
         zpe_slab_ads = None
         zpe_slab = None

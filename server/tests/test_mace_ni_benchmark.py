@@ -23,6 +23,32 @@ import sys
 import pytest
 
 
+@pytest.fixture(scope="module")
+def mlp_template():
+    """Load the shared MLP template once without instance-fixture state."""
+    import os
+
+    try:
+        import jinja2
+    except ImportError:
+        pytest.skip("jinja2 not installed")
+    base = "server/workflow/templates" if os.path.isdir("server") else "workflow/templates"
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(base))
+    return env.get_template("mlp/run_mlp.py.j2")
+
+
+@pytest.fixture(scope="module")
+def mace_available():
+    """Skip the optional smoke test when its heavyweight stack is absent."""
+    try:
+        import ase  # noqa: F401
+        import mace  # noqa: F401
+        import torch  # noqa: F401
+    except ImportError:
+        pytest.skip("mace-torch / torch / ase not installed — skipping slow smoke")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # 1. Metadata preamble (C1)
 # ---------------------------------------------------------------------------
@@ -85,30 +111,18 @@ class TestHpcTemplateCoverage:
     RuntimeError("Unknown MLP node type").
     """
 
-    @pytest.fixture(scope="class")
-    def template(self):
-        import os
-        try:
-            import jinja2
-        except ImportError:
-            pytest.skip("jinja2 not installed")
-            return None  # unreachable — pytest.skip raises
-        base = "server/workflow/templates" if os.path.isdir("server") else "workflow/templates"
-        env = jinja2.Environment(loader=jinja2.FileSystemLoader(base))
-        return env.get_template("mlp/run_mlp.py.j2")
-
     @pytest.mark.parametrize("node_type", [
         "mlp_relax", "mlp_md", "mlp_single_point", "mlp_vibrations", "mlp_neb",
     ])
-    def test_node_type_renders_valid_python(self, template, node_type):
-        rendered = template.render(node_type=node_type, params={"model": "mace-mp-0"})
+    def test_node_type_renders_valid_python(self, mlp_template, node_type):
+        rendered = mlp_template.render(node_type=node_type, params={"model": "mace-mp-0"})
         ast.parse(rendered)
         # Should NOT fall through to the error branch.
         assert "Unknown MLP node type" not in rendered
 
     @pytest.mark.parametrize("model", ["mace-mp-0", "chgnet", "m3gnet"])
-    def test_every_model_renders_for_relax(self, template, model):
-        rendered = template.render(node_type="mlp_relax", params={"model": model})
+    def test_every_model_renders_for_relax(self, mlp_template, model):
+        rendered = mlp_template.render(node_type="mlp_relax", params={"model": model})
         ast.parse(rendered)
         assert "Unknown ML model" not in rendered
 
@@ -124,19 +138,6 @@ class TestEndToEndSmoke:
     Skipped unless ``pytest -m slow`` is passed. Requires mace-torch, torch,
     and ASE to be importable; otherwise the test is skipped at runtime.
     """
-
-    @pytest.fixture(scope="class")
-    def mace_available(self):
-        # Probe availability so the test is skipped (not errored) on machines
-        # without mace-torch / torch / ase installed. Imports are re-done in
-        # the test body — the fixture's only job is the skip check.
-        try:
-            import mace  # noqa: F401
-            import torch  # noqa: F401
-            import ase  # noqa: F401
-        except ImportError:
-            pytest.skip("mace-torch / torch / ase not installed — skipping slow smoke")
-        return True
 
     def test_relax_script_runs_on_two_atom_ni(self, mace_available, tmp_path):
         """Relax a 2-atom Ni bulk with MACE. ~30 s on CPU.

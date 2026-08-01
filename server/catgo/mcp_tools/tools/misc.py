@@ -104,7 +104,7 @@ TOOLS: list[dict] = [
             "atom editing) — use direct tools instead (catgo_generate_slab, catgo_supercell, "
             "catgo_doping, etc.) which execute instantly. "
             "Actions: list, templates, create, get, add_node, remove_node, "
-            "connect, set_params, batch, validate, run, pause, resume, status, step_error, "
+            "connect, set_params, batch, validate, run, pause, resume, status, results, step_error, "
             "node_types, node_details, retry, batch_status, batch_results, list_presets. "
             "Use batch to add multiple nodes + edges in a single call for efficiency. "
             "Pass 'action' + relevant params."
@@ -121,7 +121,7 @@ TOOLS: list[dict] = [
                         "list", "templates", "create", "get",
                         "add_node", "remove_node", "connect", "set_params", "batch",
                         "validate", "run", "pause", "resume",
-                        "status", "step_error", "node_types", "node_details",
+                        "status", "results", "step_error", "node_types", "node_details",
                         "retry", "batch_status", "batch_results", "list_presets",
                     ],
                     "description": (
@@ -141,6 +141,7 @@ TOOLS: list[dict] = [
                         "pause: pause workflow (workflow_id). "
                         "resume: resume paused workflow (workflow_id, run_config?). "
                         "status: get run status (workflow_id). "
+                        "results: get all V2 step results (workflow_id). "
                         "step_error: get step error (workflow_id, step_id). "
                         "node_types: list available node types (category?). "
                         "node_details: get full schema for a node type — inputs, outputs, default params (node_type). "

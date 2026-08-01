@@ -303,7 +303,7 @@ def _generate_vasp_inputs_local(work_dir: str, node_type: str, params: dict, str
     wd = Path(work_dir)
 
     # --- NEB: multi-image directory layout (00/POSCAR ... 0(N+1)/POSCAR) ---
-    if node_type == "neb":
+    if node_type in ("neb", "vasp_neb"):
         product_str = params.pop("_resolved_product_structure", None) \
             or params.pop("product_structure", None)
         _write_vasp_neb_inputs(wd, params, structure_str, product_str)

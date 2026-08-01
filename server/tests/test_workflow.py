@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from catgo.workflow.reference import OutputReference
 from catgo.workflow.db import WorkflowDB
@@ -72,6 +74,7 @@ class TestWorkflow:
         wf.submit()
         wf_data = db.get_workflow(wf.workflow_id)
         assert wf_data["status"] == "running"
+        assert json.loads(wf_data["config_json"])["auto_submit"] is False
 
     def test_dag_structure(self, db):
         wf = Workflow("test", db=db)
