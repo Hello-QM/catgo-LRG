@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.9] - 2026-08-01
+
+### Added
+
+- **Fast, cross-platform trajectory streaming and editing** — large and compressed trajectories open through indexed structure-only readers in the web app, desktop app, VS Code, and Antigravity; variable-topology frame edits remain playable and can be saved as extXYZ or exported as one POSCAR per frame.
+- **Physics verification for CatBot numerical results** — `catgo_verify` checks provenance and workflow consistency, applies targeted scientific gates to silent-failure classes, and prevents unverified numerical results from flowing directly into HPC submission.
+- **Per-pane customizable structure toolbar** — each structure pane can collapse its toolbar, choose visible tools, migrate existing preferences, restore defaults, and retain mounted tool panels while buttons are hidden.
+
+### Fixed
+
+- **Trajectory interaction and rendering** — atom and bond picking, ordered three-atom angle measurement, pointer gesture cleanup, edited-frame topology caches, variable atom counts, analytic bond joins, and paused-frame supersampling now behave consistently.
+- **Periodic bonds without backend or WASM** — the JavaScript fallback now handles periodic images, skewed cells, self-image bonds, and the same cutoffs as the WASM path, avoiding incorrect cached bond sets in frontend-only sessions.
+- **Canonical citation link** — documentation and release metadata consistently use `https://app.catgo-ucsd.org`.
+
 ## [1.4.8] - 2026-07-30
 
 ### Fixed

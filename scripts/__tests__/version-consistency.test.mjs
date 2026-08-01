@@ -6,7 +6,7 @@ import test from 'node:test'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const source = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const APP_VERSION = '1.4.8'
+const APP_VERSION = '1.4.9'
 const WORKFLOW_INVENTORY = {
   'android-build.yml': {
     classification: 'root-versioned-publisher',
@@ -134,7 +134,7 @@ function workflowStep(path, name) {
   return workflow.slice(start, next === -1 ? undefined : next)
 }
 
-test('all CatGo application version surfaces target v1.4.8', () => {
+test('all CatGo application version surfaces target v1.4.9', () => {
   const packageJson = JSON.parse(source('package.json'))
   const tauriConfig = JSON.parse(source('src-tauri/tauri.conf.json'))
   const cargoLockMatch =
@@ -156,7 +156,7 @@ test('all CatGo application version surfaces target v1.4.8', () => {
   )
 })
 
-test('VSIX and citation package metadata target v1.4.8', () => {
+test('VSIX and citation package metadata target v1.4.9', () => {
   const vscodePackage = JSON.parse(source('extensions/vscode/package.json'))
   assert.equal(vscodePackage.version, APP_VERSION)
 
@@ -177,13 +177,13 @@ test('the dependency lock remains a pnpm v9 root-importer lock', () => {
   assert.match(lock, /^importers:\n\n  \.:\n/m)
 })
 
-test('the desktop draft release notes describe v1.4.8', () => {
+test('the desktop draft release notes describe v1.4.9', () => {
   const workflow = source('.github/workflows/tauri-build.yml')
 
-  assert.match(workflow, /### New in 1\.4\.8/)
-  assert.match(workflow, /Consistent periodic structures in both rendering modes/)
-  assert.match(workflow, /Database search works again across the app and VS Code/)
-  assert.match(workflow, /Large System Performance Mode remains WebGPU-accelerated/)
+  assert.match(workflow, /### New in 1\.4\.9/)
+  assert.match(workflow, /Large trajectories open and edit across every CatGo surface/)
+  assert.match(workflow, /CatBot verifies physics before numerical results are trusted/)
+  assert.match(workflow, /Structure tools are customizable per pane/)
 })
 
 test('VSIX publishing fails on duplicate marketplace versions', () => {
