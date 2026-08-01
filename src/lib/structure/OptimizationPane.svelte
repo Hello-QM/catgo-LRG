@@ -31,6 +31,7 @@
     pane_open = $bindable(false),
     toggle_props = {},
     pane_props = {},
+    show_toggle = true,
     on_push_undo,
     on_structure_change,
     selected_indices = [],
@@ -40,6 +41,7 @@
     pane_open?: boolean
     toggle_props?: ComponentProps<typeof DraggablePane>['toggle_props']
     pane_props?: ComponentProps<typeof DraggablePane>['pane_props']
+    show_toggle?: boolean
     on_push_undo?: () => void
     on_structure_change?: (structure: AnyStructure) => void
     /** Indices of selected atoms to optimize (if empty, all atoms are optimized) */
@@ -546,6 +548,7 @@
 
 <DraggablePane
   bind:show={pane_open}
+  {show_toggle}
   max_width="20em"
   close_on_click_outside={false}
   toggle_props={{

@@ -165,6 +165,11 @@
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
+  import {
+    pane_toolbar,
+    register_toolbar_pane,
+    type ToolbarToolId,
+  } from './toolbar-state.svelte'
   import { MdAnalysisPane, MdPlot } from '$lib/md'
   import SlowGrowthPane from '$lib/structure/SlowGrowthPane.svelte'
   import ScaleBar from '$lib/structure/ScaleBar.svelte'
@@ -1210,6 +1215,18 @@
     }
     & Omit<ComponentProps<typeof StructureControls>, `children` | `onclose`>
     & Omit<HTMLAttributes<HTMLDivElement>, `children`> = $props()
+
+  const toolbar_fallback_key = $props.id()
+  let toolbar_pane_key = $derived(viewer_id ?? tab_id ?? toolbar_fallback_key)
+  let structure_toolbar_prefs = $derived(pane_toolbar(toolbar_pane_key))
+  $effect(() => register_toolbar_pane(toolbar_pane_key))
+
+  function structure_toolbar_tool_visible(tool_id: ToolbarToolId): boolean {
+    const forced_hidden = hidden_toolbar_items.includes(tool_id) ||
+      (tool_id === `upload_hpc` && hidden_toolbar_items.includes(`server`))
+    return !structure_toolbar_prefs.collapsed && !forced_hidden &&
+      !structure_toolbar_prefs.hidden.includes(tool_id)
+  }
 
   // ── Initialize Controllers (must be after $props() so closures can capture structure, wrapper, etc.) ──
   settings = create_settings_controller({
@@ -3781,6 +3798,8 @@
     </div>
   {:else if (structure?.sites?.length ?? 0) > 0}
     <StructureToolbar
+      pane_key={toolbar_pane_key}
+      show_info_tool={enable_info_pane && !!structure}
       {camera_has_moved}
       {visible_buttons}
       {hide_extra_tools}
@@ -4039,6 +4058,7 @@
 
         {#if structure}
           <OptimizationPane
+            show_toggle={structure_toolbar_tool_visible(`optimize`)}
             bind:structure
             bind:pane_open={optimization_pane_open}
             on_push_undo={push_to_undo}
@@ -4629,6 +4649,7 @@
         <!-- === Info / Export / Settings === -->
         {#if enable_info_pane && structure}
           <StructureInfoPane
+            show_toggle={structure_toolbar_tool_visible(`info`)}
             {structure}
             bind:pane_open={info_pane_open}
             {selected_sites}
@@ -4640,6 +4661,7 @@
         <!-- ExportPane is now embedded inside IOPane -->
 
         <StructureControls
+          show_toggle={structure_toolbar_tool_visible(`controls`)}
           bind:controls_open
           bind:scene_props
           bind:lattice_props

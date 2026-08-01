@@ -20,6 +20,7 @@
     atom_count_thresholds = [50, 500],
     toggle_props = {},
     pane_props = {},
+    show_toggle = true,
     highlighted_sites = $bindable([]),
     selected_sites = $bindable([]),
     symmetry_data = null,
@@ -30,6 +31,7 @@
     atom_count_thresholds?: [number, number] // if atom count is less than min_threshold, show sites, if atom count is greater than max_threshold, hide sites. in between, show sites behind a toggle button.
     toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]
     pane_props?: ComponentProps<typeof DraggablePane>[`pane_props`]
+    show_toggle?: boolean
     highlighted_sites?: number[] // Sites highlighted from Wyckoff table hover
     selected_sites?: number[] // Sites selected from Wyckoff table click
     symmetry_data?: MoyoDataset | null // Symmetry analysis data (bindable for external access)
@@ -325,6 +327,7 @@
 
 <DraggablePane
   bind:show={pane_open}
+  {show_toggle}
   max_width="24em"
   toggle_props={{
     class: `structure-info-toggle`,
