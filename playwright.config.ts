@@ -20,7 +20,12 @@ export default {
     // build doc chunks on a cold checkout, so allow extra headroom.
     timeout: 180_000,
   },
-  workers: CI ? 4 : 8,
+  // Each desktop page owns a live SwiftShader/WebGL renderer in CI. Running
+  // four of them concurrently starves navigation and pointer dispatch badly
+  // enough that otherwise-fast tests spend their whole timeout waiting for a
+  // stable element. Serial CI execution is faster overall because it avoids
+  // retries while local hardware runs remain parallel.
+  workers: CI ? 1 : 8,
   // The launcher smoke test renders a live WebGL canvas; the FIRST test on a
   // cold CI worker (SwiftShader + WASM + dev-server warm-up) intermittently
   // exceeds the 20s canvas-visible wait, while later tests pass warm. Retry in

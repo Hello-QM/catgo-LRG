@@ -55,5 +55,15 @@ export const stream_file_to_buffer = async (
 
   on_progress?.({ bytes_read: uint8array.length, total_size, progress: 1.0 }) // Report completion
 
-  return uint8array.slice().buffer
+  // workspace.fs.readFile normally returns an exact ArrayBuffer view. Reuse
+  // it instead of copying hundreds of MB before the XYZ decoder runs.
+  if (
+    uint8array.byteOffset === 0 &&
+    uint8array.byteLength === uint8array.buffer.byteLength &&
+    uint8array.buffer instanceof ArrayBuffer
+  ) return uint8array.buffer
+  return uint8array.buffer.slice(
+    uint8array.byteOffset,
+    uint8array.byteOffset + uint8array.byteLength,
+  ) as ArrayBuffer
 }

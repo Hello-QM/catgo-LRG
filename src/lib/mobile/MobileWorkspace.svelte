@@ -21,6 +21,7 @@
   import BioViewerToggle from '$lib/structure/bio/BioViewerToggle.svelte'
   import { detect_bio } from '$lib/structure/bio/detect'
   import Trajectory from '$lib/trajectory/Trajectory.svelte'
+  import type { TrajectorySaveHandler } from '$lib/trajectory'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import { parse_any_structure } from '$lib/structure/parsers/dispatch'
   import { is_trajectory_file, parse_trajectory_data } from '$lib/trajectory/parse'
@@ -87,6 +88,8 @@
   // (Trajectory.svelte keeps the container proxy-exempt for the same reason).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let trajectory = $state.raw<any>(undefined)
+  let trajectory_save_handler = $state.raw<TrajectorySaveHandler | null>(null)
+  let trajectory_dirty = $state(false)
   // Where the open structure came from, so Save knows to write it back.
   let remote_origin = $state<{ path: string; filename: string } | null>(null)
   let local_filename = $state(`structure.vasp`)
@@ -318,7 +321,10 @@
     }, 6000)
     return () => clearTimeout(t)
   })
-  const can_save = $derived(has_structure && (saveable_structure != null || structure != null))
+  const can_save = $derived(
+    (has_structure && (saveable_structure != null || structure != null)) ||
+      trajectory_save_handler !== null,
+  )
 
   function show_loaded(filename: string, origin: { path: string } | null): void {
     local_filename = filename
@@ -344,6 +350,8 @@
         const traj = await parse_trajectory_data(content, filename)
         if (traj) {
           trajectory = traj
+          trajectory_save_handler = null
+          trajectory_dirty = false
           structure = undefined
           saveable_structure = undefined
           show_loaded(filename, origin)
@@ -362,6 +370,8 @@
       bio_viewer = true
       structure = undefined
       trajectory = undefined
+      trajectory_save_handler = null
+      trajectory_dirty = false
       saveable_structure = undefined
       show_loaded(filename, origin)
       return
@@ -373,6 +383,8 @@
     }
     structure = parsed
     trajectory = undefined
+    trajectory_save_handler = null
+    trajectory_dirty = false
     saveable_structure = undefined
     show_loaded(filename, origin)
   }
@@ -431,6 +443,8 @@
   function on_db_import(s: any): void {
     structure = s
     trajectory = undefined
+    trajectory_save_handler = null
+    trajectory_dirty = false
     saveable_structure = undefined
     local_filename = `POSCAR`
     remote_origin = null
@@ -441,6 +455,32 @@
 
   // ── Save: write back to the cluster, or download locally ──
   async function save(): Promise<void> {
+    if (trajectory_save_handler) {
+      try {
+        const saved = await trajectory_save_handler()
+        if (remote_origin && session_id) {
+          if (/\.(gz|bz2|xz|zst)$/i.test(remote_origin.path)) {
+            throw new Error(`Compressed trajectories cannot be overwritten on mobile yet. Export the edited extXYZ instead.`)
+          }
+          const result = await writeRemoteFile(session_id, remote_origin.path, saved.content)
+          if (!result.success) throw new Error(result.message || `Remote trajectory save failed`)
+          save_msg = t(`mobile.saved_to`, { path: remote_origin.path })
+        } else {
+          const blob = new Blob([saved.content], { type: `chemical/x-xyz` })
+          const url = URL.createObjectURL(blob)
+          const anchor = document.createElement(`a`)
+          anchor.href = url
+          anchor.download = saved.filename || `trajectory.extxyz`
+          anchor.click()
+          URL.revokeObjectURL(url)
+          save_msg = t(`mobile.downloaded`, { filename: anchor.download })
+        }
+        trajectory_dirty = false
+      } catch (error) {
+        save_msg = error instanceof Error ? error.message : String(error)
+      }
+      return
+    }
     const s = saveable_structure ?? structure
     if (!s) return
     let text: string
@@ -465,6 +505,12 @@
       URL.revokeObjectURL(url)
       save_msg = t(`mobile.downloaded`, { filename: a.download })
     }
+  }
+
+  function guard_mobile_trajectory_unload(event: BeforeUnloadEvent): void {
+    if (!trajectory_dirty) return
+    event.preventDefault()
+    event.returnValue = ``
   }
 
   // Eject ONE cluster from the workspace (its russh session stays alive on the
@@ -559,6 +605,8 @@
   const show_structure = $derived(mode === `structure` || mode === `split-h` || mode === `split-v`)
   const show_terminal = $derived(mode === `terminal` || mode === `split-h` || mode === `split-v`)
 </script>
+
+<svelte:window onbeforeunload={guard_mobile_trajectory_unload} />
 
 <input
   bind:this={file_input}
@@ -697,6 +745,11 @@
         {#if trajectory}
           <Trajectory
             bind:trajectory
+            filename={local_filename}
+            on_trajectory_change={() => (trajectory_dirty = true)}
+            on_save_handler_change={(handler) => {
+              trajectory_save_handler = handler
+            }}
             fullscreen_toggle={false}
             structure_props={{
               show_controls: true,

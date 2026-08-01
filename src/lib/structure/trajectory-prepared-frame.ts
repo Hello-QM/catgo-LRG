@@ -37,10 +37,32 @@ export class PreparedFrameBudgetRefusalError extends Error {
   }
 }
 
+/**
+ * A decoded lookahead frame no longer shares the current packet topology.
+ *
+ * Variable-N / species-changing trajectories support this legitimately via
+ * Trajectory.svelte's materialized slow path. The fixed-topology prepared
+ * pipeline must stop prefetching at that boundary without surfacing a viewer
+ * error.
+ */
+export class PreparedFrameTopologyChangeError extends Error {
+  override readonly name = `PreparedFrameTopologyChangeError`
+
+  constructor(frame_idx: number) {
+    super(`Trajectory frame ${frame_idx} changed topology`)
+  }
+}
+
 export function is_prepared_frame_budget_refusal(
   error: unknown,
 ): error is PreparedFrameBudgetRefusalError {
   return error instanceof PreparedFrameBudgetRefusalError
+}
+
+export function is_prepared_frame_topology_change(
+  error: unknown,
+): error is PreparedFrameTopologyChangeError {
+  return error instanceof PreparedFrameTopologyChangeError
 }
 
 export function same_prepared_frame_key(

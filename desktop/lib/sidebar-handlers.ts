@@ -12,6 +12,10 @@ import { parse_and_open_structure_window, open_doc_window } from './popout-manag
 import { build_doc_ref } from '$lib/viewer/doc-ref'
 import { resolve_open_target, type OpenTarget } from '$lib/state.svelte'
 import { show_toast } from '$lib/toast-state.svelte'
+import {
+  decompress_binary_structure_data,
+  is_binary_structure_filename,
+} from '$lib/io/decompress'
 
 export interface SidebarHandlerDeps {
   get_active_ts: () => StructureTabState | null
@@ -29,6 +33,15 @@ export interface SidebarHandlerDeps {
   set_active_tab_id: (id: string) => void
   /** Create a fresh structure tab and return its ids (App owns the side effect). */
   open_new_structure_tab: () => { tab_id: string; leaf_id: string }
+}
+
+function base64_to_array_buffer(data: string): ArrayBuffer {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let idx = 0; idx < binary.length; idx++) {
+    bytes[idx] = binary.charCodeAt(idx)
+  }
+  return bytes.buffer
 }
 
 export function handle_sidebar_load(deps: SidebarHandlerDeps, content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) {
@@ -88,14 +101,32 @@ export async function handle_terminal_open_file(deps: SidebarHandlerDeps, file_p
     const { is_structure_file } = await import(`$lib/structure/parse`)
     const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
     if (is_structure_file(filename) || is_trajectory_file(filename)) {
-      const { readRemoteFile } = await import(`$lib/api/hpc`)
-      const result = await readRemoteFile(session_id, file_path)
-      if (result.success && result.content !== undefined) {
+      let file_content: string | ArrayBuffer | undefined
+      let read_success = false
+      if (is_binary_structure_filename(filename)) {
+        const { readRemoteBinaryFile } = await import(`$lib/api/hpc`)
+        const result = await readRemoteBinaryFile(session_id, file_path)
+        read_success = result.success
+        if (result.success) {
+          const decoded = await decompress_binary_structure_data(
+            base64_to_array_buffer(result.data),
+            filename,
+          )
+          file_content = decoded.content
+          filename = decoded.filename
+        }
+      } else {
+        const { readRemoteFile } = await import(`$lib/api/hpc`)
+        const result = await readRemoteFile(session_id, file_path)
+        read_success = result.success
+        file_content = result.content
+      }
+      if (read_success && file_content !== undefined) {
         // Switch to the first structure tab and route by the open target.
         const struct_tab = deps.tabs.find(t => t.type === `structure`)
         if (struct_tab) {
           deps.set_active_tab_id(struct_tab.id)
-          handle_sidebar_load(deps, result.content, filename, file_path, session_id)
+          handle_sidebar_load(deps, file_content, filename, file_path, session_id)
         } else {
           // No structure tab exists (e.g. a terminal-only tab is active).
           // Honor the user's open target: only an explicit Window choice pops
@@ -103,7 +134,7 @@ export async function handle_terminal_open_file(deps: SidebarHandlerDeps, file_p
           // split, so both collapse to "new tab").
           const target = resolve_open_target(deps.get_open_target(), false)
           if (target.kind === `window`) {
-            await parse_and_open_structure_window(result.content, filename, deps.is_tauri, target.mode === `overwrite`)
+            await parse_and_open_structure_window(file_content, filename, deps.is_tauri, target.mode === `overwrite`)
             return
           }
           const n = deps.open_new_structure_tab()
@@ -111,10 +142,10 @@ export async function handle_terminal_open_file(deps: SidebarHandlerDeps, file_p
           if (n.leaf_id && made?.type === `structure`) {
             const origin = session_id ? { session_id, file_path } : null
             const local_path = session_id ? null : file_path
-            await deps.process_file_content(n.tab_id, result.content, filename, n.leaf_id, origin, local_path)
+            await deps.process_file_content(n.tab_id, file_content, filename, n.leaf_id, origin, local_path)
           } else {
             // Tab cap reached (create_tab no-oped) — popout as a last resort.
-            await parse_and_open_structure_window(result.content, filename, deps.is_tauri)
+            await parse_and_open_structure_window(file_content, filename, deps.is_tauri)
           }
         }
       }

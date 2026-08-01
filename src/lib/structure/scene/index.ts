@@ -26,7 +26,9 @@ export {
   clean_measured_sites,
   is_atom_pickable as is_atom_pickable_pure,
   build_highlight_entries,
+  resolve_packet_bond,
 } from './picking'
+export type { PacketBond } from './picking'
 
 export { assert_render_packet, diff_render_packet } from './render-packet'
 export type {

@@ -3,7 +3,12 @@ import type { AnyStructure } from '$lib'
 import type { FrameLoader, TrajectoryType } from '$lib/trajectory'
 import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
 import { create_frame_request_loader } from '$lib/trajectory/frame-loading'
-import { scale_structure_geometry, validate_uniform_topology } from '$lib/trajectory/operations'
+import {
+  apply_trajectory_edit_op_to_frame,
+  scale_structure_geometry,
+  structures_share_topology,
+  validate_uniform_topology,
+} from '$lib/trajectory/operations'
 
 function structure(elements = [`C`, `H`]): AnyStructure {
   return {
@@ -244,6 +249,40 @@ describe(`trajectory pane isolation`, () => {
       ],
     }
     expect(validate_uniform_topology(trajectory)).toMatch(/different atom count or element order/)
+  })
+
+  it(`detects saved middle-frame atom-count and element-order changes`, () => {
+    const base = structure([`C`, `H`, `H`])
+    const added = structure([`C`, `H`, `H`, `O`])
+    const replaced = structure([`C`, `O`, `H`])
+    const same = structure([`C`, `H`, `H`])
+
+    expect(structures_share_topology(base, same)).toBe(true)
+    expect(structures_share_topology(base, added)).toBe(false)
+    expect(structures_share_topology(base, replaced)).toBe(false)
+  })
+
+  it(`drops a stale compact position packet after adding a trajectory atom`, () => {
+    const original = {
+      structure: structure([`C`, `H`]),
+      step: 0,
+      position_data: {
+        step: 0,
+        positions: new Float32Array(6),
+        forces: null,
+        lattice: null,
+      },
+    }
+
+    const edited = apply_trajectory_edit_op_to_frame(original, {
+      kind: `add`,
+      element: `O`,
+      position: [1, 2, 3],
+    })
+
+    expect(edited.structure.sites).toHaveLength(3)
+    expect(edited.position_data).toBeUndefined()
+    expect(original.position_data.positions).toHaveLength(6)
   })
 
   it(`scales real geometry and lattice`, () => {

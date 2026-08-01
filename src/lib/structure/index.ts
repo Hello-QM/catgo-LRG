@@ -201,7 +201,14 @@ export interface BondDistanceRule {
 // Manually added bond (via bond editing tool)
 export type ManualBond = { site_idx_1: number; site_idx_2: number; id: string }
 // Currently selected bond (for highlighting/deletion)
-export type SelectedBond = { type: 'auto' | 'manual'; site_idx_1: number; site_idx_2: number; key: string }
+export type SelectedBond = {
+  type: 'auto' | 'manual'
+  site_idx_1: number
+  site_idx_2: number
+  key: string
+  /** Exact render-packet graph slot, present for packet-path trajectory picks. */
+  graph_idx?: number
+}
 
 export type IdStructure = PymatgenStructure & { id: string }
 export type StructureWithGraph = IdStructure & { graph: Graph }

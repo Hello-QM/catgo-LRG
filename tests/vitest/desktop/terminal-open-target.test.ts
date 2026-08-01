@@ -13,6 +13,12 @@ vi.mock(`../../../desktop/lib/popout-manager`, () => ({
 }))
 vi.mock(`$lib/api/hpc`, () => ({
   readRemoteFile: vi.fn().mockResolvedValue({ success: true, content: `POSCAR-content` }),
+  readRemoteBinaryFile: vi.fn().mockResolvedValue({
+    success: true,
+    data: btoa(`- of Ulm\0binary`),
+    mime_type: `application/octet-stream`,
+    size: 15,
+  }),
 }))
 vi.mock(`$lib/structure/parse`, () => ({ is_structure_file: () => true }))
 vi.mock(`$lib/trajectory/parse`, () => ({ is_trajectory_file: () => false }))
@@ -122,5 +128,20 @@ describe(`handle_terminal_open_file with an existing structure tab`, () => {
     expect(deps.place_single).toHaveBeenCalledOnce()
     expect(deps.open_new_structure_tab).not.toHaveBeenCalled()
     expect(popout).not.toHaveBeenCalled()
+  })
+
+  test(`keeps a small ASE trajectory binary`, async () => {
+    const deps = make_deps({ kind: `split`, mode: `overwrite` } as OpenTarget, {
+      with_structure_tab: true,
+    })
+    await handle_terminal_open_file(
+      deps,
+      `/remote/sample.traj`,
+      `sample.traj`,
+      `sess-9`,
+    )
+    expect(deps.place_single).toHaveBeenCalledOnce()
+    expect(deps.place_single.mock.calls[0][3]).toBe(`sample.traj`)
+    expect(deps.place_single.mock.calls[0][2]).toBeInstanceOf(ArrayBuffer)
   })
 })

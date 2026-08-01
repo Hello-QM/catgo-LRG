@@ -58,7 +58,7 @@
         {
           "command": "catgo.open_with_catgo",
           "group": "navigation@99",
-          "when": "!explorerResourceIsFolder && (resourceFilename =~ /\\.(cif|mcif|mmcif|poscar|vasp|lmp|lammps|lammpstrj|data|dump|pdb|mol|mol2|sdf|inp|restart|traj|xtc|trr|dcd|xyz|extxyz|cube|cub|h5|hdf5)(\\.(gz|bz2|xz|zst))?$/i || resourceFilename =~ /(^|[._-])(poscar|contcar|potcar|incar|kpoints|outcar|xdatcar|chgcar|chgdiff|aeccar|locpot|elfcar|parchg)([._-]|$)/i || resourceFilename =~ /vasprun.*\\.xml$/i)"
+          "when": "!explorerResourceIsFolder && (resourceFilename =~ /\\.(cif|mcif|mmcif|poscar|vasp|lmp|lammps|lammpstrj|data|dump|pdb|mol|mol2|sdf|in|inp|restart|orcainp|gjf|com|out|log|cell|fdf|dat|yaml|yml|json|traj|xtc|trr|dcd|xyz|extxyz|cube|cub|h5|hdf5)(\\.(gz|bz2|xz|zst))?$/i || resourceFilename =~ /(^|[._-])(poscar|contcar|potcar|incar|kpoints|outcar|xdatcar|chgcar|chgdiff|aeccar|locpot|elfcar|parchg|stru)([._-]|$)/i || resourceFilename =~ /vasprun.*\\.xml$/i)"
         }
       ]
     },
@@ -68,7 +68,10 @@
         "displayName": "CatGo Viewer",
         "selector": [
           {
-            "filenamePattern": "*.{traj,h5,hdf5,dcd,xtc,trr}"
+            "filenamePattern": "*.{traj,h5,hdf5,dcd,xtc,trr,dump,lammpstrj}"
+          },
+          {
+            "filenamePattern": "*.{traj,h5,hdf5,dump,lammpstrj,xyz,extxyz}.{gz,gzip}"
           },
           {
             "filenamePattern": "*.{cif,xyz,extxyz,poscar}.gz"
@@ -77,13 +80,28 @@
             "filenamePattern": "*{structure,material,crystal,lattice,geometry}.{json,yaml,yml}.gz"
           },
           {
-            "filenamePattern": "*{xdatcar,contcar,outcar}"
+            "filenamePattern": "*{XDATCAR,CONTCAR,OUTCAR,xdatcar,contcar,outcar}"
+          },
+          {
+            "filenamePattern": "*{XDATCAR,OUTCAR,xdatcar,outcar,vasprun}*.{gz,gzip}"
+          },
+          {
+            "filenamePattern": "*.{dump,lammpstrj}"
+          },
+          {
+            "filenamePattern": "*vasprun*.xml"
           },
           {
             "filenamePattern": "*.{xyz,extxyz,cif,poscar,mol2,pdb}"
           },
           {
             "filenamePattern": "*poscar*"
+          },
+          {
+            "filenamePattern": "*{trajectory,traj,frames,relax,npt,nvt,nve}*.json"
+          },
+          {
+            "filenamePattern": "*{trajectory,traj,frames,relax,npt,nvt,nve}*.json.{gz,gzip}"
           }
         ],
         "priority": "default"
@@ -517,7 +535,7 @@
         },
         "catgo.trajectory.display_mode": {
           "type": "string",
-          "default": "structure+scatter",
+          "default": "structure",
           "description": "Visualization mode for trajectory data",
           "enum": [
             "structure+scatter",

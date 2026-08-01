@@ -25,6 +25,7 @@ interface BackendFrame {
   frame_number: number
   elements: string[]
   positions: number[][]
+  forces?: number[][] | null
   comment?: string
   properties?: Record<string, number>
   // Present for periodic formats (XDATCAR): the 3x3 cell for this frame.
@@ -88,6 +89,7 @@ function backend_frame_to_trajectory_frame(bf: BackendFrame): TrajectoryFrame {
     lattice ? [true, true, true] : undefined,
     bf.frame_number,
     { comment: bf.comment ?? ``, ...(bf.properties ?? {}) },
+    bf.forces ?? undefined,
   )
 }
 
@@ -103,18 +105,31 @@ function positions_url(path: string, start: number, count: number): string {
     `&start=${start}&count=${count}`
 }
 
-/** Files the backend trajectory streamer can index. XDATCAR is matched by
- *  name (VASP trajectories usually have no extension). */
-const STREAMABLE_RE = /\.(xyz|extxyz|lammpstrj|traj)$|xdatcar/i
+/** Files the shared backend streamer can index with format-specific random
+ *  access. VASP files are primarily name-based because they often have no
+ *  extension. Gaussian .out/.log files are content-validated by the backend. */
+const STREAMABLE_RE =
+  /\.(?:xyz|extxyz|dump|lammpstrj|traj|h5|hdf5|out|log)$|(?:^|[._-])(?:xdatcar|outcar)(?:[._-]|$)|vasprun.*\.xml$/i
+const STREAM_COMPRESSION_RE = /\.(?:gz|gzip|bz2|xz)$/i
 
-/** XDATCAR parses ~100× its byte size into JS site objects (fractional text →
- *  nested objects), so it must stream at a much lower size than text XYZ — a
- *  2-3 MB XDATCAR already balloons to hundreds of MB and OOMs the webview when
- *  a second one is opened. Stream XDATCAR above 1 MB; keep the 20 MB default
- *  for the lighter text formats. */
-const XDATCAR_STREAM_MIN_BYTES = 1 * 1024 * 1024
+function streamable_filename(filename: string): boolean {
+  let base = filename
+  while (STREAM_COMPRESSION_RE.test(base)) base = base.replace(STREAM_COMPRESSION_RE, ``)
+  if (/\.json$/i.test(base)) {
+    return /(?:^|[._-])(?:trajectory|traj|frames|relax|npt|nvt|nve|md)(?:[._-]|$)/i.test(base)
+  }
+  return STREAMABLE_RE.test(base)
+}
+
+/** Use the same file-backed indexing policy for every trajectory family.
+ *  Even a 7-8 MiB variable-topology extXYZ can contain thousands of frames,
+ *  while a compressed file can inflate far beyond its on-disk size. */
+const STREAM_MIN_BYTES = 1 * 1024 * 1024
+const COMPRESSED_STREAM_MIN_BYTES = 256 * 1024
 function stream_min_bytes_for(filename: string): number {
-  return /xdatcar/i.test(filename) ? XDATCAR_STREAM_MIN_BYTES : 20 * 1024 * 1024
+  return STREAM_COMPRESSION_RE.test(filename)
+    ? COMPRESSED_STREAM_MIN_BYTES
+    : STREAM_MIN_BYTES
 }
 
 export interface StreamProbe {
@@ -137,7 +152,7 @@ export async function probe_streamable_trajectory(
   filename: string,
   min_bytes?: number,
 ): Promise<StreamProbe | null> {
-  if (!STREAMABLE_RE.test(filename)) return null
+  if (!streamable_filename(filename)) return null
   const limit = min_bytes ?? stream_min_bytes_for(filename)
   try {
     const resp = await fetch(
@@ -168,7 +183,7 @@ export async function materialize_remote_if_large(
   min_bytes?: number,
 ): Promise<string | null> {
   const limit = min_bytes ?? stream_min_bytes_for(filename)
-  if (!STREAMABLE_RE.test(filename) || (size_bytes ?? 0) <= limit) return null
+  if (!streamable_filename(filename) || (size_bytes ?? 0) <= limit) return null
   try {
     const { materializeRemoteTrajectory } = await import('$lib/api/hpc')
     const mat = await materializeRemoteTrajectory(session_id, remote_path)
@@ -190,7 +205,7 @@ export async function materialize_file_if_large(
   min_bytes?: number,
 ): Promise<string | null> {
   const limit = min_bytes ?? stream_min_bytes_for(file.name)
-  if (!STREAMABLE_RE.test(file.name) || file.size <= limit) return null
+  if (!streamable_filename(file.name) || file.size <= limit) return null
   try {
     const fd = new FormData()
     fd.append('file', file, file.name)
@@ -215,12 +230,18 @@ export class RemoteFrameLoader implements FrameLoader {
     private readonly path: string,
     private readonly total: number,
     private readonly n_atoms = 1,
+    private readonly compact_positions = true,
   ) {
     this.cache_plan = remote_frame_cache_plan(n_atoms)
   }
 
   fork(): FrameLoader {
-    return new RemoteFrameLoader(this.path, this.total, this.n_atoms)
+    return new RemoteFrameLoader(
+      this.path,
+      this.total,
+      this.n_atoms,
+      this.compact_positions,
+    )
   }
 
   // deno-lint-ignore require-await
@@ -254,26 +275,37 @@ export class RemoteFrameLoader implements FrameLoader {
         const version = view.getUint32(4, true)
         const frame_count = view.getUint32(8, true)
         const n_atoms = view.getUint32(12, true)
-        if (magic !== `CGTP` || version !== 1 || n_atoms !== this.n_atoms) {
+        if (
+          magic !== `CGTP` || ![1, 2].includes(version) ||
+          n_atoms !== this.n_atoms
+        ) {
           throw new Error(
             `bad position packet ${magic} v${version} (${n_atoms} atoms)`,
           )
         }
         let offset = 16
         for (let idx = 0; idx < frame_count; idx++) {
-          if (offset + 80 > view.byteLength) throw new Error(`short frame header`)
+          const frame_header_bytes = version === 2 ? 84 : 80
+          if (offset + frame_header_bytes > view.byteLength) {
+            throw new Error(`short frame header`)
+          }
           const frame_number = view.getUint32(offset, true)
-          const flags = view.getUint32(offset + 4, true)
+          const frame_n_atoms = version === 2
+            ? view.getUint32(offset + 4, true)
+            : n_atoms
+          const flags_offset = version === 2 ? offset + 8 : offset + 4
+          const lattice_offset = version === 2 ? offset + 12 : offset + 8
+          const flags = view.getUint32(flags_offset, true)
           const has_lattice = (flags & 1) !== 0
           const lattice_values = new Array<number>(9)
           for (let value_idx = 0; value_idx < 9; value_idx++) {
             lattice_values[value_idx] = view.getFloat64(
-              offset + 8 + value_idx * 8,
+              lattice_offset + value_idx * 8,
               true,
             )
           }
-          offset += 80
-          const position_count = n_atoms * 3
+          offset += frame_header_bytes
+          const position_count = frame_n_atoms * 3
           const position_bytes = position_count * Float32Array.BYTES_PER_ELEMENT
           if (offset + position_bytes > view.byteLength) {
             throw new Error(`short position payload`)
@@ -350,6 +382,7 @@ export class RemoteFrameLoader implements FrameLoader {
     frame_number: number,
   ): Promise<FramePositionData | null> {
     if (frame_number < 0 || frame_number >= this.total) return null
+    if (!this.compact_positions) return null
     if (!this.cache.has(frame_number)) {
       await this.fetch_chunk(this.chunk_start(frame_number))
     }
@@ -408,7 +441,12 @@ export async function load_remote_trajectory(
   const fr_data = fr_resp.ok ? await fr_resp.json() : { frames: [] }
   const frames: TrajectoryFrame[] = (fr_data.frames ?? [])
     .map(backend_frame_to_trajectory_frame)
-  const loader = new RemoteFrameLoader(path, total, idx.n_atoms ?? 1)
+  const loader = new RemoteFrameLoader(
+    path,
+    total,
+    idx.n_atoms ?? 1,
+    true,
+  )
 
   // Reading ASE metadata walks every frame and contends with position packets.
   // Keep it genuinely lazy: Structure-only playback never starts the scan;

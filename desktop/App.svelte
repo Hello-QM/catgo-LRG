@@ -1555,6 +1555,7 @@
     }
     p.selected_sites = []
     p.current_step_idx = 0
+    p.trajectory_save_handler = null
     p.modified = false
     clear_modified_if_sole_pane(modified, ts.root, tab_id, leaf_id)
     p.remote_origin = remote_origin
@@ -2514,7 +2515,9 @@
                   {#if pane.remote_origin?.session_id}
                     <option value="hpc">{t(`app.hpc`)}</option>
                   {/if}
-                  <option value="project">{t(`app.catgo_db`)}</option>
+                  {#if !pane.trajectory}
+                    <option value="project">{t(`app.catgo_db`)}</option>
+                  {/if}
                 </select>
                 {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -2574,6 +2577,13 @@
               bind:selected_sites={pane.selected_sites}
               bind:current_step_idx={pane.current_step_idx}
               on_file_load={create_on_file_load(tab.id, leaf.id)}
+              on_trajectory_change={() => {
+                pane.modified = true
+                modified.mark(tab.id)
+              }}
+              on_save_handler_change={(handler) => {
+                pane.trajectory_save_handler = handler
+              }}
               fullscreen_toggle={false}
               allow_file_drop={false}
               structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format }}

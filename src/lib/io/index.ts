@@ -1,5 +1,9 @@
 import type { FileInfo } from '$lib'
 import { load_binary_traj } from '$lib/trajectory/parse'
+import {
+  decompress_binary_structure_data,
+  is_binary_structure_filename,
+} from './decompress'
 
 export * from './decompress'
 export * from './export'
@@ -16,16 +20,32 @@ export async function handle_url_drop(
   const file_info: FileInfo = JSON.parse(json_data)
   if (!file_info.url) return false
 
-  await load_from_url(file_info.url, callback)
+  await load_from_url(file_info.url, callback, file_info.name)
   return true
 }
 
 export async function load_from_url(
   url: string,
   callback: (content: string | ArrayBuffer, filename: string) => Promise<void> | void,
+  filename_hint?: string,
 ): Promise<void> {
-  const url_basename = url.split(`/`).pop() || url
+  // Vite dev URLs retain resource queries (for example `sample.traj?url`).
+  // Extension detection must use the pathname only or binary trajectories
+  // fall through to `resp.text()` and the parser reports "Unsupported text
+  // format". Hashes are likewise not part of a filename.
+  const url_path = url.split(/[?#]/, 1)[0]
+  const hinted_path = filename_hint?.split(/[?#]/, 1)[0]
+  const encoded_basename = hinted_path?.split(/[\\/]/).pop()
+    || url_path.split(`/`).pop()
+    || url_path
+  let url_basename = encoded_basename
+  try {
+    url_basename = decodeURIComponent(encoded_basename)
+  } catch {
+    // Keep the literal basename for malformed/legacy URLs.
+  }
   const ext = url_basename.split(`.`).pop()?.toLowerCase() || ``
+  const binary_structure = is_binary_structure_filename(url_basename)
 
   const extract_filename = (headers?: Headers): string => {
     const fallback = url_basename
@@ -53,19 +73,29 @@ export async function load_from_url(
     if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`)
     const filename = extract_filename(resp.headers)
 
-    // Handle gzipped files with proper content-encoding detection
+    // Handle gzipped files from both ordinary servers and static asset hosts.
+    // Some hosts set Content-Encoding: gzip for a literal `.gz` file but Fetch
+    // still exposes the compressed bytes. Inspect the payload instead of
+    // assuming the header means the browser already decoded it.
     if (ext === `gz` || ext === `gzip`) {
-      if (resp.headers.get(`content-encoding`) === `gzip`) {
-        // Browser automatically decompressed it, so it's text
-        return callback(await resp.text(), filename)
-      } else {
-        // Need to decompress manually
-        const { decompress_data } = await import(`./decompress`)
-        const buffer = await resp.arrayBuffer()
-        const content = await decompress_data(buffer, `gzip`)
-        // Remove .gz extension when manually decompressing
-        return callback(content, filename.replace(/\.gz$/, ``))
+      const buffer = await resp.arrayBuffer()
+      const bytes = new Uint8Array(buffer, 0, Math.min(2, buffer.byteLength))
+      const still_compressed = bytes[0] === 0x1f && bytes[1] === 0x8b
+      const decoded_filename = filename.replace(/\.(?:gz|gzip)$/i, ``)
+
+      if (binary_structure) {
+        if (still_compressed) {
+          const decoded = await decompress_binary_structure_data(buffer, filename)
+          return callback(decoded.content, decoded.filename)
+        }
+        return callback(buffer, decoded_filename)
       }
+
+      if (still_compressed) {
+        const { decompress_data } = await import(`./decompress`)
+        return callback(await decompress_data(buffer, `gzip`), decoded_filename)
+      }
+      return callback(new TextDecoder().decode(buffer), decoded_filename)
     }
 
     // For H5 files, always load as binary regardless of signature

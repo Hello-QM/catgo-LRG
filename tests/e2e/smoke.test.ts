@@ -12,14 +12,14 @@ import { expect, test } from '@playwright/test'
 // Avoid `networkidle` (HMR websocket keeps the connection pool busy).
 
 test(`launcher renders the sample structure preview`, async ({ page }) => {
-  await page.goto(`/`, { waitUntil: `load` })
+  await page.goto(`/`, { waitUntil: `domcontentloaded` })
   await expect(page.getByText(`Water`, { exact: true })).toBeVisible({ timeout: 20_000 })
   const canvas = page.locator(`canvas`).first()
   await expect(canvas).toBeVisible({ timeout: 20_000 })
 })
 
 test(`opening the sample structure mounts the editor with a live canvas`, async ({ page }) => {
-  await page.goto(`/`, { waitUntil: `load` })
+  await page.goto(`/`, { waitUntil: `domcontentloaded` })
   const card = page.getByRole(`button`, { name: /^Structure viewer/ })
   await card.click({ timeout: 20_000 })
 
@@ -36,7 +36,7 @@ test(`opening the sample structure mounts the editor with a live canvas`, async 
 })
 
 test(`layout round-trip keeps the viewer canvas alive`, async ({ page }) => {
-  await page.goto(`/`, { waitUntil: `load` })
+  await page.goto(`/`, { waitUntil: `domcontentloaded` })
   await page.getByRole(`button`, { name: /^Structure viewer/ }).click({ timeout: 20_000 })
   await expect(page.locator(`canvas`).first()).toBeVisible({ timeout: 20_000 })
 

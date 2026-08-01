@@ -101,7 +101,7 @@ async function load_real_trajectory(
     }
   })
   console.log(`[${label}] opening app`)
-  await page.goto(`/`, { waitUntil: `load` })
+  await page.goto(`/`, { waitUntil: `domcontentloaded` })
   const import_card = page.locator(
     `button.import-card.add-own-card`,
     { hasText: /Open file/i },

@@ -16,6 +16,7 @@ import {
   read_file,
   render,
   should_auto_render,
+  VSCODE_TRAJECTORY_STREAM_THRESHOLD,
 } from '../src/extension'
 import type { FileData } from '../src/webview/main'
 
@@ -259,6 +260,48 @@ describe(`CatGo Extension`, () => {
     expect(mock_vscode.workspace.fs.readFile).not.toHaveBeenCalled()
   })
 
+  test(`file reading: a 300 MB XYZ trajectory stays out of webview bootstrap HTML`, async () => {
+    const file_size = 300 * 1024 * 1024
+    const file_path = `/test/dump.xyz`
+    expect(file_size).toBeGreaterThan(VSCODE_TRAJECTORY_STREAM_THRESHOLD)
+    mock_vscode.workspace.fs.stat.mockResolvedValue({ size: file_size, type: 1 })
+
+    const result = await read_file(file_path)
+
+    expect(result).toEqual({
+      filename: `dump.xyz`,
+      content: `LARGE_FILE:${file_path}:${file_size}`,
+      is_base64: false,
+    })
+    expect(mock_vscode.workspace.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    [`XDATCAR`, false],
+    [`OUTCAR`, false],
+    [`vasprun.xml`, false],
+    [`dump.lammpstrj`, false],
+    [`trajectory.dump`, false],
+    [`trajectory.traj`, true],
+    [`trajectory.h5`, true],
+  ])(
+    `file reading: large indexed format "%s" stays out of webview bootstrap HTML`,
+    async (filename, is_base64) => {
+      const file_size = 50 * 1024 * 1024
+      const file_path = `/test/${filename}`
+      mock_vscode.workspace.fs.stat.mockResolvedValue({ size: file_size, type: 1 })
+
+      const result = await read_file(file_path)
+
+      expect(result).toEqual({
+        filename,
+        content: `LARGE_FILE:${file_path}:${file_size}`,
+        is_base64,
+      })
+      expect(mock_vscode.workspace.fs.readFile).not.toHaveBeenCalled()
+    },
+  )
+
   test.each([
     [`md_npt_300K.traj`, true, true], // ASE binary trajectory
     [`ase-LiMnO2-chgnet-relax.traj`, true, true], // ASE binary trajectory
@@ -400,6 +443,85 @@ describe(`CatGo Extension`, () => {
     await handle_msg(message)
     expect(mock_vscode.window[expected_method as keyof typeof mock_vscode.window])
       .toHaveBeenCalledWith(message.text)
+  })
+
+  test(`large XYZ streaming sends a compact manifest and typed topology verdicts`, async () => {
+    const xyz = [
+      `2`,
+      `energy=-1 Properties=species:S:1:pos:R:3`,
+      `H 0 0 0`,
+      `H 1 0 0`,
+      `1`,
+      `energy=-2 Properties=species:S:1:pos:R:3`,
+      `O 2 0 0`,
+    ].join(`\n`)
+    const bytes = new TextEncoder().encode(xyz)
+    mock_vscode.workspace.fs.stat.mockResolvedValue({
+      size: bytes.byteLength,
+      type: 1,
+    })
+    mock_vscode.workspace.fs.readFile.mockResolvedValue(bytes)
+    const webview = {
+      cspSource: `vscode-webview:`,
+      asWebviewUri: vi.fn(),
+      onDidReceiveMessage: vi.fn(),
+      postMessage: vi.fn(),
+      html: ``,
+    }
+
+    await handle_msg({
+      command: `request_large_file`,
+      request_id: `open`,
+      file_path: `/test/variable.extxyz`,
+    }, webview)
+
+    const opened = webview.postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.command === `large_file_response`)
+    expect(opened).toMatchObject({
+      request_id: `open`,
+      is_parsed: true,
+      supports_frame_streaming: true,
+      parsed_trajectory: {
+        total_frames: 2,
+        is_indexed: true,
+      },
+    })
+    expect(opened.parsed_trajectory.frames).toHaveLength(2)
+    expect(
+      opened.parsed_trajectory.frames[1].position_data.topology_changed,
+    ).toBe(true)
+    expect(opened.parsed_trajectory).not.toHaveProperty(`frame_loader`)
+    expect(opened.parsed_trajectory).not.toHaveProperty(`frame_source_data`)
+    expect(opened.parsed_trajectory).not.toHaveProperty(`plot_metadata_promise`)
+
+    await handle_msg({
+      command: `request_frame_positions`,
+      request_id: `positions`,
+      file_path: `/test/variable.extxyz`,
+      frame_index: 1,
+    }, webview)
+
+    const positions = webview.postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.command === `frame_positions_response`)
+    expect(positions.position_data.positions).toBeInstanceOf(Float32Array)
+    expect(Array.from(positions.position_data.positions)).toEqual([2, 0, 0])
+    expect(positions.position_data.topology_changed).toBe(true)
+
+    await handle_msg({
+      command: `request_plot_metadata`,
+      request_id: `plot`,
+      file_path: `/test/variable.extxyz`,
+      sample_rate: 1,
+    }, webview)
+
+    const plot = webview.postMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.command === `plot_metadata_response`)
+    expect(plot.plot_metadata.map((frame: { properties: { energy: number } }) =>
+      frame.properties.energy
+    )).toEqual([-1, -2])
   })
 
   test.each([

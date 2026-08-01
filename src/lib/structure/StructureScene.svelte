@@ -86,6 +86,7 @@
     get_majority_color,
     toggle_site_selection,
     clean_measured_sites,
+    resolve_packet_bond,
   } from './scene'
 
   // Extend Three.js prototypes with BVH acceleration (only once)
@@ -134,6 +135,8 @@
   import {
     create_prepared_frame_pipeline,
     is_prepared_frame_budget_refusal,
+    is_prepared_frame_topology_change,
+    PreparedFrameTopologyChangeError,
     prepared_frame_window_key,
     prepared_frame_with_replicas,
     same_prepared_frame_key,
@@ -339,9 +342,12 @@
       combined_packet_renderer_owned ? manager_render_packet : null,
     get_packet_boundary_atom_images: () =>
       manager_packet_boundary_atom_images,
+    finish_packet_pointer_gesture,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
+    set_hovered_packet_bond: handle_packet_bond_hover,
     set_hovered_bond_idx: (idx) => {
+      hovered_packet_bond_graph_idx = null
       if (idx === null || idx < 0 || idx >= filtered_bond_pairs.length) {
         if (hovered_bond_key !== null) hovered_bond_key = null
         return
@@ -353,6 +359,49 @@
       }
       hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
     },
+  }
+
+  /**
+   * Finish the exact TrackballControls pointer started by a packet pick.
+   *
+   * VS Code-family webviews can consume pointerup in capture before it reaches
+   * the controls' DOM element. Three.js then keeps `state=ROTATE`, the pointer
+   * entry, capture listeners, and every later hover-only move rotates the
+   * camera. This mirrors TrackballControls.onPointerUp for the mouse path and
+   * is deliberately idempotent: in a normal browser the native pointerup has
+   * already removed the entry by the time this can be called again.
+   */
+  function finish_packet_pointer_gesture(event: PointerEvent) {
+    const controls = orbit_controls as any
+    const pointers = controls?._pointers
+    if (!Array.isArray(pointers)) return
+    const pointer_idx = pointers.findIndex(
+      (pointer: PointerEvent) => pointer.pointerId === event.pointerId,
+    )
+    if (pointer_idx < 0) return
+
+    if (typeof controls._onMouseUp === `function`) controls._onMouseUp()
+    else {
+      controls.state = -1
+      controls.dispatchEvent?.({ type: `end` })
+    }
+    if (controls._pointerPositions) {
+      delete controls._pointerPositions[event.pointerId]
+    }
+    pointers.splice(pointer_idx, 1)
+    if (pointers.length > 0) return
+
+    const dom = controls.domElement as HTMLElement | undefined
+    if (!dom) return
+    try {
+      if (dom.hasPointerCapture?.(event.pointerId)) {
+        dom.releasePointerCapture(event.pointerId)
+      }
+    } catch {
+      // Chromium may auto-release capture before this host-level fallback.
+    }
+    dom.removeEventListener(`pointermove`, controls._onPointerMove)
+    dom.removeEventListener(`pointerup`, controls._onPointerUp)
   }
 
   // Packet-path atom click — same mode routing as the Threlte interaction
@@ -378,11 +427,51 @@
     toggle_selection(site_idx, event)
   }
 
-  // Packet-path bond click — the replica ID pass already resolved the base
-  // bond graph index to a `filtered_bond_pairs` index.
-  function handle_packet_bond_click(bond_idx: number, event: MouseEvent) {
+  // Packet-path bond click/hover. Exact typed trajectory frames intentionally
+  // freeze filtered_bond_pairs, so the packet graph is the source of truth;
+  // filtered_idx is only a compatible fallback for the legacy path.
+  function handle_packet_bond_click(
+    graph_idx: number,
+    filtered_idx: number | null,
+    event: MouseEvent,
+  ) {
     if (bond_drag_active || external_dragging) return
-    select_bond_by_filtered_idx(bond_idx, event)
+    const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+    if (bond) {
+      select_bond(
+        bond.site_idx_1,
+        bond.site_idx_2,
+        bond.kind === BOND_KIND.MANUAL ? `manual` : `auto`,
+        event,
+        graph_idx,
+      )
+      return
+    }
+    if (filtered_idx !== null) select_bond_by_filtered_idx(filtered_idx, event)
+  }
+
+  function handle_packet_bond_hover(
+    graph_idx: number,
+    filtered_idx: number | null,
+  ) {
+    const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+    if (
+      bond && is_atom_pickable(bond.site_idx_1) &&
+      is_atom_pickable(bond.site_idx_2)
+    ) {
+      hovered_packet_bond_graph_idx = graph_idx
+      hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+      return
+    }
+    hovered_packet_bond_graph_idx = null
+    if (filtered_idx === null || filtered_idx < 0 || filtered_idx >= filtered_bond_pairs.length) {
+      hovered_bond_key = null
+      return
+    }
+    const legacy = filtered_bond_pairs[filtered_idx]
+    hovered_bond_key = is_bond_pickable(legacy)
+      ? get_bond_key(legacy.site_idx_1, legacy.site_idx_2)
+      : null
   }
 
   function setup_hover_detection() {
@@ -1975,9 +2064,21 @@
   let bond_pairs: BondPair[] = $state([])
   let active_tooltip = $state<`atom` | `bond` | null>(null)
   let hovered_bond_key = $state<string | null>(null)
+  let hovered_packet_bond_graph_idx = $state<number | null>(null)
 
-  // Clear stale hovered_bond_key when the bond disappears from filtered_bond_pairs
+  // Clear stale hover when the bond disappears from both the exact packet
+  // graph and the legacy object list.
   $effect(() => {
+    if (hovered_bond_key && hovered_packet_bond_graph_idx !== null) {
+      const exact = resolve_packet_bond(
+        manager_render_packet,
+        hovered_packet_bond_graph_idx,
+      )
+      if (
+        exact && get_bond_key(exact.site_idx_1, exact.site_idx_2) === hovered_bond_key
+      ) return
+      hovered_packet_bond_graph_idx = null
+    }
     if (hovered_bond_key && !filtered_bond_pairs.some(b =>
       get_bond_key(b.site_idx_1, b.site_idx_2) === hovered_bond_key
     )) {
@@ -2993,7 +3094,7 @@
       ).then((source) => {
         if (!current_source_request_guard.settle(current_source_request)) return
         if (
-          !source ||
+          !source?.topology_stable ||
           render_packet?.frame.owner !== raw_packet.frame.owner ||
           trajectory_step_idx !== frame_idx
         ) return
@@ -3003,6 +3104,23 @@
           source,
         }
       })
+      return
+    }
+    if (!current_source.topology_stable) {
+      // A variable-N/species frame belongs to Trajectory.svelte's materialized
+      // slow path. Preparing it against the previous fixed packet compares,
+      // for example, 16×3 coordinates with a 48-atom topology and turns a
+      // supported topology transition into a fatal length error.
+      current_source_request_guard.invalidate()
+      latest_prepared_request_key = null
+      latest_prepared_schedule = null
+      prepared_pipeline.clear(raw_packet.frame.owner)
+      pending_prepared_presentation = null
+      trajectory_presentation_committer.clear()
+      prepared_render_packet = null
+      prepared_gpu_positions = null
+      prepared_frame_forces = null
+      prepared_error = null
       return
     }
     current_source_request_guard.invalidate()
@@ -3157,6 +3275,7 @@
       if (
         outcome.status === `failed` &&
         !is_prepared_frame_budget_refusal(outcome.error) &&
+        !is_prepared_frame_topology_change(outcome.error) &&
         outcome.error !== already_reported_error
       ) {
         report_buffer_failure(outcome.error)
@@ -3248,14 +3367,12 @@
                 report_buffer_failure(error)
               },
             )
-            if (!source) {
-              throw reported_decode_error ??
-                new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
-            }
-            if (!source.topology_stable) {
-              throw new Error(
-                `Trajectory frame ${prefetch_idx} changed topology`,
-              )
+            if (!source?.topology_stable) {
+              if (!source) {
+                throw reported_decode_error ??
+                  new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
+              }
+              throw new PreparedFrameTopologyChangeError(prefetch_idx)
             }
             const decoded_key = key_for_source(source)
             if (!same_prepared_frame_key(decoded_key, provisional_key)) {
@@ -6034,22 +6151,36 @@
   let bond_halo_entries = $derived.by(() => {
     const out: Array<{ key: string; matrix: number[] | Float32Array }> = []
     const seen = new Set<string>()
+
+    const exact_packet_matrix = (graph_idx: number, key: string) => {
+      const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+      if (!bond || get_bond_key(bond.site_idx_1, bond.site_idx_2) !== key) return null
+      return compute_bond_transform(bond.pos_1, bond.pos_2)
+    }
     if (hovered_bond_key) {
+      const exact_matrix = hovered_packet_bond_graph_idx === null
+        ? null
+        : exact_packet_matrix(hovered_packet_bond_graph_idx, hovered_bond_key)
       const b = filtered_bond_pairs.find(
         (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === hovered_bond_key,
       )
-      if (b) {
-        out.push({ key: hovered_bond_key, matrix: b.transform_matrix })
+      const matrix = exact_matrix ?? b?.transform_matrix
+      if (matrix) {
+        out.push({ key: hovered_bond_key, matrix })
         seen.add(hovered_bond_key)
       }
     }
     for (const sb of selected_bonds) {
       if (seen.has(sb.key)) continue
+      const exact_matrix = sb.graph_idx === undefined
+        ? null
+        : exact_packet_matrix(sb.graph_idx, sb.key)
       const b = filtered_bond_pairs.find(
         (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === sb.key,
       )
-      if (b) {
-        out.push({ key: sb.key, matrix: b.transform_matrix })
+      const matrix = exact_matrix ?? b?.transform_matrix
+      if (matrix) {
+        out.push({ key: sb.key, matrix })
         seen.add(sb.key)
       }
     }
@@ -6344,27 +6475,32 @@
 
   // Clear hovered bond when external dragging starts to prevent stale highlights
   $effect(() => {
-    if (external_dragging) hovered_bond_key = null
+    if (external_dragging) {
+      hovered_bond_key = null
+      hovered_packet_bond_graph_idx = null
+    }
   })
 
   // Bond hitbox interaction handlers using instanceId.
   // Each logical bond emits 2 hitbox instances (paired stubs / two halves);
   // decode `instanceId >>> 1` to the bond index. Hovering / clicking either
   // half resolves to the same bond.
-  // Shared bond-selection body for the legacy hitbox click AND the Visual T5
-  // packet-path click (which arrives with the filtered index pre-resolved).
-  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
-    if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
-    const bond = filtered_bond_pairs[bond_idx]
-    if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
+  function select_bond(
+    site_idx_1: number,
+    site_idx_2: number,
+    bond_type: `auto` | `manual`,
+    event?: Event,
+    graph_idx?: number,
+  ) {
+    if (!is_atom_pickable(site_idx_1) || !is_atom_pickable(site_idx_2)) return
     event?.stopPropagation?.()
-    const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
-    const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
-    const bond_info = {
+    const bond_key = get_bond_key(site_idx_1, site_idx_2)
+    const bond_info: import('./index').SelectedBond = {
       type: bond_type,
-      site_idx_1: bond.site_idx_1,
-      site_idx_2: bond.site_idx_2,
+      site_idx_1,
+      site_idx_2,
       key: bond_key,
+      ...(graph_idx === undefined ? {} : { graph_idx }),
     }
     if (bond_mode_active) {
       on_bond_select?.(bond_info)
@@ -6375,6 +6511,18 @@
         : [...selected_bonds, bond_info]
     }
     hovered_bond_key = null
+    hovered_packet_bond_graph_idx = null
+  }
+
+  // Shared legacy hitbox selection body. Packet clicks call select_bond()
+  // directly from the exact graph to avoid stale filtered_bond_pairs.
+  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
+    if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
+    const bond = filtered_bond_pairs[bond_idx]
+    if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
+    const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+    const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
+    select_bond(bond.site_idx_1, bond.site_idx_2, bond_type, event)
   }
 
   function handle_bond_hitbox_click(event: any) {
@@ -7032,6 +7180,13 @@
         const target = orbit_controls?.target as Vector3 | undefined
         return target ? vector_to_vec3(target) : null
       },
+      get_trackball_pointer_state: () => {
+        const controls = orbit_controls as any
+        return controls
+          ? { state: controls.state, pointer_count: controls._pointers?.length ?? 0 }
+          : null
+      },
+      get_camera_is_moving: (): boolean => camera_is_moving,
       get override_size(): number { return realtime_position_overrides?.size ?? 0 },
       get vibration_active(): boolean { return vibration_data?.playing === true },
       get is_playing(): boolean {
@@ -7065,6 +7220,17 @@
       get selected_site_id(): number | null {
         const sel = selected_sites
         return sel && sel.length > 0 ? sel[sel.length - 1] : null
+      },
+      get selected_bond_count(): number { return selected_bonds.length },
+      get_packet_bond_midpoint: (graph_idx: number): Vec3 | null => {
+        const bond = resolve_packet_bond(manager_render_packet, graph_idx)
+        return bond
+          ? [
+              (bond.pos_1[0] + bond.pos_2[0]) * 0.5,
+              (bond.pos_1[1] + bond.pos_2[1]) * 0.5,
+              (bond.pos_1[2] + bond.pos_2[2]) * 0.5,
+            ]
+          : null
       },
       reset: () => {
         __probe_atom_data_fires = 0
@@ -7471,7 +7637,7 @@
           onpointerleave={handle_bond_hitbox_pointer_leave}
         />
       {/if}
-      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
+      {#if bond_halo_entries.length > 0 && show_bulk_atoms}
         <!-- Bond halo (fresnel silhouette glow) — unified visual language
              with the atom selection halo. Renders for hovered + selected
              bonds; deduped via bond_halo_entries. depthTest:true so atoms
@@ -7749,55 +7915,50 @@
               {/each}
             {/each}
           {:else if measurement.type === 'angle' && measurement.sites.length >= 3}
-            <!-- Render all angle combinations — grouped under one measurement ID -->
-            {#each measurement.sites as idx_center (`${measurement.id}-center-${idx_center}`)}
-              {@const center = structure.sites[idx_center]}
-              {#if center}
-                {@const center_pos = realtime_position_overrides?.get(idx_center) ?? center.xyz}
-                {#each measurement.sites.filter((x) => x !== idx_center) as idx_a, loop_idx (`${measurement.id}-${idx_center}-${idx_a}`)}
-                  {#each measurement.sites.filter((x) => x !== idx_center).slice(loop_idx + 1) as idx_b (`${measurement.id}-${idx_center}-${idx_a}-${idx_b}`)}
-                    {@const site_a = structure.sites[idx_a]}
-                    {@const site_b = structure.sites[idx_b]}
-                    {#if site_a && site_b}
-                      {@const pos_a = realtime_position_overrides?.get(idx_a) ?? site_a.xyz}
-                      {@const pos_b = realtime_position_overrides?.get(idx_b) ?? site_b.xyz}
-                      {@const v1 = measure.displacement_pbc(center_pos, pos_a, lattice?.matrix)}
-                      {@const v2 = measure.displacement_pbc(center_pos, pos_b, lattice?.matrix)}
-                      {@const n1 = Math.hypot(v1[0], v1[1], v1[2])}
-                      {@const n2 = Math.hypot(v2[0], v2[1], v2[2])}
-                      {@const angle_deg = measure.angle_between_vectors(v1, v2, `degrees`)}
-                      {#if n1 > math.EPS && n2 > math.EPS}
-                        <Cylinder
-                          from={center_pos}
-                          to={pos_a}
-                          thickness={is_selected ? 0.07 : 0.05}
-                          color={is_selected ? '#ffcc00' : measure_line_color}
-                        />
-                        <Cylinder
-                          from={center_pos}
-                          to={pos_b}
-                          thickness={is_selected ? 0.07 : 0.05}
-                          color={is_selected ? '#ffcc00' : measure_line_color}
-                        />
-                        {@const bisector = math.add(math.scale(v1, 1 / n1), math.scale(v2, 1 / n2))}
-                        {@const bis_norm = Math.hypot(...bisector) || 1}
-                        {@const offset_dir = math.scale(bisector, 1 / bis_norm)}
-                        {@const label_pos = math.add(center_pos, math.scale(offset_dir, 0.6))}
-                        <extras.HTML center position={label_pos}>
-                          <span
-                            class="measure-label"
-                            class:selected={is_selected}
-                            data-measurement-id={measurement.id}
-                          >
-                            {format_num(angle_deg, float_fmt)}°
-                          </span>
-                        </extras.HTML>
-                      {/if}
-                    {/if}
-                  {/each}
-                {/each}
+            <!-- Ordered angle A-B-C: the second selected atom is the vertex. -->
+            {@const [idx_a, idx_center, idx_b] = measurement.sites}
+            {@const site_a = structure.sites[idx_a]}
+            {@const center = structure.sites[idx_center]}
+            {@const site_b = structure.sites[idx_b]}
+            {#if site_a && center && site_b}
+              {@const pos_a = realtime_position_overrides?.get(idx_a) ?? site_a.xyz}
+              {@const center_pos = realtime_position_overrides?.get(idx_center) ?? center.xyz}
+              {@const pos_b = realtime_position_overrides?.get(idx_b) ?? site_b.xyz}
+              {@const v1 = measure.displacement_pbc(center_pos, pos_a, lattice?.matrix)}
+              {@const v2 = measure.displacement_pbc(center_pos, pos_b, lattice?.matrix)}
+              {@const n1 = Math.hypot(v1[0], v1[1], v1[2])}
+              {@const n2 = Math.hypot(v2[0], v2[1], v2[2])}
+              {@const angle_deg = measure.angle_between_vectors(v1, v2, `degrees`)}
+              {#if n1 > math.EPS && n2 > math.EPS}
+                {@const display_pos_a = math.add(center_pos, v1)}
+                {@const display_pos_b = math.add(center_pos, v2)}
+                <Cylinder
+                  from={center_pos}
+                  to={display_pos_a}
+                  thickness={is_selected ? 0.07 : 0.05}
+                  color={is_selected ? '#ffcc00' : measure_line_color}
+                />
+                <Cylinder
+                  from={center_pos}
+                  to={display_pos_b}
+                  thickness={is_selected ? 0.07 : 0.05}
+                  color={is_selected ? '#ffcc00' : measure_line_color}
+                />
+                {@const bisector = math.add(math.scale(v1, 1 / n1), math.scale(v2, 1 / n2))}
+                {@const bis_norm = Math.hypot(...bisector) || 1}
+                {@const offset_dir = math.scale(bisector, 1 / bis_norm)}
+                {@const label_pos = math.add(center_pos, math.scale(offset_dir, 0.6))}
+                <extras.HTML center position={label_pos}>
+                  <span
+                    class="measure-label"
+                    class:selected={is_selected}
+                    data-measurement-id={measurement.id}
+                  >
+                    {format_num(angle_deg, float_fmt)}°
+                  </span>
+                </extras.HTML>
               {/if}
-            {/each}
+            {/if}
           {:else if measurement.type === 'dihedral' && measurement.sites.length >= 4}
             <!-- Dihedral angle: 4 atoms A-B-C-D, angle between planes ABC and BCD -->
             {@const [idx_a, idx_b, idx_c, idx_d] = measurement.sites}

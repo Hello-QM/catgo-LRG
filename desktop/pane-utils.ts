@@ -5,6 +5,7 @@
  */
 
 import type { AnyStructure } from '$lib'
+import type { TrajectorySaveHandler } from '$lib/trajectory'
 import type { PaneNode, TerminalLeafState } from './pane-tree'
 import { create_empty_leaf, create_terminal_leaf, leaves, structurePane } from './pane-tree'
 
@@ -18,6 +19,7 @@ export interface PaneState {
   saveable_structure: AnyStructure | undefined
   trajectory: unknown
   is_trajectory_mode: boolean
+  trajectory_save_handler?: TrajectorySaveHandler | null
   cube_file: File | null
   selected_sites: number[]
   current_step_idx: number
@@ -101,7 +103,7 @@ export function get_pane_label(pane: PaneState): string {
 }
 
 export function create_empty_pane(): PaneState {
-  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, library_entry_id: null, open_plugin_hub: 0, initial_panel: undefined }
+  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, trajectory_save_handler: null, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, library_entry_id: null, open_plugin_hub: 0, initial_panel: undefined }
 }
 
 export function pane_has_content(p: PaneState): boolean {

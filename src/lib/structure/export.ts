@@ -166,10 +166,20 @@ export function structure_to_xyz_str(
   const has_forces = include_forces && structure.sites.some(
     (site) => site.properties?.force && Array.isArray(site.properties.force),
   )
+  const has_selective_dynamics = structure.sites.some((site) =>
+    Array.isArray(site.properties?.selective_dynamics) ||
+    typeof site.properties?.move_mask === `boolean`
+  )
 
   // Build Properties string for extended XYZ
   const properties_cols = [`species:S:1`, `pos:R:3`]
   if (has_forces) properties_cols.push(`forces:R:3`)
+  // Keep ASE-compatible whole-atom constraints and CatGo's exact per-axis
+  // selective dynamics side by side. `move_mask` alone cannot represent
+  // partial constraints such as F T F.
+  if (has_selective_dynamics) {
+    properties_cols.push(`move_mask:L:1`, `selective_dynamics:L:3`)
+  }
   comment_parts.push(`Properties="${properties_cols.join(`:`)}"`)
 
   // Add energy/fmax/step if available
@@ -247,6 +257,17 @@ export function structure_to_xyz_str(
       }
     }
 
+    if (has_selective_dynamics) {
+      const selective = Array.isArray(site.properties?.selective_dynamics)
+        ? site.properties.selective_dynamics as boolean[]
+        : site.properties?.move_mask === false
+        ? [false, false, false]
+        : [true, true, true]
+      const normalized = [0, 1, 2].map((idx) => selective[idx] !== false)
+      line += ` ${normalized.some(Boolean) ? `T` : `F`}`
+      line += ` ${normalized.map((free) => free ? `T` : `F`).join(` `)}`
+    }
+
     lines.push(line)
   }
 
@@ -258,10 +279,57 @@ export function structure_to_extxyz_str(structure?: AnyStructure): string {
   return structure_to_xyz_str(structure, true)
 }
 
+// Serialize a trajectory frame without dropping the metadata that lives on
+// the frame rather than its structure. This distinction matters for extXYZ:
+// parsers conventionally keep forces/energy on `frame.metadata`, while the
+// single-structure exporter reads forces from site properties.
+export function trajectory_frame_to_extxyz_str(frame: TrajectoryFrame): string {
+  const metadata = frame.metadata ?? {}
+  const metadata_forces = Array.isArray(metadata.forces)
+    ? metadata.forces as number[][]
+    : undefined
+  const packet_forces = frame.position_data?.forces
+  const sites = frame.structure.sites.map((site, idx) => {
+    const offset = idx * 3
+    const packet_force = packet_forces && packet_forces.length >= offset + 3
+      ? [packet_forces[offset], packet_forces[offset + 1], packet_forces[offset + 2]]
+      : undefined
+    const force = metadata_forces?.[idx] ?? packet_force
+    return force
+      ? { ...site, properties: { ...site.properties, force } }
+      : site
+  })
+  const structure: AnyStructure & {
+    step: number
+    energy?: number
+    fmax?: number
+  } = {
+    ...frame.structure,
+    sites,
+    step: frame.step,
+    ...(typeof metadata.energy === `number` ? { energy: metadata.energy } : {}),
+    ...(typeof metadata.force_max === `number` ? { fmax: metadata.force_max } : {}),
+  }
+  const lines = structure_to_xyz_str(structure, true).split(`\n`)
+
+  // Preserve remaining scalar plot metadata. Arrays/objects are represented
+  // elsewhere (forces, lattice, positions) and must not be stringified into a
+  // huge comment line.
+  const emitted = new Set([`energy`, `force_max`, `fmax`, `forces`, `step`])
+  const scalar_fields = Object.entries(metadata)
+    .filter(([key, value]) => !emitted.has(key) &&
+      (typeof value === `number` || typeof value === `boolean`))
+    .map(([key, value]) => `${key.replace(/[^A-Za-z0-9_]/g, `_`)}=${value}`)
+  if (scalar_fields.length > 0 && lines[1] !== undefined) {
+    lines[1] = `${lines[1]} ${scalar_fields.join(` `)}`
+  }
+  return lines.join(`\n`)
+}
+
 // Generate multi-frame extended XYZ string from trajectory frames
 export function trajectory_to_xyz_str(frames: TrajectoryFrame[]): string {
   return frames
-    .map((frame) => structure_to_xyz_str(frame.structure, true))
+    .map(trajectory_frame_to_extxyz_str)
     .join(`\n`)
 }
 

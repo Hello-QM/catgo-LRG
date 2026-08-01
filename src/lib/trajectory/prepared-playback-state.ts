@@ -38,6 +38,13 @@ export function may_start_prepared_playback(
   return ready_frames >= Math.min(3, Math.max(1, total_frames))
 }
 
+export function needs_prepared_playback_warmup(
+  show_bonds: string | undefined,
+  known_variable_topology: boolean,
+): boolean {
+  return show_bonds !== `never` && !known_variable_topology
+}
+
 export function playback_poll_interval_ms(rate_ms: number): number {
   return Math.min(4, Math.max(1, rate_ms))
 }

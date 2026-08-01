@@ -17,6 +17,7 @@ import { leaves, structurePane } from '../pane-tree'
 import { save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 import { save_format_from_path } from '$lib/structure/save-format'
+import { download } from '$lib/io/fetch'
 
 /** Error shown when a checked entry's source format has no faithful serializer. */
 function unserializable_message(path: string): string {
@@ -51,6 +52,8 @@ export function build_close_all_entries(
         save_path = pane.remote_origin.file_path
       } else if (structure) {
         save_target = `database`
+      } else if (pane.trajectory_save_handler) {
+        save_target = `local`
       }
       entries.push({
         tab_id: tab.id,
@@ -59,7 +62,7 @@ export function build_close_all_entries(
         formula,
         save_target,
         save_path,
-        checked: save_target !== `none` && !!structure,
+        checked: save_target !== `none` && (!!structure || !!pane.trajectory_save_handler),
       })
     }
   }
@@ -81,7 +84,31 @@ export async function execute_close_all_saves(
     const pane = leaf ? structurePane(leaf) : null
     if (!pane) continue
     const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
-    if (!structure) continue
+    const trajectory_save = pane.trajectory_save_handler
+    if (!structure && !trajectory_save) continue
+
+    if (trajectory_save) {
+      const saved = await trajectory_save()
+      if (entry.save_target === `local` && entry.save_path) {
+        if (/\.(gz|bz2|xz|zst)$/i.test(entry.save_path)) {
+          throw new Error(`Compressed trajectories cannot be overwritten from the desktop editor yet. Export the edited extXYZ instead.`)
+        }
+        await write_file(entry.save_path, saved.content)
+      } else if (entry.save_target === `hpc` && pane.remote_origin) {
+        if (/\.(gz|bz2|xz|zst)$/i.test(pane.remote_origin.file_path)) {
+          throw new Error(`Compressed remote trajectories cannot be overwritten yet. Export the edited extXYZ instead.`)
+        }
+        const result = await writeRemoteFile(
+          pane.remote_origin.session_id,
+          pane.remote_origin.file_path,
+          saved.content,
+        )
+        if (!result.success) throw new Error(result.message || `Remote trajectory save failed`)
+      } else {
+        download(saved.content, saved.filename || `trajectory.extxyz`, `chemical/x-xyz`)
+      }
+      continue
+    }
 
     if (entry.save_target === `local` && entry.save_path) {
       // Preserve the source's on-disk format. No faithful serializer → refuse:
@@ -89,15 +116,15 @@ export async function execute_close_all_saves(
       // batch has no per-entry Save-As dialog), never CIF-ify the source.
       const format = save_format_from_path(entry.save_path)
       if (!format) throw new Error(unserializable_message(entry.save_path))
-      const content = await serialize_structure_content(structure, format)
+      const content = await serialize_structure_content(structure!, format)
       await write_file(entry.save_path, content)
     } else if (entry.save_target === `hpc` && pane.remote_origin) {
       const format = save_format_from_path(pane.remote_origin.file_path)
       if (!format) throw new Error(unserializable_message(pane.remote_origin.file_path))
-      const content = await serialize_structure_content(structure, format)
+      const content = await serialize_structure_content(structure!, format)
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else if (entry.save_target === `database`) {
-      await save_structure_to_db(structure, entry.formula)
+      await save_structure_to_db(structure!, entry.formula)
     }
   }
 }

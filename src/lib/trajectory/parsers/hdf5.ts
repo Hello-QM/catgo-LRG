@@ -50,7 +50,15 @@ export const parse_torch_sim_hdf5 = async (
       return discover(h5_file as unknown as Group)
     }
 
-    const positions_data = find_dataset([`positions`])?.to_array() as
+    const get_dataset = (path: string): Dataset | null => {
+      const item = (h5_file as unknown as Group).get(path) ??
+        (h5_file as unknown as Group).get(`/${path}`)
+      return is_hdf5_dataset(item) ? item : null
+    }
+
+    const vasp_group = `intermediate/ion_dynamics`
+    const vasp_positions = get_dataset(`${vasp_group}/position_ions`)
+    const positions_data = (vasp_positions ?? find_dataset([`positions`, `position_ions`]))?.to_array() as
       | number[][]
       | number[][][]
       | null
@@ -60,12 +68,21 @@ export const parse_torch_sim_hdf5 = async (
       `Z`,
       `species`,
     ])?.to_array() as number[] | number[][] | null
-    const cells_data = find_dataset([`cell`, `cells`, `lattice`])?.to_array() as
+    const cells_data = (
+      get_dataset(`${vasp_group}/lattice_vectors`) ??
+      find_dataset([`cell`, `cells`, `lattice`, `lattice_vectors`])
+    )?.to_array() as
       | number[][][]
       | null
-    const energies_data = find_dataset([`potential_energy`, `energy`])?.to_array() as
+    const energies_data = (
+      get_dataset(`${vasp_group}/energies`) ??
+      find_dataset([`potential_energy`, `energy`, `energies`])
+    )?.to_array() as
       | number[][]
       | null
+    const forces_data = (
+      get_dataset(`${vasp_group}/forces`) ?? find_dataset([`forces`, `force`])
+    )?.to_array() as number[][][] | null
 
     if (!positions_data) {
       throw new Error(
@@ -86,15 +103,36 @@ export const parse_torch_sim_hdf5 = async (
         : [atomic_numbers_data as number[]]
       elements = convert_atomic_numbers(atomic_numbers[0])
     } else {
-      console.warn(`HDF5 file missing atomic_numbers dataset, using 'X' for all ${num_atoms} atoms`)
-      elements = Array(num_atoms).fill(`X`) as ElementSymbol[]
+      const ion_types = get_dataset(`input/poscar/ion_types`)?.to_array() as unknown[] | undefined
+      const ion_counts = get_dataset(`input/poscar/number_ion_types`)?.to_array() as number[] | undefined
+      const expanded = ion_types?.flatMap((raw, idx) => {
+        const element = String(raw).trim() as ElementSymbol
+        return Array(Math.max(0, Math.floor(Number(ion_counts?.[idx] ?? 0)))).fill(element)
+      }) as ElementSymbol[] | undefined
+      if (expanded?.length === num_atoms) elements = expanded
+      else {
+        console.warn(`HDF5 file missing atomic_numbers dataset, using 'X' for all ${num_atoms} atoms`)
+        elements = Array(num_atoms).fill(`X`) as ElementSymbol[]
+      }
     }
 
-    const frames = positions.map((frame_positions, idx) => {
+    const frames = positions.map((raw_frame_positions, idx) => {
       const lattice_matrix = cells_data?.[idx] as Matrix3x3 | undefined
-      const energy = energies_data?.[idx]?.[0]
+      const frame_positions = vasp_positions && lattice_matrix
+        ? raw_frame_positions.map((abc) =>
+            math.mat3x3_vec3_multiply(
+              math.transpose_3x3_matrix(lattice_matrix),
+              abc as [number, number, number],
+            )
+          )
+        : raw_frame_positions
+      const energy_row = energies_data?.[idx]
+      const energy = Array.isArray(energy_row)
+        ? energy_row.at(-1)
+        : Number(energy_row)
+      const forces = forces_data?.[idx]
       const metadata: Record<string, unknown> = {}
-      if (energy !== undefined) metadata.energy = energy
+      if (Number.isFinite(energy)) metadata.energy = energy
       if (lattice_matrix) {
         metadata.volume = math.calc_lattice_params(lattice_matrix).volume
       }
@@ -106,6 +144,7 @@ export const parse_torch_sim_hdf5 = async (
         lattice_matrix ? [true, true, true] : [false, false, false],
         idx,
         metadata,
+        forces,
       )
     })
 

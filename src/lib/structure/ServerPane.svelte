@@ -42,6 +42,10 @@
   } from '$lib/api/hpc'
   import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
   import {
+    decompress_binary_structure_data,
+    is_binary_structure_filename,
+  } from '$lib/io/decompress'
+  import {
     type HPCSession,
     LOCAL_SESSION_ID,
     create_session,
@@ -86,7 +90,7 @@
     on_load_structure?: (content: string, filename: string, file_path?: string, session_id?: string) => void
     on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
     on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
-    on_load_trajectory?: (content: string, filename: string, remote_origin?: { session_id: string; dir_path: string }) => void
+    on_load_trajectory?: (content: string | ArrayBuffer, filename: string, remote_origin?: { session_id: string; dir_path: string }) => void
     on_load_trajectory_stream?: (local_path: string, filename: string) => void | Promise<void>
     on_analyze_report?: (content: string, filename: string) => void
     external_navigate_path?: string | undefined
@@ -96,6 +100,15 @@
 
   let sessions = $state<HPCSession[]>([create_local_session()])
   let active_session_idx = $state(0) // 0 = Local session
+
+  function base64_to_array_buffer(data: string): ArrayBuffer {
+    const binary = atob(data)
+    const bytes = new Uint8Array(binary.length)
+    for (let idx = 0; idx < binary.length; idx++) {
+      bytes[idx] = binary.charCodeAt(idx)
+    }
+    return bytes.buffer
+  }
 
   // On mount: refresh HPC sessions from backend so new browser tabs see existing connections
   $effect(() => { refresh_hpc_sessions() })
@@ -976,6 +989,28 @@
           loading_file = null
           return
         }
+      }
+      if (on_load_trajectory && is_binary_structure_filename(file.name)) {
+        const binary = await readRemoteBinaryFile(
+          active_session.session_id,
+          file.path,
+        )
+        if (!binary.success) {
+          loading_error = t('structure.failed_load_file', {
+            name: file.name,
+            error: binary.message || t('structure.unknown_error'),
+          })
+          return
+        }
+        const decoded = await decompress_binary_structure_data(
+          base64_to_array_buffer(binary.data),
+          file.name,
+        )
+        on_load_trajectory(decoded.content, decoded.filename, {
+          session_id: active_session.session_id,
+          dir_path: file.path,
+        })
+        return
       }
       // Detect trajectory files early — default 2MB limit truncates large XDATCAR etc.
       const { is_trajectory_file } = await import('$lib/trajectory/parse')
