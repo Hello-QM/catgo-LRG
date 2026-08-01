@@ -24,6 +24,12 @@
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { PeriodicDecorationSource } from '$lib/structure/scene/periodic-decoration-snapshot'
+  import {
+    build_physical_supercell_render_source,
+    physical_supercell_render_source_for,
+    register_physical_supercell_render_source,
+  } from '$lib/structure/scene/physical-supercell-render-source'
   import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
@@ -77,6 +83,14 @@
   } from './index'
   import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
+  import type { VisualStateSource } from './rendering/visual-state'
+  import { mutate_camera_pose } from './rendering/camera-revision'
+  import {
+    EMPTY_HUD_SAFE_AREA,
+    GIZMO_SIZE_CSS,
+    normalize_hud_safe_area,
+    type HudSafeArea,
+  } from './rendering/gizmo'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { clone_structure } from '$lib/structure/clone'
@@ -258,6 +272,20 @@
   // so the second allocation is discarded (small one-time cost).
   let scene_atom_manager = $state(new AtomManager())
 
+  // StructureScene is the single visual-state publisher. Its visible revision
+  // wakes the WebGPU overlay even after the overlay frame loop has suspended.
+  let scene_visual_state_source = $state<VisualStateSource | null>(null)
+  let scene_periodic_decoration_source =
+    $state<PeriodicDecorationSource | null>(null)
+  let scene_camera_revision = $state(0)
+
+  function note_scene_camera_change(revision_before: number) {
+    // orbit_controls.update() may synchronously emit its own change event through
+    // StructureScene. In that case the bound revision already advanced and this
+    // parent-side bridge must not publish the same final pose twice.
+    if (scene_camera_revision === revision_before) scene_camera_revision += 1
+  }
+
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
   const charge_state = create_charge_labels_state()
@@ -287,55 +315,59 @@
   // Gesture API: bridges gestures to the structure viewer
   const gesture_api: StructureGestureAPI = {
     rotate(axis, angle) {
+      if (angle === 0) return
       if (orbit_controls && camera) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
         const ctrl = orbit_controls as any
+        const revision_before = scene_camera_revision
 
-        // Always orbit around the SCENE CENTER (structure's center of mass).
-        // Rotate BOTH camera and target around it, preserving their relative
-        // offset (the pan displacement). This guarantees the structure always
-        // rotates around its own center, regardless of panning.
-        const pivot = rotation_target_ref
-          ? new Vector3(...rotation_target_ref)
-          : new Vector3(0, 0, 0)
+        mutate_camera_pose(cam, target, () => {
+          // Always orbit around the SCENE CENTER (structure's center of mass).
+          // Rotate BOTH camera and target around it, preserving their relative
+          // offset (the pan displacement). This guarantees the structure always
+          // rotates around its own center, regardless of panning.
+          const pivot = rotation_target_ref
+            ? new Vector3(...rotation_target_ref)
+            : new Vector3(0, 0, 0)
 
-        cam.updateMatrixWorld(true)
+          cam.updateMatrixWorld(true)
 
-        // Build rotation quaternion
-        const q = new Quaternion()
-        if (axis === `y`) {
-          // Yaw: rotate around world Y (turntable)
-          q.setFromAxisAngle(new Vector3(0, 1, 0), angle)
-        } else if (axis === `x`) {
-          // Pitch: rotate around camera's local right axis
-          const right = new Vector3()
-          cam.matrixWorld.extractBasis(right, new Vector3(), new Vector3())
-          right.normalize()
-          q.setFromAxisAngle(right, angle)
-        }
+          // Build rotation quaternion
+          const q = new Quaternion()
+          if (axis === `y`) {
+            // Yaw: rotate around world Y (turntable)
+            q.setFromAxisAngle(new Vector3(0, 1, 0), angle)
+          } else if (axis === `x`) {
+            // Pitch: rotate around camera's local right axis
+            const right = new Vector3()
+            cam.matrixWorld.extractBasis(right, new Vector3(), new Vector3())
+            right.normalize()
+            q.setFromAxisAngle(right, angle)
+          }
 
-        // Rotate camera position around pivot
-        const cam_off = cam.position.clone().sub(pivot)
-        cam_off.applyQuaternion(q)
-        cam.position.copy(pivot).add(cam_off)
+          // Rotate camera position around pivot
+          const cam_off = cam.position.clone().sub(pivot)
+          cam_off.applyQuaternion(q)
+          cam.position.copy(pivot).add(cam_off)
 
-        // Rotate target around same pivot (preserves pan offset)
-        const tgt_off = target.clone().sub(pivot)
-        tgt_off.applyQuaternion(q)
-        target.copy(pivot).add(tgt_off)
+          // Rotate target around same pivot (preserves pan offset)
+          const tgt_off = target.clone().sub(pivot)
+          tgt_off.applyQuaternion(q)
+          target.copy(pivot).add(tgt_off)
 
-        // Rotate up vector so camera stays oriented correctly
-        cam.up.applyQuaternion(q)
-        cam.lookAt(target)
-        cam.updateMatrixWorld(true)
+          // Rotate up vector so camera stays oriented correctly
+          cam.up.applyQuaternion(q)
+          cam.lookAt(target)
+          cam.updateMatrixWorld(true)
 
-        // Sync TrackballControls internal state
-        ctrl._lastAngle = 0
-        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-        if (ctrl._target0) ctrl._target0.copy(target)
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-        if (ctrl._up0) ctrl._up0.copy(cam.up)
+          // Sync TrackballControls internal state
+          ctrl._lastAngle = 0
+          if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+          if (ctrl._target0) ctrl._target0.copy(target)
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+          if (ctrl._up0) ctrl._up0.copy(cam.up)
+        }, () => note_scene_camera_change(revision_before))
       } else {
         // Fallback: rotate the scene directly
         const r = [...scene_props.rotation] as Vec3
@@ -346,73 +378,80 @@
       }
     },
     zoom(delta) {
+      if (delta === 0) return
       if (orbit_controls) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
-        const cam_dist = cam.position.distanceTo(target)
-        const dir = new Vector3().subVectors(cam.position, target).normalize()
-        cam.position.addScaledVector(dir, -delta)
-        cam.updateMatrixWorld(true)
+        const revision_before = scene_camera_revision
+        mutate_camera_pose(cam, target, () => {
+          const dir = new Vector3().subVectors(cam.position, target).normalize()
+          cam.position.addScaledVector(dir, -delta)
+          cam.updateMatrixWorld(true)
 
-        const ctrl = orbit_controls as any
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+          const ctrl = orbit_controls as any
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+        }, () => note_scene_camera_change(revision_before))
       }
     },
     pan(dx, dy) {
+      if (dx === 0 && dy === 0) return
       if (orbit_controls) {
         const cam = (orbit_controls as any).object
         const target = (orbit_controls as any).target as Vector3
         const ctrl = orbit_controls as any
         const cam_dist = cam.position.distanceTo(target)
         const canvas_h = height ?? 600
+        const revision_before = scene_camera_revision
 
-        // Convert pixel delta to world units using camera FOV
-        const fov_rad = (cam.fov ?? 50) * Math.PI / 180
-        const world_per_pixel = (2 * cam_dist * Math.tan(fov_rad / 2)) / canvas_h
-        const s = world_per_pixel * 0.35
+        mutate_camera_pose(cam, target, () => {
+          // Convert pixel delta to world units using camera FOV
+          const fov_rad = (cam.fov ?? 50) * Math.PI / 180
+          const world_per_pixel = (2 * cam_dist * Math.tan(fov_rad / 2)) / canvas_h
+          const s = world_per_pixel * 0.35
 
-        // Ensure matrixWorld reflects latest rotation
-        cam.updateMatrixWorld(true)
+          // Ensure matrixWorld reflects latest rotation
+          cam.updateMatrixWorld(true)
 
-        // Use camera's right/up vectors so pan is screen-aligned at any viewing angle
-        const right = new Vector3()
-        const up = new Vector3()
-        cam.matrixWorld.extractBasis(right, up, new Vector3())
-        right.normalize()
-        up.normalize()
+          // Use camera's right/up vectors so pan is screen-aligned at any viewing angle
+          const right = new Vector3()
+          const up = new Vector3()
+          cam.matrixWorld.extractBasis(right, up, new Vector3())
+          right.normalize()
+          up.normalize()
 
-        const shift = new Vector3()
-          .addScaledVector(right, dx * s)
-          .addScaledVector(up, -dy * s)
+          const shift = new Vector3()
+            .addScaledVector(right, dx * s)
+            .addScaledVector(up, -dy * s)
 
-        // Move camera AND target together (pure translation, no rotation)
-        cam.position.add(shift)
-        target.add(shift)
+          // Move camera AND target together (pure translation, no rotation)
+          cam.position.add(shift)
+          target.add(shift)
 
-        // Hard clamp: keep target within visible frustum
-        const origin = rotation_target_ref
-          ? new Vector3(...rotation_target_ref)
-          : new Vector3(0, 0, 0)
-        const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
-        const max_drift = visible_h * 0.3
-        const drift = target.distanceTo(origin)
-        if (drift > max_drift) {
-          const excess = new Vector3().subVectors(target, origin)
-          excess.setLength(max_drift)
-          const clamped_target = origin.clone().add(excess)
-          const correction = new Vector3().subVectors(clamped_target, target)
-          cam.position.add(correction)
-          target.add(correction)
-        }
+          // Hard clamp: keep target within visible frustum
+          const origin = rotation_target_ref
+            ? new Vector3(...rotation_target_ref)
+            : new Vector3(0, 0, 0)
+          const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
+          const max_drift = visible_h * 0.3
+          const drift = target.distanceTo(origin)
+          if (drift > max_drift) {
+            const excess = new Vector3().subVectors(target, origin)
+            excess.setLength(max_drift)
+            const clamped_target = origin.clone().add(excess)
+            const correction = new Vector3().subVectors(clamped_target, target)
+            cam.position.add(correction)
+            target.add(correction)
+          }
 
-        cam.updateMatrixWorld(true)
+          cam.updateMatrixWorld(true)
 
-        // Sync ALL TrackballControls internal state — do NOT call ctrl.update()
-        ctrl._lastAngle = 0
-        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-        if (ctrl._target0) ctrl._target0.copy(target)
-        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-        if (ctrl._up0) ctrl._up0.copy(cam.up)
+          // Sync ALL TrackballControls internal state — do NOT call ctrl.update()
+          ctrl._lastAngle = 0
+          if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+          if (ctrl._target0) ctrl._target0.copy(target)
+          if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+          if (ctrl._up0) ctrl._up0.copy(cam.up)
+        }, () => note_scene_camera_change(revision_before))
       }
     },
     atom_at(sx, sy) {
@@ -597,35 +636,38 @@
         .addScaledVector(right, -disp_x * world_per_norm_x)
         .addScaledVector(up, disp_y * world_per_norm_y)
 
-      // Set absolute positions (not additive — no drift accumulation)
-      cam.position.copy(grab_cam_pos!).add(world_shift)
-      target.copy(grab_target_pos!).add(world_shift)
+      const revision_before = scene_camera_revision
+      mutate_camera_pose(cam, target, () => {
+        // Set absolute positions (not additive — no drift accumulation)
+        cam.position.copy(grab_cam_pos!).add(world_shift)
+        target.copy(grab_target_pos!).add(world_shift)
 
-      // Clamp: keep target within visible frustum
-      const origin = rotation_target_ref
-        ? new Vector3(...rotation_target_ref)
-        : new Vector3(0, 0, 0)
-      // max_drift uses the un-gained visible height to set an absolute screen limit
-      const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
-      const max_drift = visible_h * 0.25
-      const drift = target.distanceTo(origin)
-      if (drift > max_drift) {
-        const excess = new Vector3().subVectors(target, origin)
-        excess.setLength(max_drift)
-        const clamped = origin.clone().add(excess)
-        const correction = new Vector3().subVectors(clamped, target)
-        cam.position.add(correction)
-        target.add(correction)
-      }
+        // Clamp: keep target within visible frustum
+        const origin = rotation_target_ref
+          ? new Vector3(...rotation_target_ref)
+          : new Vector3(0, 0, 0)
+        // max_drift uses the un-gained visible height to set an absolute screen limit
+        const visible_h = 2 * cam_dist * Math.tan(fov_rad / 2)
+        const max_drift = visible_h * 0.25
+        const drift = target.distanceTo(origin)
+        if (drift > max_drift) {
+          const excess = new Vector3().subVectors(target, origin)
+          excess.setLength(max_drift)
+          const clamped = origin.clone().add(excess)
+          const correction = new Vector3().subVectors(clamped, target)
+          cam.position.add(correction)
+          target.add(correction)
+        }
 
-      cam.updateMatrixWorld(true)
+        cam.updateMatrixWorld(true)
 
-      // Sync TrackballControls
-      ctrl._lastAngle = 0
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      if (ctrl._target0) ctrl._target0.copy(target)
-      if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
-      if (ctrl._up0) ctrl._up0.copy(cam.up)
+        // Sync TrackballControls
+        ctrl._lastAngle = 0
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        if (ctrl._target0) ctrl._target0.copy(target)
+        if (ctrl._eye0) ctrl._eye0.subVectors(cam.position, target)
+        if (ctrl._up0) ctrl._up0.copy(cam.up)
+      }, () => note_scene_camera_change(revision_before))
       return
     }
 
@@ -816,6 +858,7 @@
     supercell_scaling = $bindable(`1x1x1`),
     fullscreen_toggle = DEFAULTS.structure.fullscreen_toggle,
     hidden_toolbar_items = [] as string[],
+    hud_safe_area = EMPTY_HUD_SAFE_AREA,
     bottom_left,
     data_url,
     structure_string,
@@ -1001,6 +1044,8 @@
       align_on_load?: `none` | `principal_axes`
       // Remote file origin for "save structure back" feature
       remote_origin?: { session_id: string; file_path: string } | null
+      /** Host-provided pane HUD insets, consumed by both renderer gizmos. */
+      hud_safe_area?: Partial<HudSafeArea>
       // Bulk reference for pseudo-hydrogen passivation (auto-set from slab cutter, or passed externally)
       initial_bulk?: PymatgenStructure | null
       // Raw cube file for isosurface processing (passed from desktop app when .cube file is opened)
@@ -2024,6 +2069,7 @@
     show_controls === true ||
       (typeof show_controls === `number` && width > show_controls),
   )
+  const hud_safe = $derived(normalize_hud_safe_area(hud_safe_area))
 
   // ── Transform pipeline (cell type -> supercell -> PBC images -> displayed_structure) ──
   // Managed by transform controller (controllers/transform-controller.svelte.ts)
@@ -2283,6 +2329,50 @@
       trajectory_packet_active,
     }),
   )
+  // A true Build supercell is still fully materialized in `structure`, but a
+  // positive diagonal transform can keep rendering its provenance-backed base
+  // cell through the same WebGPU instancing path as the bottom-right visual
+  // control.  Any state that can distinguish physical replicas (selection or a
+  // per-site style), a trajectory, a transformed cell view, or another visual
+  // replication factor falls back to the complete materialized topology.
+  let physical_supercell_render = $derived.by(() => {
+    if (
+      !large_system_mode ||
+      !structure ||
+      trajectory_packet_active ||
+      visual_replicas_active ||
+      cell_type !== `original` ||
+      selected_sites.length > 0 ||
+      site_radius_overrides.size > 0 ||
+      site_color_overrides.size > 0
+    ) return null
+    return physical_supercell_render_source_for(structure)
+  })
+  // Proxy-safe owner tokens for the ordinary-graph bridge. Object identity is
+  // resolved here, before values cross bindable/$state component boundaries;
+  // consumers compare the numeric token rather than raw-vs-proxy objects.
+  const render_owner_ids = new WeakMap<object, number>()
+  let next_render_owner_id = 0
+  function render_owner_id(owner: object | null | undefined): number {
+    if (!owner) return 0
+    const known = render_owner_ids.get(owner)
+    if (known !== undefined) return known
+    const created = ++next_render_owner_id
+    render_owner_ids.set(owner, created)
+    return created
+  }
+  let scene_bond_owner_id = $derived(
+    render_owner_id((supercell_structure ?? structure) as object | undefined),
+  )
+  let large_overlay_structure = $derived(
+    physical_supercell_render?.base_structure ??
+      (trajectory_packet_active
+        ? structure
+        : (transform.base_structure ?? structure)),
+  )
+  let large_overlay_owner_id = $derived(
+    render_owner_id(large_overlay_structure as object | undefined),
+  )
   // ── Shared render packet ────────────────────────────────────────────────────
   // ONE packet per effective frame: the BASE scientific structure (owner) +
   // exactly 3N current positions + the current frame lattice + visual replica
@@ -2399,17 +2489,20 @@
     camera_has_moved = false
 
     if (orbit_controls && camera) {
-      if (orbit_controls.target && rotation_target_ref) {
-        const [x, y, z] = rotation_target_ref
-        orbit_controls.target.set(x, y, z)
-      }
-      if (`zoom` in camera && initial_computed_zoom !== undefined) {
-        camera.zoom = initial_computed_zoom
-        camera.updateProjectionMatrix()
-      }
-      if (typeof orbit_controls.update === `function`) {
-        orbit_controls.update()
-      }
+      const revision_before = scene_camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        if (orbit_controls.target && rotation_target_ref) {
+          const [x, y, z] = rotation_target_ref
+          orbit_controls.target.set(x, y, z)
+        }
+        if (`zoom` in camera && initial_computed_zoom !== undefined) {
+          camera.zoom = initial_computed_zoom
+          camera.updateProjectionMatrix()
+        }
+        if (typeof orbit_controls.update === `function`) {
+          orbit_controls.update()
+        }
+      }, () => note_scene_camera_change(revision_before))
     }
 
     on_camera_reset?.({ structure, camera_has_moved, camera_position: [0, 0, 0] })
@@ -2431,17 +2524,20 @@
     if (dir_v.lengthSq() < 1e-12 || up_v.lengthSq() < 1e-12) return
     dir_v.normalize()
     const dist = camera.position.distanceTo(target) || 1
-    camera.position.copy(target).addScaledVector(dir_v, -dist)
-    camera.up.copy(up_v.normalize())
-    camera.lookAt(target)
-    camera.updateMatrixWorld?.(true)
-    // Clear pending TrackballControls rotation inertia (staticMoving is false,
-    // so update() would re-apply the last drag's _lastAxis/_lastAngle and pull
-    // the pose off-target — same pattern as every other imperative pose path).
-    const ctrl = orbit_controls as any
-    if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-    ctrl._lastAngle = 0
-    orbit_controls.update?.()
+    const revision_before = scene_camera_revision
+    mutate_camera_pose(camera, target, () => {
+      camera.position.copy(target).addScaledVector(dir_v, -dist)
+      camera.up.copy(up_v.normalize())
+      camera.lookAt(target)
+      camera.updateMatrixWorld?.(true)
+      // Clear pending TrackballControls rotation inertia (staticMoving is false,
+      // so update() would re-apply the last drag's _lastAxis/_lastAngle and pull
+      // the pose off-target — same pattern as every other imperative pose path).
+      const ctrl = orbit_controls as any
+      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+      ctrl._lastAngle = 0
+      orbit_controls.update?.()
+    }, () => note_scene_camera_change(revision_before))
     if (mark_moved) camera_has_moved = true
   }
 
@@ -2995,10 +3091,21 @@
     // (pre-supercell) structure, not the materialized output.
     snapshot: (live) => $state.snapshot(live) as PymatgenStructure,
     push_undo: push_to_undo,
-    // handle_structure_replace sets the structure and resets the renderer's
-    // visual supercell_scaling to 1x1x1 so factors don't compound.
-    publish: ({ structure: new_structure }) =>
-      build.handle_structure_replace(new_structure),
+    // Keep the materialized structure as the scientific owner, but retain the
+    // executor's axis-aligned replication provenance as a render-only WebGPU
+    // source.  Other edits replace the structure identity and automatically
+    // miss this WeakMap entry, so translational-equivalence reuse cannot go
+    // stale. handle_structure_replace also resets visual scaling to 1x1x1.
+    publish: (execution) => {
+      const render_source = build_physical_supercell_render_source(execution)
+      build.handle_structure_replace(execution.structure)
+      if (render_source && structure) {
+        // Svelte may expose the assigned object through a reactive proxy;
+        // register both identities without writing metadata into exports.
+        register_physical_supercell_render_source(execution.structure, render_source)
+        register_physical_supercell_render_source(structure, render_source)
+      }
+    },
     history_token: () => `structure-supercell-${++supercell_history_seq}`,
   })
 
@@ -3561,6 +3668,7 @@
   }}
   {...rest}
   class="structure {rest.class ?? ``}"
+  style:--structure-gizmo-size={GIZMO_SIZE_CSS}
   class:pencil-mode-active={pencil.pencil_mode_active}
   class:crop-mode-active={interaction.crop_mode_active}
   class:md-split={show_md_panel}
@@ -4473,15 +4581,17 @@
                     trajectory.metadata = { ...(trajectory.metadata || {}), remote_origin }
                   }
                   on_file_load({ trajectory, filename } as any)
-                } else {
+                } else if (typeof content === `string`) {
                   // Fallback: parse as structure (last frame only)
                   const parsed = parse_any_structure(content, filename)
                   if (parsed) structure = parsed
                 }
               } catch {
                 // Fallback: parse as structure
-                const parsed = parse_any_structure(content, filename)
-                if (parsed) structure = parsed
+                if (typeof content === `string`) {
+                  const parsed = parse_any_structure(content, filename)
+                  if (parsed) structure = parsed
+                }
               }
             }}
           />
@@ -4622,10 +4732,15 @@
             scene_props spread so the user's toggle actually reaches sites_to_draw
             in the bond renderer; otherwise scene_props' default true overrides it
             and orphan cross-cell bond stubs render with image atoms off.
+
+            The host-normalized safe area is likewise authoritative. Its prop
+            stays AFTER scene_props so a stale/ad-hoc scene prop cannot move the
+            WebGL gizmo away from the HUD inset the WebGPU overlay receives.
           -->
           <StructureScene
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
+            bond_owner_id={scene_bond_owner_id}
             {webgl_suspended}
             {trajectory_frame_positions}
             {trajectory_frame_forces}
@@ -4638,6 +4753,8 @@
             {on_trajectory_buffer_state}
             {render_packet}
             {...scene_props}
+            {hud_safe}
+            gizmo={scene_props.show_gizmo}
             initial_view={persist_settings ? saved_default_view : null}
             {show_image_atoms}
             {clip_center}
@@ -4739,6 +4856,9 @@
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
+            bind:visual_state_source={scene_visual_state_source}
+            bind:periodic_decoration_source={scene_periodic_decoration_source}
+            bind:camera_revision={scene_camera_revision}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4807,29 +4927,54 @@
           <LargeSystemOverlay
             enabled={large_system_mode}
             {camera}
-            structure={structure}
+            structure={large_overlay_structure}
+            packet_owner_id={large_overlay_owner_id}
+            periodic_decoration_owner_id={scene_bond_owner_id}
             frame_positions={get_trajectory_frame_source
               ? presented_frame_source?.positions ?? null
               : trajectory_frame_positions}
             frame_lattice={get_trajectory_frame_source
               ? presented_frame_source?.lattice ?? null
               : trajectory_frame_lattice}
-            supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
+            realtime_position_overrides={interaction.realtime_position_overrides}
+            supercell={physical_supercell_render?.dims ??
+              (visual_replicas_active ? gpu_supercell_factors : [1, 1, 1])}
+            replica_semantics={physical_supercell_render
+              ? `physical-distinct-sites`
+              : `visual-shared-base`}
+            physical_site_map={physical_supercell_render?.physical_site_map}
             {show_image_atoms}
-            element_colors={colors.element}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}
             {element_radius_overrides}
             {site_radius_overrides}
-            bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            bonding_options={{
+              ...((scene_props.bonding_options ?? {}) as Record<string, number>),
+              scale: scene_props.bond_scale,
+            }}
             {bond_distance_rules}
+            bond_thickness={scene_props.bond_thickness}
+            incomplete_periodic_edge_mode={scene_props.incomplete_periodic_edge_mode}
+            incomplete_edge_length_scale={scene_props.incomplete_edge_length_scale}
+            hide_incomplete_bonds={scene_props.hide_incomplete_bonds}
+            {image_atom_opacity}
             show_bonds={scene_props.show_bonds}
-            {background_color}
-            {background_opacity}
             show_cell={scene_props.show_cell}
-            cell_edge_color={scene_props.cell_edge_color}
+            cell_edge_color={lattice_props.cell_edge_color}
+            cell_edge_width={lattice_props.cell_edge_width}
+            cell_lattice_override={physical_supercell_render &&
+              structure && `lattice` in structure
+                ? structure.lattice.matrix
+                : null}
+            show_cell_vectors={lattice_props.show_cell_vectors}
+            show_gizmo={scene_props.show_gizmo}
             {trajectory_positions_version}
             {trajectory_step_idx}
+            visual_state_source={scene_visual_state_source}
+            periodic_decoration_source={trajectory_packet_active
+              ? null
+              : scene_periodic_decoration_source}
+            {hud_safe}
             {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {

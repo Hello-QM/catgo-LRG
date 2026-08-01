@@ -29,4 +29,13 @@ describe(`BOND_COMPUTE_WGSL`, () => {
     expect(BOND_COMPUTE_DIRECT_WGSL).toMatch(/j < P\.n_atoms/)
     expect(BOND_COMPUTE_DIRECT_WGSL).toContain(`fn detect_bonds`)
   })
+
+  it(`shares the legacy fixed-pad atom-radii predicate across both shader paths`, () => {
+    for (const source of [BOND_COMPUTE_WGSL, BOND_COMPUTE_DIRECT_WGSL]) {
+      expect(source).toContain(`min_bond_dist: f32`)
+      expect(source).toContain(`d <= ri + radii[j] + P.tolerance`)
+      expect(source).not.toContain(`P.scale`)
+      expect(source).not.toContain(`P.min_dist`)
+    }
+  })
 })

@@ -1,6 +1,8 @@
 //! Persistent exact bond detection for typed trajectory frames.
 
-use crate::bonding::{AtomRadiiOptions, Bond, collect_bonds_atom_radii_from_neighbor_list};
+use crate::bonding::{
+    AtomRadiiOptions, Bond, atom_radii_neighbor_cutoff, collect_bonds_atom_radii_from_neighbor_list,
+};
 use crate::element::Element;
 use crate::lattice::Lattice;
 use crate::neighbors::{NeighborListConfig, NeighborSearchWorkspace};
@@ -100,7 +102,7 @@ impl TrajectoryBondSession {
             effective_radii.push(element.covalent_radius().unwrap_or(1.5));
         }
         let max_radius = effective_radii.iter().copied().fold(0.0, f64::max);
-        let cutoff = options.max_bond_dist.min(2.0 * max_radius * options.scale);
+        let cutoff = atom_radii_neighbor_cutoff(max_radius, &options);
         let neighbor_config = NeighborListConfig {
             cutoff,
             self_interaction: false,

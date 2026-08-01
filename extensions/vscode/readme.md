@@ -200,7 +200,7 @@ contributes to your work, please include the acknowledgement and preferred
 citation below. This request is not an additional condition of the AGPL
 license.
 
-> This work used CatGo (https://catgo-ucsd.org).
+> This work used CatGo (https://app.catgo-ucsd.org).
 
 Please cite CatGo using the preferred ChemRxiv DOI
 [10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1).

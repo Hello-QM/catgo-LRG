@@ -53,6 +53,23 @@ type Probe = {
   get_packet_bond_midpoint: (graph_idx: number) => [number, number, number] | null
 }
 
+test('bundled ASE trajectory stays binary through the Vite asset URL', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/', { waitUntil: 'load' })
+  const source = page.locator('.source-selector select').first()
+  await source.selectOption('catgo')
+  await page.locator('.section-header', { hasText: /Trajectories/i }).click()
+  await page.locator(
+    'button.file-item[title="ase-LiMnO2-chgnet-relax.traj"]',
+  ).click()
+
+  await expect(page.locator('.trajectory-controls')).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.getByText(/Unsupported text format/)).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Error' })).toHaveCount(0)
+})
+
 test('saved middle-frame atom additions reopen with discrete topology', async ({ page }) => {
   test.setTimeout(60_000)
   const shader_errors: string[] = []

@@ -143,7 +143,7 @@ CatGo did not record the exact AtomCanvas source revision for these ports.
 - Notice and full text:
   [`third_party/licenses/pretty-lattice-MIT.txt`](third_party/licenses/pretty-lattice-MIT.txt)
 
-`src/lib/structure/atoms/render-style.ts` and `src/lib/settings/config.ts`
+`src/lib/structure/rendering/visual-state.ts` and `src/lib/settings/config.ts`
 identify glossy and metallic material values ported from pretty-lattice.
 The audit confirms the upstream repository and MIT notice but found no pinned
 upstream revision in CatGo history.

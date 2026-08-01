@@ -147,5 +147,5 @@ CatGo 代码量大，AI 助手在你**明确指出读哪些文件**时表现最�
 - 维护者可在接受贡献前要求单独的贡献者协议，以确保项目拥有对其代码进行许可和维权的权利。
 - 对 CatGo 的贡献采用 AGPL-3.0-or-later。
 - CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明
-  “This work used CatGo (https://catgo-ucsd.org).”并引用 CITATION.cff
+  “This work used CatGo (https://app.catgo-ucsd.org).”并引用 CITATION.cff
   中的首选文献；该请求不构成 AGPL 许可的附加条件。

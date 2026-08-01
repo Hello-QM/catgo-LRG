@@ -111,6 +111,8 @@ describe(`load_from_url`, () => {
     [`https://example.com/test.h5`, `test.h5`],
     [`https://example.com/trajectory.hdf5`, `trajectory.hdf5`],
     [`https://example.com/data.traj`, `data.traj`],
+    [`https://example.com/data.traj?url`, `data.traj`],
+    [`https://example.com/data.traj#asset`, `data.traj`],
     [`https://example.com/data.zip`, `data.zip`],
     [`https://example.com/backup.bz2`, `backup.bz2`],
     [`https://example.com/archive.xz`, `archive.xz`],

@@ -11,6 +11,7 @@ import { describe, expect, test, vi } from 'vitest'
 import * as THREE from 'three'
 import {
   BondReplicaRenderer,
+  build_authoritative_boundary_half_table,
   build_ghost_half_table,
   classify_half_draw,
 } from '$lib/structure/gpu/webgl2/bond-replica-renderer'
@@ -27,7 +28,11 @@ import {
   type PeriodicBond,
   resolve_periodic_edge,
 } from '$lib/structure/scene/replica-layout'
-import type { BoundaryPolicy, RenderPacket } from '$lib/structure/scene/render-packet'
+import type {
+  BoundaryPolicy,
+  ImageInstanceTable,
+  RenderPacket,
+} from '$lib/structure/scene/render-packet'
 import {
   create_render_packet_builder,
   type PacketBondConnectivity,
@@ -453,6 +458,13 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
     expect(material.vertexShader).toContain(`vOpenTip = open_tip`)
     expect(material.fragmentShader).toContain(`vOpenTip`)
     expect(material.fragmentShader).toContain(`if (vOpenTip < 0.5)`)
+    const ghost_material = renderer.ghost_mesh.material as THREE.ShaderMaterial
+    expect(ghost_material.vertexShader).toContain(
+      `bool open_tip = g_stub < 0.5`,
+    )
+    expect(ghost_material.vertexShader).toContain(
+      `fetchBaseColor(g_site.x)`,
+    )
     // Flat (non-interpolated) per-instance cylinder frame + analytic ray-cast.
     expect(material.vertexShader).toContain(`flat varying`)
     expect(material.fragmentShader).toContain(`flat varying`)
@@ -576,6 +588,38 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
 })
 
 describe(`BondReplicaRenderer — sparse ghost second draw`, () => {
+  test(`authoritative image ownership replaces endpoint-B graph ghosts`, () => {
+    const packet = make_packet([3, 3, 3], `ghost-images`)
+    const images: ImageInstanceTable = {
+      count: 3,
+      base_sites: Uint32Array.from([2, 1, 0]),
+      jimages: Int8Array.from([
+        3, 0, 0,
+        -1, 0, 0,
+        0, 0, 3,
+      ]),
+    }
+    const graph = packet.topology.bond_graph!
+    const expected = build_authoritative_boundary_half_table(
+      graph,
+      images,
+      packet.frame.positions,
+      packet.frame.lattice,
+      packet.replicas.dims,
+      packet.replicas.boundary_policy,
+    )
+    const renderer = new BondReplicaRenderer()
+    renderer.update(packet, images)
+
+    expect(expected.count).toBeGreaterThan(images.count)
+    expect(geo(renderer.ghost_mesh).instanceCount).toBe(expected.count)
+    // The base draw must fall back to ordinary paired stubs; the sparse
+    // decorator table, not graph-derived ghost completion, owns the boundary.
+    expect(renderer.material.uniforms.uPolicy.value).toBe(0)
+    expect(attr(renderer.ghost_mesh, `g_stub`).count).toBe(expected.count)
+    renderer.dispose()
+  })
+
   test(`ghost-images renders one ghost-side half per oracle 'ghost' probe`, () => {
     const dims = [2, 1, 1] as const
     const packet = make_packet(dims, `ghost-images`)

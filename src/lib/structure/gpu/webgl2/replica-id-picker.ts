@@ -31,7 +31,7 @@ import {
   render_pick_pixel,
   type PickPixelRenderer,
 } from '$lib/structure/gpu-picker'
-import { VISUAL_RADIUS_SCALE } from '$lib/structure/atoms/atom-instanced-renderer'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import {
   ensure_instanced_attr,
   rebind_instance_divisors_if_needed,
@@ -692,6 +692,14 @@ const BOND_PICK_FRAGMENT_SHADER = /* glsl */ `
 `
 
 export type ReplicaPickSyncOptions = {
+  /**
+   * Exact ordinary-mode boundary spheres, already expanded to packet dims.
+   *
+   * A non-null table is authoritative, including an explicitly empty table.
+   * Null/omitted preserves the graph-derived compatibility path used by
+   * isolated picker consumers.
+   */
+  boundary_atom_images?: ImageInstanceTable | null
   /** Visual bond cylinder radius — pick geometry matches what's drawn. */
   bond_radius?: number
   /** Stub length multiplier for the 'stub' boundary policy. */
@@ -744,6 +752,7 @@ export class ReplicaPickScene {
   #codec: ReplicaIdCodec | null = null
   #layout: ReplicaLayout | null = null
   #images: ImageInstanceTable = EMPTY_TABLE
+  #boundary_images: ImageInstanceTable | null = null
 
   // Base-sized topology-only CPU mirrors.
   #atom_sites = new Float32Array(0)
@@ -891,6 +900,8 @@ export class ReplicaPickScene {
   sync(packet: RenderPacket, opts: ReplicaPickSyncOptions = {}): void {
     const prev = this.#prev
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
+    const boundary_images = opts.boundary_atom_images ?? null
+    const boundary_images_changed = this.#boundary_images !== boundary_images
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
@@ -898,19 +909,22 @@ export class ReplicaPickScene {
       this.#positions.texture.image.width
     this.#prev = packet
     this.#layout = packet.replicas
+    this.#boundary_images = boundary_images
 
     const graph_changed = diff.topology_changed || diff.bond_graph_changed
-    const ghosts_changed = graph_changed || diff.replica_changed
+    const ghosts_changed =
+      graph_changed || diff.replica_changed || boundary_images_changed
 
     if (ghosts_changed) {
       const graph = packet.topology.bond_graph
-      this.#images = graph !== undefined
-        ? build_image_instance_table(
-          graph,
-          packet.replicas.dims,
-          packet.replicas.boundary_policy,
-        )
-        : EMPTY_TABLE
+      this.#images = boundary_images ??
+        (graph !== undefined
+          ? build_image_instance_table(
+            graph,
+            packet.replicas.dims,
+            packet.replicas.boundary_policy,
+          )
+          : EMPTY_TABLE)
     }
     if (ghosts_changed || diff.replica_changed || diff.topology_changed) {
       const graph = packet.topology.bond_graph

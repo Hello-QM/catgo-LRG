@@ -21,6 +21,7 @@ import {
   create_render_packet_builder,
   type PacketBondConnectivity,
 } from '$lib/structure/scene/render-packet-builder'
+import { build_image_instance_table } from '$lib/structure/scene/replica-layout'
 import type {
   BaseBondGraph,
   ImageInstanceTable,
@@ -30,6 +31,11 @@ import type {
 import type { AnyStructure, Site } from '$lib'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 import { decode_compact_bond_instance } from '$lib/structure/gpu/webgl2/compact-bond-instance-layout'
+import {
+  build_display_radii,
+  build_logical_radii,
+} from '$lib/structure/gpu/radius-lut'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -493,6 +499,7 @@ function make_packet(input: {
   dims: readonly [number, number, number]
   boundary_policy?: 'stub' | 'hide' | 'ghost-images'
   bonds?: PacketBondConnectivity[]
+  radii?: Float32Array
 }): RenderPacket {
   const builder = create_render_packet_builder()
   return builder.build({
@@ -500,6 +507,7 @@ function make_packet(input: {
     bond_connectivity: input.bonds ?? null,
     dims: input.dims,
     boundary_policy: input.boundary_policy ?? 'stub',
+    radii: input.radii,
   })
 }
 
@@ -550,6 +558,31 @@ function make_pick_scene(packet?: RenderPacket): ReplicaPickScene {
 describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
   const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
 
+  test('uses the same final display radii as the visual replica draw', () => {
+    const structure = make_structure(3)
+    const logical = build_logical_radii(structure.sites, { atom_radius: 1.5 })
+    const expected = build_display_radii(structure.sites, { atom_radius: 1.5 })
+    const packet = create_render_packet_builder().build({
+      structure,
+      radii: logical,
+      dims: [1, 1, 1],
+    })
+    const scene = make_pick_scene(packet)
+    scene.sync(packet)
+    expect(packet.topology.radii).toBe(logical)
+    const geometry = scene.atom_mesh.geometry as THREE.InstancedBufferGeometry
+    const radii = geometry.getAttribute(
+      'instanceRadius',
+    ) as THREE.InstancedBufferAttribute
+    expect(Array.from(radii.array as Float32Array)).toEqual(Array.from(expected))
+    for (let idx = 0; idx < logical.length; idx++) {
+      expect((radii.array as Float32Array)[idx]).toBeCloseTo(
+        logical[idx] * VISUAL_RADIUS_SCALE,
+      )
+    }
+    scene.dispose()
+  })
+
   test('same base atom picked in two replica cells folds to one base site', () => {
     const packet = make_packet({ n: 2, dims: [2, 1, 1] })
     const scene = make_pick_scene(packet)
@@ -587,12 +620,20 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
       dims: [1, 1, 1],
       boundary_policy: 'ghost-images',
       bonds: [{ site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] }],
+      radii: Float32Array.from([2, 4, 6]),
     })
     const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
     expect(codec.ghost_count).toBe(1)
+    const ghost_geometry = scene.ghost_mesh.geometry as THREE.InstancedBufferGeometry
+    const ghost_radii = ghost_geometry.getAttribute(
+      'ghostRadius',
+    ) as THREE.InstancedBufferAttribute
+    expect((ghost_radii.array as Float32Array)[0]).toBeCloseTo(
+      packet.topology.radii[2] * VISUAL_RADIUS_SCALE,
+    )
 
     const fake = make_fake_pick_renderer([encode_replica_ghost_id(codec, 0)])
     const picked = scene.pick(fake, camera, 0, 0)
@@ -603,6 +644,59 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
       ghost: true,
     })
     expect(picked.logical_site).toBe(2)
+    scene.dispose()
+  })
+
+  test('authoritative boundary atoms replace graph-derived picker ghosts', () => {
+    const packet = make_packet({
+      n: 3,
+      dims: [2, 1, 1],
+      boundary_policy: 'ghost-images',
+      bonds: [{ site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] }],
+      radii: Float32Array.from([2, 4, 6]),
+    })
+    const authoritative: ImageInstanceTable = {
+      count: 2,
+      base_sites: Uint32Array.from([0, 1]),
+      jimages: Int8Array.from([
+        -1, 0, 0,
+        2, 0, 0,
+      ]),
+    }
+    const scene = make_pick_scene(packet)
+    scene.sync(packet, { boundary_atom_images: authoritative })
+
+    expect(scene.images).toBe(authoritative)
+    expect(scene.codec?.ghost_count).toBe(2)
+    expect(
+      (scene.ghost_mesh.geometry as THREE.InstancedBufferGeometry).instanceCount,
+    ).toBe(2)
+    const fake = make_fake_pick_renderer([
+      encode_replica_ghost_id(scene.codec!, 1),
+    ])
+    expect(scene.pick(fake, camera, 0, 0).pick).toEqual({
+      kind: 'atom',
+      base_site: 1,
+      cell: [2, 0, 0],
+      ghost: true,
+    })
+
+    // A non-null empty table is authoritative too: do not resurrect the graph
+    // ghost merely because the ordinary atom boundary set is empty.
+    const empty_authoritative: ImageInstanceTable = {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    }
+    scene.sync(packet, { boundary_atom_images: empty_authoritative })
+    expect(scene.images).toBe(empty_authoritative)
+    expect(scene.codec?.ghost_count).toBe(0)
+    expect(scene.ghost_mesh.visible).toBe(false)
+
+    // Omitting the option keeps compatibility for isolated consumers.
+    scene.sync(packet)
+    expect(scene.codec?.ghost_count).toBe(1)
+    expect(scene.images.base_sites[0]).toBe(2)
     scene.dispose()
   })
 
@@ -1035,7 +1129,7 @@ describe('WebGPU pick decode — request-time snapshot', () => {
       kinds: new Uint8Array(1),
       strengths: new Float32Array([1]),
     }
-    renderer.set_packet({
+    const initial_packet: RenderPacket = {
       topology: snapshot_topology(graph),
       frame: snapshot_frame(),
       replicas: {
@@ -1044,7 +1138,15 @@ describe('WebGPU pick decode — request-time snapshot', () => {
         boundary_policy: 'ghost-images',
         semantics: 'visual-shared-base',
       },
-    }, EMPTY_IMAGES)
+    }
+    renderer.set_packet(
+      initial_packet,
+      build_image_instance_table(
+        graph,
+        initial_packet.replicas.dims,
+        initial_packet.replicas.boundary_policy,
+      ),
+    )
 
     const pending = renderer.pick(2, 2)
 
@@ -1109,6 +1211,8 @@ describe('packet path picking wiring (source contract)', () => {
       'utf8',
     )
     expect(integration_source).toContain('get_render_packet')
+    expect(integration_source).toContain('get_packet_boundary_atom_images')
+    expect(integration_source).toContain('boundary_atom_images:')
     expect(integration_source).toContain('resolve_replica_pick_action')
     expect(integration_source).toMatch(
       /window\.addEventListener\(\s*[`'"]pointerdown[`'"]\s*,[^,]+,\s*true\s*\)/,

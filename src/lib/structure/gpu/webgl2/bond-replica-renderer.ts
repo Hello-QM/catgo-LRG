@@ -34,6 +34,7 @@ import * as THREE from 'three'
 import type {
   BaseBondGraph,
   BoundaryPolicy,
+  ImageInstanceTable,
   RenderPacket,
   RenderPacketDiff,
 } from '../../scene/render-packet'
@@ -51,6 +52,11 @@ import { SharedPositionTexture } from './shared-position-texture'
 import { SharedAtomColorTexture } from './shared-atom-color-texture'
 import { COMPACT_BOND_TOPOLOGY_BYTES } from './compact-bond-instance-layout'
 import { trajectory_render_diagnostics } from '../../trajectory-render-diagnostics'
+import {
+  BOUNDARY_BOND_ANCHOR,
+  BOUNDARY_BOND_MODE,
+  build_boundary_bond_endpoint_layout,
+} from '../../scene/periodic-decoration-snapshot'
 
 /** Shader-side boundary-policy codes (uPolicy). */
 export const BOUNDARY_POLICY_CODE: Record<BoundaryPolicy, number> = {
@@ -143,6 +149,7 @@ type BondGhostPage = {
   sites: THREE.InstancedBufferAttribute
   jimages: THREE.InstancedBufferAttribute
   cells: THREE.InstancedBufferAttribute
+  stubs: THREE.InstancedBufferAttribute
 }
 
 /** Enumerate ghost-side halves through the REAL T1 oracle (allocation-lean
@@ -195,6 +202,122 @@ export function build_ghost_half_table(
     sites: Float32Array.from(sites),
     jimages: Float32Array.from(jimages),
     cells: Float32Array.from(cells),
+  }
+}
+
+/**
+ * Sparse ordinary-boundary decorator draw. FULL rows become two colored
+ * half-cylinders meeting at the midpoint; STUB rows become one half-cylinder
+ * anchored at the owning image atom. This preserves the ordinary renderer's
+ * image-atom × incident-bond ownership, including B-anchored, self-image,
+ * ghost-to-ghost, and duplicate rows.
+ */
+export type BoundaryDecoratorHalfTable = GhostHalfTable & {
+  /** 1 × count — 1 for an incomplete-edge stub, otherwise 0. */
+  stubs: Float32Array
+}
+
+const EMPTY_BOUNDARY_DECORATOR_TABLE: BoundaryDecoratorHalfTable = {
+  ...EMPTY_GHOST_TABLE,
+  stubs: new Float32Array(0),
+}
+
+export function build_authoritative_boundary_half_table(
+  bond_graph: BaseBondGraph,
+  images: ImageInstanceTable,
+  positions: ArrayLike<number>,
+  lattice: ArrayLike<number>,
+  dims: ReplicaDims,
+  policy: BoundaryPolicy,
+): BoundaryDecoratorHalfTable {
+  if (images.count === 0) return EMPTY_BOUNDARY_DECORATOR_TABLE
+  const layout = build_boundary_bond_endpoint_layout(
+    bond_graph,
+    images,
+    positions,
+    lattice,
+    { dims, policy, stub_scale: 1 },
+  )
+  const sites: number[] = []
+  const jimages: number[] = []
+  const cells: number[] = []
+  const stubs: number[] = []
+  const push_half = (
+    anchor_site: number,
+    partner_site: number,
+    anchor_cells: Int16Array,
+    partner_cells: Int16Array,
+    offset: number,
+    stub: boolean,
+  ): void => {
+    const ax = anchor_cells[offset]
+    const ay = anchor_cells[offset + 1]
+    const az = anchor_cells[offset + 2]
+    sites.push(anchor_site, partner_site)
+    cells.push(ax, ay, az)
+    jimages.push(
+      partner_cells[offset] - ax,
+      partner_cells[offset + 1] - ay,
+      partner_cells[offset + 2] - az,
+    )
+    stubs.push(stub ? 1 : 0)
+  }
+  for (let row = 0; row < layout.count; row++) {
+    const mode = layout.modes[row]
+    if (mode === BOUNDARY_BOND_MODE.HIDDEN) continue
+    const slot = layout.bond_indices[row]
+    const a = bond_graph.pairs[slot * 2]
+    const b = bond_graph.pairs[slot * 2 + 1]
+    const offset = row * 3
+    if (mode === BOUNDARY_BOND_MODE.FULL) {
+      push_half(a, b, layout.a_cells, layout.b_cells, offset, false)
+      push_half(b, a, layout.b_cells, layout.a_cells, offset, false)
+      continue
+    }
+    const anchor_is_a =
+      layout.anchor_sides[row] === BOUNDARY_BOND_ANCHOR.A
+    push_half(
+      anchor_is_a ? a : b,
+      anchor_is_a ? b : a,
+      anchor_is_a ? layout.a_cells : layout.b_cells,
+      anchor_is_a ? layout.b_cells : layout.a_cells,
+      offset,
+      true,
+    )
+  }
+  return {
+    count: sites.length / 2,
+    sites: Float32Array.from(sites),
+    jimages: Float32Array.from(jimages),
+    cells: Float32Array.from(cells),
+    stubs: Float32Array.from(stubs),
+  }
+}
+
+function adapt_legacy_ghost_half_table(
+  table: GhostHalfTable,
+): BoundaryDecoratorHalfTable {
+  if (table.count === 0) return EMPTY_BOUNDARY_DECORATOR_TABLE
+  const sites = new Float32Array(table.sites.length)
+  const jimages = new Float32Array(table.jimages.length)
+  const cells = new Float32Array(table.cells.length)
+  for (let idx = 0; idx < table.count; idx++) {
+    // Legacy rows describe A(real cell) → B(ghost at cell+jimage). The
+    // generalized decorator shader stores anchor first, so reverse the row.
+    sites[idx * 2] = table.sites[idx * 2 + 1]
+    sites[idx * 2 + 1] = table.sites[idx * 2]
+    for (let axis = 0; axis < 3; axis++) {
+      const j = table.jimages[idx * 3 + axis]
+      jimages[idx * 3 + axis] = -j
+      cells[idx * 3 + axis] = table.cells[idx * 3 + axis] + j
+    }
+  }
+  return {
+    count: table.count,
+    sites,
+    jimages,
+    cells,
+    stubs: new Float32Array(table.count),
   }
 }
 
@@ -328,18 +451,22 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
   attribute vec2 g_site;
   attribute vec3 g_jimage;
   attribute vec3 g_cell;
+  attribute float g_stub;
+  uniform float uStubScale;
   ${VERTEX_COMMON}
 
   void main() {
-    vec3 pa = fetchBasePosition(g_site.x) +
+    vec3 anchor = fetchBasePosition(g_site.x) +
       uLattice * g_cell;
-    vec3 pb = fetchBasePosition(g_site.y) +
+    vec3 partner = fetchBasePosition(g_site.y) +
       uLattice * (g_cell + g_jimage);
-    vec3 anchor = pb;
-    vec3 tip = 0.5 * (pa + pb);
+    float scale = 0.5 * (g_stub > 0.5 ? uStubScale : 1.0);
+    vec3 tip = anchor + (partner - anchor) * scale;
     bool collapse = false;
-    bool open_tip = true;
-    vColor = fetchBaseColor(g_site.y);
+    // Full decorator halves meet at an internal midpoint and leave that cap
+    // open; an incomplete boundary stub has a real exposed tip and keeps it.
+    bool open_tip = g_stub < 0.5;
+    vColor = fetchBaseColor(g_site.x);
     ${VERTEX_TAIL}
   }
 `
@@ -513,6 +640,7 @@ export class BondReplicaRenderer {
   #ghost_geometry = new THREE.InstancedBufferGeometry()
   #box: THREE.BoxGeometry
   #prev: RenderPacket | null = null
+  #boundary_images: ImageInstanceTable | null = null
   #installed_state: BondReplicaInstalledState | null = null
   #positions: SharedPositionTexture
   #release_positions: () => void
@@ -557,6 +685,7 @@ export class BondReplicaRenderer {
       uColorTexWidth: { value: this.#colors.texture.image.width },
       uLattice: { value: new THREE.Matrix3() },
       uBondRadius: { value: options.bond_radius ?? 0.15 },
+      uStubScale: { value: options.stub_scale ?? 0.5 },
       uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
       uAmbientIntensity: { value: options.ambient_light ?? 0.8 },
       uDirectionalIntensity: { value: options.directional_light ?? 0.3 },
@@ -576,7 +705,6 @@ export class BondReplicaRenderer {
         uDims: { value: new Int32Array([1, 1, 1]) },
         uCellCount: { value: 1 },
         uPolicy: { value: BOUNDARY_POLICY_CODE.stub },
-        uStubScale: { value: options.stub_scale ?? 0.5 },
         uOpacity: { value: 1 },
       },
     })
@@ -648,9 +776,13 @@ export class BondReplicaRenderer {
   }
 
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
-  update(packet: RenderPacket): void {
+  update(
+    packet: RenderPacket,
+    boundary_images: ImageInstanceTable | null = null,
+  ): void {
     const update_started_ms = performance.now()
     const prev = this.#prev
+    const boundary_images_changed = this.#boundary_images !== boundary_images
     this.#positions.update(packet.frame)
     this.#colors.update(packet.topology)
     this.material.uniforms.uPosTexWidth.value =
@@ -675,11 +807,13 @@ export class BondReplicaRenderer {
         main_bytes,
       )
     }
-    if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
+    if (graph_changed || diff.replica_changed || boundary_images_changed) {
+      this.#apply_replicas(packet, boundary_images !== null)
+    }
     if (lattice_changed) this.#upload_lattice(packet)
-    if (graph_changed || diff.replica_changed) {
+    if (graph_changed || diff.replica_changed || boundary_images_changed) {
       const ghosts_started_ms = performance.now()
-      topology_upload_bytes += this.#rebuild_ghosts(packet)
+      topology_upload_bytes += this.#rebuild_ghosts(packet, boundary_images)
       ghosts_ms = performance.now() - ghosts_started_ms
     }
     if (topology_upload_bytes > 0) {
@@ -690,6 +824,7 @@ export class BondReplicaRenderer {
     // Publish the installed identity only after topology, replicas, current
     // lattice, and every enabled ghost page have completed.
     this.#prev = packet
+    this.#boundary_images = boundary_images
     this.#installed_state = {
       packet,
       topology_version: packet.topology.version,
@@ -773,7 +908,10 @@ export class BondReplicaRenderer {
     return bond_count * COMPACT_BOND_TOPOLOGY_BYTES
   }
 
-  #apply_replicas(packet: RenderPacket): void {
+  #apply_replicas(
+    packet: RenderPacket,
+    authoritative_boundary: boolean,
+  ): void {
     const dims = packet.replicas.dims
     const cc = cell_count_of(dims)
     const group_size = 2 * cc
@@ -799,8 +937,13 @@ export class BondReplicaRenderer {
     dims_val[1] = dims[1]
     dims_val[2] = dims[2]
     this.material.uniforms.uCellCount.value = cc
-    this.material.uniforms.uPolicy.value =
-      BOUNDARY_POLICY_CODE[packet.replicas.boundary_policy]
+    // Ordinary mode leaves home-cell cross-boundary edges as paired stubs and
+    // lets its image-atom decorator pass own the exact full/stub completions.
+    // With an authoritative table, mirror that behavior and disable the
+    // endpoint-B-only graph ghost completion.
+    this.material.uniforms.uPolicy.value = authoritative_boundary
+      ? BOUNDARY_POLICY_CODE.stub
+      : BOUNDARY_POLICY_CODE[packet.replicas.boundary_policy]
   }
 
   #upload_lattice(packet: RenderPacket): void {
@@ -818,10 +961,12 @@ export class BondReplicaRenderer {
     const sites = sparse_float_attr(2)
     const jimages = sparse_float_attr(3)
     const cells = sparse_float_attr(3)
+    const stubs = sparse_float_attr(1)
     geometry.setAttribute(`g_site`, sites)
     geometry.setAttribute(`g_jimage`, jimages)
     geometry.setAttribute(`g_cell`, cells)
-    return { mesh, geometry, sites, jimages, cells }
+    geometry.setAttribute(`g_stub`, stubs)
+    return { mesh, geometry, sites, jimages, cells, stubs }
   }
 
   #ensure_ghost_pages(count: number): void {
@@ -841,12 +986,26 @@ export class BondReplicaRenderer {
     }
   }
 
-  #rebuild_ghosts(packet: RenderPacket): number {
+  #rebuild_ghosts(
+    packet: RenderPacket,
+    boundary_images: ImageInstanceTable | null,
+  ): number {
     const graph = packet.topology.bond_graph
     const { dims, boundary_policy } = packet.replicas
-    const table = graph !== undefined
-      ? build_ghost_half_table(graph, dims, boundary_policy)
-      : EMPTY_GHOST_TABLE
+    const table = graph === undefined
+      ? EMPTY_BOUNDARY_DECORATOR_TABLE
+      : boundary_images !== null
+        ? build_authoritative_boundary_half_table(
+          graph,
+          boundary_images,
+          packet.frame.positions,
+          packet.frame.lattice,
+          dims,
+          boundary_policy,
+        )
+        : adapt_legacy_ghost_half_table(
+          build_ghost_half_table(graph, dims, boundary_policy),
+        )
     const count = table.count
     this.#ensure_ghost_pages(count)
 
@@ -857,6 +1016,7 @@ export class BondReplicaRenderer {
       const sites = page.sites.array as Float32Array
       const jimages = page.jimages.array as Float32Array
       const cells = page.cells.array as Float32Array
+      const stubs = page.stubs.array as Float32Array
       for (let local = 0; local < used; local++) {
         const idx = start + local
         sites[local * 2] = table.sites[idx * 2]
@@ -865,23 +1025,26 @@ export class BondReplicaRenderer {
           jimages[local * 3 + axis] = table.jimages[idx * 3 + axis]
           cells[local * 3 + axis] = table.cells[idx * 3 + axis]
         }
+        stubs[local] = table.stubs[idx]
       }
       for (const attribute of [
         page.sites,
         page.jimages,
         page.cells,
+        page.stubs,
       ]) commit_sparse_attr(attribute, used)
       page.geometry.instanceCount = used
       delete (page.geometry as unknown as { _maxInstanceCount?: number })
         ._maxInstanceCount
       page.mesh.visible = used > 0
     }
-    // Every live ghost prefix updates 8 Float32 values across three buffers.
-    return count * 8 * Float32Array.BYTES_PER_ELEMENT
+    // Every live decorator prefix updates 9 Float32 values across four buffers.
+    return count * 9 * Float32Array.BYTES_PER_ELEMENT
   }
 
   dispose(): void {
     this.#prev = null
+    this.#boundary_images = null
     this.#installed_state = null
     this.#geometry.dispose()
     for (const page of this.#ghost_pages) page.geometry.dispose()

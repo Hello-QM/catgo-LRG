@@ -33,7 +33,13 @@
  */
 
 import * as THREE from 'three'
-import { VISUAL_RADIUS_SCALE } from '../../atoms/atom-instanced-renderer'
+import {
+  TOON_HIGHLIGHT_THRESHOLD,
+  TOON_SHADOW_BRIGHTNESS,
+  TOON_SHADOW_THRESHOLD,
+  VISUAL_RADIUS_SCALE,
+  style_pbr,
+} from '../../rendering/visual-state'
 import type {
   ImageInstanceTable,
   RenderPacket,
@@ -444,6 +450,7 @@ export class AtomReplicaRenderer {
   #ghost_geometry = new THREE.InstancedBufferGeometry()
   #quad: THREE.PlaneGeometry
   #prev: RenderPacket | null = null
+  #boundary_images: ImageInstanceTable | null = null
   #positions: SharedPositionTexture
   #release_positions: () => void
   #owns_positions: boolean
@@ -466,6 +473,7 @@ export class AtomReplicaRenderer {
       geometry.instanceCount = 0
     }
 
+    const default_pbr = style_pbr(`glossy`)
     const shared_uniforms = {
       uPosTex: { value: this.#positions.texture },
       uPosTexWidth: { value: this.#positions.texture.image.width },
@@ -479,12 +487,12 @@ export class AtomReplicaRenderer {
       // (glossy GGX at roughness 0.2 / metalness 0, toon thresholds from
       // AtomCanvas ToonHighlightMaterial).
       uRenderStyle: { value: 0 },
-      uShadowThreshold: { value: 0.3 },
-      uHighlightThreshold: { value: 0.97 },
-      uShadowBrightness: { value: 0.5 },
+      uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+      uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+      uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
       uSpecStrength: { value: 1 },
-      uRoughness: { value: 0.2 },
-      uMetalness: { value: 0 },
+      uRoughness: { value: default_pbr.roughness },
+      uMetalness: { value: default_pbr.metalness },
       uMatcap: { value: null as THREE.Texture | null },
     }
 
@@ -557,8 +565,12 @@ export class AtomReplicaRenderer {
   }
 
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
-  update(packet: RenderPacket): void {
+  update(
+    packet: RenderPacket,
+    boundary_images: ImageInstanceTable | null = null,
+  ): void {
     const prev = this.#prev
+    const boundary_images_changed = this.#boundary_images !== boundary_images
     this.#positions.update(packet.frame)
     this.material.uniforms.uPosTexWidth.value =
       this.#positions.texture.image.width
@@ -579,11 +591,12 @@ export class AtomReplicaRenderer {
     if (lattice_changed) this.#upload_lattice(packet)
 
     const ghosts_changed = diff.topology_changed || diff.bond_graph_changed ||
-      diff.replica_changed
-    if (ghosts_changed) this.#rebuild_ghosts(packet)
+      diff.replica_changed || boundary_images_changed
+    if (ghosts_changed) this.#rebuild_ghosts(packet, boundary_images)
     // Publish the installed identity only after every packet-owned resource,
     // including the current lattice and ghost topology, has completed.
     this.#prev = packet
+    this.#boundary_images = boundary_images
   }
 
   installed_packet(): RenderPacket | null {
@@ -666,12 +679,16 @@ export class AtomReplicaRenderer {
     }
   }
 
-  #rebuild_ghosts(packet: RenderPacket): void {
+  #rebuild_ghosts(
+    packet: RenderPacket,
+    boundary_images: ImageInstanceTable | null,
+  ): void {
     const graph = packet.topology.bond_graph
     const { dims, boundary_policy } = packet.replicas
-    const table = graph !== undefined && boundary_policy === `ghost-images`
-      ? build_image_instance_table(graph, dims, boundary_policy)
-      : EMPTY_TABLE
+    const table = boundary_images ??
+      (graph !== undefined && boundary_policy === `ghost-images`
+        ? build_image_instance_table(graph, dims, boundary_policy)
+        : EMPTY_TABLE)
     const count = table.count
     this.#ensure_ghost_pages(count)
     const { radii, colors, atom_count } = packet.topology
@@ -712,6 +729,8 @@ export class AtomReplicaRenderer {
   }
 
   dispose(): void {
+    this.#prev = null
+    this.#boundary_images = null
     this.#geometry.dispose()
     for (const page of this.#ghost_pages) page.geometry.dispose()
     this.#quad.dispose()

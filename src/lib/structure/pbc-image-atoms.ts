@@ -80,6 +80,41 @@ export function make_image_site_key(
 	return `${site_idx}-${jimage[0]},${jimage[1]},${jimage[2]}` as ImageSiteKey
 }
 
+/**
+ * Extend a normal-renderer decorator map with the exact appended atom images
+ * already present in displayed_structure.
+ *
+ * The returned Map is a clone so callers can retain the raw CrystalToolkit
+ * surface for diagnostics. The merged result is the final cross-renderer
+ * contract: every visible boundary sphere owns the same decorator rows in
+ * ordinary WebGL and large-system WebGPU.
+ */
+export function merge_image_instances_into_sites_to_draw(
+	sites_to_draw: ReadonlyMap<ImageSiteKey, ImageSiteEntry>,
+	atom_images: ImageInstanceTable,
+): Map<ImageSiteKey, ImageSiteEntry> {
+	const merged = new Map(sites_to_draw)
+	const count = Math.min(
+		atom_images.count,
+		atom_images.base_sites.length,
+		Math.floor(atom_images.jimages.length / 3),
+	)
+	for (let idx = 0; idx < count; idx++) {
+		const site_idx = atom_images.base_sites[idx]
+		const jimage: [number, number, number] = [
+			atom_images.jimages[idx * 3],
+			atom_images.jimages[idx * 3 + 1],
+			atom_images.jimages[idx * 3 + 2],
+		]
+		if ((jimage[0] | jimage[1] | jimage[2]) === 0) continue
+		const key = make_image_site_key(site_idx, jimage)
+		if (!merged.has(key)) {
+			merged.set(key, { site_idx, jimage_img: jimage })
+		}
+	}
+	return merged
+}
+
 function has_lattice(s: AnyStructure): s is PymatgenStructure {
 	return 'lattice' in s && (s as PymatgenStructure).lattice !== undefined
 }

@@ -1,12 +1,24 @@
 <script lang="ts">
   import type { AnyStructure, BondPair, ElementSymbol, HBondConnectivity, Site, Vec3 } from '$lib'
   import type { Crystal } from './index'
-  import { atomic_radii, axis_colors, element_data, neg_axis_colors } from '$lib'
+  import { atomic_radii, element_data } from '$lib'
   import { resolve_css_var } from '$lib/css-utils'
   import { format_num } from '$lib/labels'
   import * as math from '$lib/math'
   import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, should_reduce_motion, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
+  import {
+    find_theme_background,
+    resolve_background_linear,
+  } from '$lib/structure/rendering/background'
+  import { resolve_view_transform } from '$lib/structure/rendering/view-transform'
+  import type {
+    ResolvedVisualState,
+    VisualStateSource,
+  } from '$lib/structure/rendering/visual-state'
+  import { resolve_atom_colors_linear } from '$lib/structure/rendering/atom-colors'
+  import { apply_webgl_background } from '$lib/structure/rendering/visual-adapters'
+  import { mutate_camera_pose } from '$lib/structure/rendering/camera-revision'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
   import { T, useThrelte, useTask } from '@threlte/core'
@@ -27,7 +39,22 @@
   import PencilModeOverlay from './PencilModeOverlay.svelte'
   import AtomImpostors from './AtomImpostors.svelte'
   import SlabPreview from './SlabPreview.svelte'
-  import { build_display_radii } from './gpu/radius-lut'
+  import { build_logical_radii } from './gpu/radius-lut'
+  import {
+    TOON_HIGHLIGHT_THRESHOLD,
+    TOON_SHADOW_BRIGHTNESS,
+    TOON_SHADOW_THRESHOLD,
+    VISUAL_RADIUS_SCALE,
+    render_style_to_backend,
+    style_pbr,
+  } from './rendering/visual-state'
+  import {
+    EMPTY_HUD_SAFE_AREA,
+    GIZMO_AXIS_COLORS,
+    GIZMO_NEG_AXIS_COLORS,
+    gizmo_dom_offset,
+    type HudSafeArea,
+  } from './rendering/gizmo'
   import WebGLReplicaLayer from './gpu/WebGLReplicaLayer.svelte'
   import {
     combined_packet_render_eligible,
@@ -37,6 +64,7 @@
   import type {
     BaseBondGraph,
     BaseTopology,
+    ImageInstanceTable,
     RenderPacket,
   } from './scene/render-packet'
   import {
@@ -83,10 +111,18 @@
   } from './bonding/image-atom-layout'
   import {
     build_sites_to_draw,
+    image_sites_to_instance_table,
     make_image_site_key,
+    merge_image_instances_into_sites_to_draw,
     type ImageSiteEntry,
     type ImageSiteKey,
   } from './pbc-image-atoms'
+  import { find_pbc_images_fast } from './pbc'
+  import {
+    displayed_image_atoms_to_instance_table,
+    expand_ordinary_image_table,
+    type PeriodicDecorationSource,
+  } from './scene/periodic-decoration-snapshot'
   import {
     create_current_trajectory_source_request_guard,
     prepared_frame_key_for_shared_topology_source,
@@ -304,6 +340,8 @@
     // semantics), and bond picks carry the base bond GRAPH index.
     get_render_packet: () =>
       combined_packet_renderer_owned ? manager_render_packet : null,
+    get_packet_boundary_atom_images: () =>
+      manager_packet_boundary_atom_images,
     finish_packet_pointer_gesture,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
@@ -445,7 +483,11 @@
   // extras.Instance approach. The mesh geometry is never rendered (visible=false)
   // but provides analytic ray-sphere intersection via a custom raycast method.
   let atom_interaction_mesh: ThreeInstancedMesh | undefined = $state()
-  const atom_interaction_geometry = new SphereGeometry(0.5, 8, 6) // Low-poly but enough for click detection
+  const atom_interaction_geometry = new SphereGeometry(
+    VISUAL_RADIUS_SCALE,
+    8,
+    6,
+  ) // Low-poly but enough for click detection
   // MeshBasicMaterial({ visible: false }) doesn't reliably prevent rendering
   // in Three.js r181.  Use fully transparent + no depth writes instead.
   const atom_interaction_material = new MeshBasicMaterial({
@@ -696,6 +738,7 @@
     force_range_min = DEFAULTS.structure.force_range_min,
     force_range_max = DEFAULTS.structure.force_range_max,
     gizmo = DEFAULTS.structure.show_gizmo,
+    hud_safe = EMPTY_HUD_SAFE_AREA,
     hovered_idx = $bindable(null),
     hovered_site = $bindable(null),
     float_fmt = `.3~f`,
@@ -852,6 +895,17 @@
     // Without the parent binding, this default keeps StructureScene self-
     // contained for any test harness that mounts it directly.
     atom_manager = $bindable<AtomManager>(new AtomManager()),
+    // Single revision-bearing source for both visual adapters. Each revision
+    // captures one immutable snapshot; camera-dependent depth planes publish a
+    // new revision through the explicit camera bridge.
+    visual_state_source = $bindable<VisualStateSource | null>(null),
+    periodic_decoration_source =
+      $bindable<PeriodicDecorationSource | null>(null),
+    bond_owner_id = 0,
+    // Camera matrices are mutable Three objects, so their internal changes are
+    // invisible to Svelte. The owner binds this explicit revision and every
+    // camera mutation path bumps it.
+    camera_revision = $bindable(0),
     deleted_bond_keys = new Set<string>(),
 
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
@@ -949,6 +1003,8 @@
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> // per-element radius overrides
     site_radius_overrides?: Map<number, number> | SvelteMap<number, number> // per-site radius overrides (takes precedence over element overrides)
     site_color_overrides?: Map<number, string> | SvelteMap<number, string> // per-site color overrides (takes precedence over element/property colors)
+    /** Authoritative displayed-site linear RGB buffer. The WebGPU adapter takes
+     *  only the base prefix matching its packet topology. */
     camera_position?: [x: number, y: number, z: number] // initial camera position from which to render the scene
     camera_projection?: CameraProjection // camera projection type
     rotation_damping?: number // rotation damping factor (how quickly the rotation comes to rest after mouse release)
@@ -977,6 +1033,8 @@
     force_range_min?: number
     force_range_max?: number
     gizmo?: boolean | ComponentProps<typeof extras.Gizmo>
+    /** Pane HUD safe-area insets shared by both renderer gizmos. */
+    hud_safe?: Readonly<HudSafeArea>
     hovered_idx?: number | null
     hovered_site?: Site | null
     float_fmt?: string
@@ -1159,6 +1217,14 @@
     atom_fast_ops?: AtomFastOps | null
     /** Plan v3 Phase 1: atom_manager $bindable for parent-driven position writes. */
     atom_manager?: AtomManager
+    /** Single revision-bearing visual source shared by WebGL2 and WebGPU. */
+    visual_state_source?: VisualStateSource | null
+    /** Final graph plus separate ordinary atom/decorator image sets. */
+    periodic_decoration_source?: PeriodicDecorationSource | null
+    /** Parent-issued identity token for the current pre-image bond input. */
+    bond_owner_id?: number
+    /** Explicit revision for mutable camera/controls changes. */
+    camera_revision?: number
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -1477,49 +1543,35 @@
     }
   })
 
-  // Sync renderer clear color with the effective CSS background.
-  // Canvas uses alpha:false (opaque) to avoid compositing glitches caused by
-  // the Gizmo's multi-pass rendering toggling autoClear on a transparent canvas.
-  // Walk DOM to resolve theme background (alpha >= 0.5 wins).
-  function find_theme_bg(): Color {
-    const r = threlte.renderer
-    const canvas = r?.domElement
-    let el: HTMLElement | null = canvas ?? null
-    while (el) {
-      const bg = getComputedStyle(el).backgroundColor
-      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
-      if (m) {
-        const a = m[4] !== undefined ? parseFloat(m[4]) : 1
-        if (a >= 0.5) {
-          return new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255)
-        }
-      }
-      el = el.parentElement
-    }
-    return new Color(0x000000)
-  }
-
-  // Resolve the visible canvas background. Both sync_clear_color and the fog
-  // uniform must produce the same color so depth-cued atoms truly fade INTO
-  // the painted bg. Treat unset background_color as #000000 (matches the
-  // default <input type="color"> swatch) so the opacity slider is always live.
-  function compute_canvas_bg(target: Color): Color {
-    const picked = new Color(background_color ?? `#000000`)
-    const t = Math.max(0, Math.min(1, background_opacity))
-    if (t >= 0.999) return target.copy(picked)
-    if (t <= 0.001) return target.copy(find_theme_bg())
-    return target.copy(find_theme_bg()).lerp(picked, t)
-  }
-
-  // Sync renderer clear color with background_color/opacity. Canvas is
-  // alpha:false (opaque) so `background_opacity` is treated as override
-  // strength: 0 → theme bg, 1 → picked, mid → lerp.
+  // Resolve the effective CSS background once in StructureScene, the owner of
+  // both backend state. CSS arrives as display sRGB; the shared resolver
+  // converts it once and blends in Three's linear working space.
+  const __theme_bg = new Color()
   const __scratch_bg = new Color()
+  let resolved_background_linear: [number, number, number] = [0, 0, 0]
+  let theme_revision = $state(0)
+
+  function compute_canvas_bg(target: Color): Color {
+    const theme = find_theme_background(
+      threlte.renderer?.domElement ?? null,
+      __theme_bg,
+    )
+    const resolved = resolve_background_linear({
+      theme_linear: [theme.r, theme.g, theme.b],
+      picked: background_color ?? `#000000`,
+      opacity: background_opacity,
+    }, target)
+    resolved_background_linear = [resolved.r, resolved.g, resolved.b]
+    return resolved
+  }
+
+  // Canvas uses alpha:false (opaque), so opacity is override strength:
+  // 0 → theme bg, 1 → picked, mid → a linear-RGB blend. WebGL consumes this
+  // same triple directly; the overlay receives it through the visual snapshot.
   function sync_clear_color() {
     const r = threlte.renderer
     if (!r) return
     compute_canvas_bg(__scratch_bg)
-    r.setClearColor(__scratch_bg, 1)
     // Keep fog target in lockstep — same color object computation, no
     // dependency on effect ordering between sync_clear_color and the fog
     // uniform updater.
@@ -1553,7 +1605,11 @@
 
     // Re-sync when theme changes (class/attribute changes on html or body)
     const observer = new MutationObserver(() => {
-      requestAnimationFrame(() => sync_clear_color())
+      requestAnimationFrame(() => {
+        sync_clear_color()
+        // Publish only after the newly resolved linear background is ready.
+        theme_revision += 1
+      })
     })
     observer.observe(document.documentElement, { attributes: true, attributeFilter: [`class`, `data-theme`, `style`] })
     observer.observe(document.body, { attributes: true, attributeFilter: [`class`, `data-theme`, `style`] })
@@ -1593,12 +1649,22 @@
     current_camera_target = vector_to_vec3(orbit_controls.target)
   }
 
-  function finish_camera_change(next_target?: Vec3 | null) {
+  function note_camera_change() {
+    camera_revision += 1
+  }
+
+  function finish_camera_change(
+    next_target?: Vec3 | null,
+    revision_before = camera_revision,
+  ) {
     if (next_target) current_camera_target = copy_vec3(next_target)
     else sync_current_camera_target_from_controls()
     snapshot_view()
     clear_trackball_rotation_inertia()
     sync_trackball_reset_refs()
+    // Some imperative paths call orbit_controls.update(), which may emit an
+    // onchange synchronously. Publish the final pose exactly once either way.
+    if (camera_revision === revision_before) note_camera_change()
     mark_dirty()
   }
 
@@ -1706,6 +1772,7 @@
     snapshot_view()
     sync_trackball_reset_refs()
     capture_trackball_view_state()
+    note_camera_change()
   }
 
   // Expose the stable rotation pivot for external reset/gesture handlers.
@@ -1744,13 +1811,19 @@
   function apply_orbit_target(target: Vec3) {
     untrack(() => {
       if (!orbit_controls?.target) return
-      orbit_controls.target.set(...target)
-      current_camera_target = copy_vec3(target)
-      clear_trackball_rotation_inertia()
-      sync_trackball_reset_refs()
-      orbit_controls.update?.()
-      // mark_dirty: imperative orbit_controls.target.set + .update() bypasses <T.> prop chain
-      mark_dirty()
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        orbit_controls!.target.set(...target)
+        // Preserve the non-pose bookkeeping even when the target was already
+        // equal. These refs are TrackballControls reset/inertia state, not a
+        // reason to publish another visual revision.
+        current_camera_target = copy_vec3(target)
+        clear_trackball_rotation_inertia()
+        sync_trackball_reset_refs()
+        orbit_controls!.update?.()
+      }, () => {
+        finish_camera_change(target, revision_before)
+      })
     })
   }
 
@@ -1763,10 +1836,15 @@
     if (_initial_up_set || !camera || !orbit_controls) return
     _initial_up_set = true
     const [ux, uy, uz] = initial_view?.up ?? [0, 0, 1]
-    camera.up.set(ux, uy, uz).normalize()
-    const ctrl = orbit_controls as any
-    if (ctrl._up0) ctrl._up0.copy(camera.up)
-    orbit_controls.update?.()
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      camera!.up.set(ux, uy, uz).normalize()
+      const ctrl = orbit_controls as any
+      if (ctrl._up0) ctrl._up0.copy(camera!.up)
+      orbit_controls!.update?.()
+    }, () => {
+      finish_camera_change(undefined, revision_before)
+    })
   })
 
   // Lock the rotation pivot on initial structure load or explicit recenter.
@@ -1817,31 +1895,33 @@
       const dist = camera.position.distanceTo(orbit_controls.target || new Vector3())
       const cam_distance = Math.max(dist, 1)
       const cam_pos = center.clone().add(new Vector3(0, 0, cam_distance))
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        camera!.position.copy(cam_pos)
+        camera!.up.set(0, 1, 0)
+        camera!.lookAt(center)
 
-      camera.position.copy(cam_pos)
-      camera.up.set(0, 1, 0)
-      camera.lookAt(center)
+        orbit_controls!.target.copy(center)
+        if ((orbit_controls as any)._target0) {
+          ;(orbit_controls as any)._target0.copy(center)
+        }
+        if ((orbit_controls as any)._eye0) {
+          ;(orbit_controls as any)._eye0.copy(new Vector3(0, 0, cam_distance))
+        }
+        if ((orbit_controls as any)._up0) {
+          ;(orbit_controls as any)._up0.set(0, 1, 0)
+        }
+        const ctrl = orbit_controls as any
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        ctrl._lastAngle = 0
+        orbit_controls!.update()
 
-      orbit_controls.target.copy(center)
-      if ((orbit_controls as any)._target0) {
-        ;(orbit_controls as any)._target0.copy(center)
-      }
-      if ((orbit_controls as any)._eye0) {
-        ;(orbit_controls as any)._eye0.copy(new Vector3(0, 0, cam_distance))
-      }
-      if ((orbit_controls as any)._up0) {
-        ;(orbit_controls as any)._up0.set(0, 1, 0)
-      }
-      const ctrl = orbit_controls as any
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      ctrl._lastAngle = 0
-      orbit_controls.update()
-
-      locked_rotation_pivot = vector_to_vec3(center)
-      current_camera_target = vector_to_vec3(center)
-      last_center_trigger = center_camera_trigger
-      // mark_dirty: imperative camera.position/up/lookAt + orbit_controls.update() bypass <T.> prop chain
-      mark_dirty()
+        locked_rotation_pivot = vector_to_vec3(center)
+        current_camera_target = vector_to_vec3(center)
+        last_center_trigger = center_camera_trigger
+      }, () => {
+        finish_camera_change(vector_to_vec3(center), revision_before)
+      })
     })
   })
 
@@ -1887,39 +1967,41 @@
       // Preserve the user's pan (look-at point) if they moved; else re-centre on the structure.
       const center = _view_target ? _view_target.clone() : new Vector3(...(current_camera_target || rotation_target || [0, 0, 0]))
       const dir = (_view_dir.lengthSq() > 1e-6 ? _view_dir.clone() : new Vector3(0, -1, 0)).normalize()
-
-      if (cam.isPerspectiveCamera) {
-        // Match the previous apparent size: distance = vheight / (2·tan(fov/2)).
-        const fov_rad = (cam.fov || fov) * Math.PI / 180
-        const dist = _view_vheight > 0
-          ? _view_vheight / (2 * Math.tan(fov_rad / 2))
-          : Math.max(1, structure_size) * (60 / fov)
-        camera.position.copy(center).addScaledVector(dir, dist)
-      } else if (cam.isOrthographicCamera) {
-        // Distance is irrelevant to ortho scale; keep a stable viewpoint and set
-        // zoom to reproduce the previous apparent size.
-        camera.position.copy(center).addScaledVector(dir, Math.max(1, structure_size) * 2)
-        if (_view_vheight > 0 && (cam.top - cam.bottom) !== 0) {
-          cam.zoom = (cam.top - cam.bottom) / _view_vheight
-          cam.updateProjectionMatrix()
+      const revision_before = camera_revision
+      mutate_camera_pose(camera, orbit_controls.target, () => {
+        if (cam.isPerspectiveCamera) {
+          // Match the previous apparent size: distance = vheight / (2·tan(fov/2)).
+          const fov_rad = (cam.fov || fov) * Math.PI / 180
+          const dist = _view_vheight > 0
+            ? _view_vheight / (2 * Math.tan(fov_rad / 2))
+            : Math.max(1, structure_size) * (60 / fov)
+          camera!.position.copy(center).addScaledVector(dir, dist)
+        } else if (cam.isOrthographicCamera) {
+          // Distance is irrelevant to ortho scale; keep a stable viewpoint and set
+          // zoom to reproduce the previous apparent size.
+          camera!.position.copy(center).addScaledVector(dir, Math.max(1, structure_size) * 2)
+          if (_view_vheight > 0 && (cam.top - cam.bottom) !== 0) {
+            cam.zoom = (cam.top - cam.bottom) / _view_vheight
+            cam.updateProjectionMatrix()
+          }
         }
-      }
-      camera.up.copy(_view_up).normalize()
-      camera.lookAt(center)
-      orbit_controls.target.copy(center)
-      current_camera_target = vector_to_vec3(center)
-      const ctrl = orbit_controls as any
-      ctrl._target0?.copy(center)
-      ctrl._eye0?.copy(new Vector3().subVectors(camera.position, center))
-      ctrl._up0?.copy(camera.up)
-      // Clear any pending TrackballControls rotation so update() doesn't re-apply
-      // a leftover delta and nudge the camera off the exact axis (the "not true y"
-      // gap on round-trip).
-      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-      ctrl._lastAngle = 0
-      orbit_controls.update?.()
-      // mark_dirty: imperative camera + orbit_controls writes bypass the <T.> prop chain
-      mark_dirty()
+        camera!.up.copy(_view_up).normalize()
+        camera!.lookAt(center)
+        orbit_controls!.target.copy(center)
+        current_camera_target = vector_to_vec3(center)
+        const ctrl = orbit_controls as any
+        ctrl._target0?.copy(center)
+        ctrl._eye0?.copy(new Vector3().subVectors(camera!.position, center))
+        ctrl._up0?.copy(camera!.up)
+        // Clear any pending TrackballControls rotation so update() doesn't re-apply
+        // a leftover delta and nudge the camera off the exact axis (the "not true y"
+        // gap on round-trip).
+        if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+        ctrl._lastAngle = 0
+        orbit_controls!.update?.()
+      }, () => {
+        finish_camera_change(vector_to_vec3(center), revision_before)
+      })
     }))
   })
 
@@ -1956,15 +2038,18 @@
     if (reset_camera_up_trigger === _last_up_trigger) return
     _last_up_trigger = reset_camera_up_trigger
     if (!camera || !orbit_controls) return
-    camera.up.set(0, 0, 1)
-    const ctrl = orbit_controls as any
-    if (ctrl._up0) ctrl._up0.set(0, 0, 1)
-    if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
-    ctrl._lastAngle = 0
-    if (ctrl.target) camera.lookAt(ctrl.target)
-    if (typeof ctrl.update === `function`) ctrl.update()
-    // mark_dirty: imperative camera.up + camera.lookAt + orbit_controls.update() bypass <T.> prop chain
-    mark_dirty()
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      camera!.up.set(0, 0, 1)
+      const ctrl = orbit_controls as any
+      if (ctrl._up0) ctrl._up0.set(0, 0, 1)
+      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+      ctrl._lastAngle = 0
+      if (ctrl.target) camera!.lookAt(ctrl.target)
+      if (typeof ctrl.update === `function`) ctrl.update()
+    }, () => {
+      finish_camera_change(undefined, revision_before)
+    })
   })
 
   // Track initial computed zoom for reset
@@ -2160,18 +2245,23 @@
     const distance = camera.position.distanceTo(target_pos)
     const new_camera_pos = aligned_direction.multiplyScalar(distance).add(target_pos)
 
-    // Update camera
-    camera.position.copy(new_camera_pos)
-    camera.up.copy(aligned_up).normalize()
-    camera.lookAt(target_pos)
+    const revision_before = camera_revision
+    mutate_camera_pose(camera, orbit_controls.target, () => {
+      // Update camera
+      camera!.position.copy(new_camera_pos)
+      camera!.up.copy(aligned_up).normalize()
+      camera!.lookAt(target_pos)
 
-    // Update controls - use stored target, not reactive rotation_target
-    if (orbit_controls.target) {
-      orbit_controls.target.set(...current_camera_target)
-    }
-    if (orbit_controls.update) {
-      orbit_controls.update()
-    }
+      // Update controls - use stored target, not reactive rotation_target
+      if (orbit_controls!.target) {
+        orbit_controls!.target.set(...current_camera_target)
+      }
+      if (orbit_controls!.update) {
+        orbit_controls!.update()
+      }
+    }, () => {
+      finish_camera_change(vector_to_vec3(target_pos), revision_before)
+    })
     // R3.4: ring rotation now updates per-frame in pencil mode via useTask;
     // no explicit kick needed here.
   }
@@ -2553,9 +2643,9 @@
         // sliders (default reproduces the legacy top-front headlamp). Each
         // cached material's uLightDir is kept live by the $effect below.
         uLightDir: { value: light_dir.clone() },
-        uShadowThreshold: { value: 0.3 },
-        uHighlightThreshold: { value: 0.97 },
-        uShadowBrightness: { value: 0.5 },
+        uShadowThreshold: { value: TOON_SHADOW_THRESHOLD },
+        uHighlightThreshold: { value: TOON_HIGHLIGHT_THRESHOLD },
+        uShadowBrightness: { value: TOON_SHADOW_BRIGHTNESS },
         uOpacity: { value: opacity },
         // Share the same uniform objects the depth-cue/outline effect writes to.
         uDepthCueing: depth_cue_uniforms.uDepthCueing,
@@ -2799,6 +2889,11 @@
   // cross-cell bonds with `image` populated; the renderer paints two
   // halves anchored at the original atoms.
   let bond_input = $derived(bond_input_structure ?? structure)
+  // Owner barrier for the ordinary graph bridge. The final BondManager
+  // shadow-sync advances these only after it reconciles the graph belonging to
+  // bond_state.last_bond_structure.
+  let manager_graph_owner_id = $state(0)
+  let manager_graph_atom_count = $state(0)
   // Merge the user-tunable `bond_scale` into the strategy options. atom_radii
   // reads `scale` (bond iff dist ≤ scale·Σr); electroneg/solid_angle ignore it.
   let bonding_options_eff = $derived({
@@ -3397,18 +3492,122 @@
       },
     )
   })
-  let image_atom_layout = $derived.by((): ImageAtomLayout => {
-    if (sites_to_draw === null) return empty_image_atom_layout()
-    void bond_manager.version
-    return build_image_atom_layout(sites_to_draw, bond_manager)
+  const EMPTY_PERIODIC_IMAGES: ImageInstanceTable = {
+    count: 0,
+    base_sites: new Uint32Array(0),
+    jimages: new Int8Array(0),
+  }
+  // Exact appended atom table while ordinary displayed_structure still owns
+  // its CPU-side PBC images.
+  let displayed_manager_atom_images = $derived.by(() =>
+    displayed_image_atoms_to_instance_table(
+      structure?.sites ?? [],
+      num_original_sites,
+      image_to_original_map,
+    )
+  )
+  // Visual supercells intentionally keep displayed_structure at the base cell
+  // and instance the N real atoms on the GPU. Preserve the last exact ordinary
+  // image table for that same base owner; if the viewer entered a saved NxNxN
+  // state before ordinary images were ever materialized, fill the cache through
+  // the existing WASM PBC path. This retains the ordinary 19/19 boundary
+  // contract without CPU-materializing the visual supercell itself.
+  let visual_boundary_owner_id = $state(0)
+  let visual_boundary_atom_images = $state(EMPTY_PERIODIC_IMAGES)
+  let visual_boundary_ready = $state(false)
+  let visual_boundary_generation = 0
+
+  $effect(() => {
+    const owner = bond_input
+    const images = displayed_manager_atom_images
+    if (!owner || images.count === 0) return
+    visual_boundary_owner_id = bond_owner_id
+    visual_boundary_atom_images = images
+    visual_boundary_ready = true
   })
-  // Phase 7d partner-drawn predicate. Closes over `sites_to_draw` so the
+
+  $effect(() => {
+    const owner = bond_input
+    const dims = render_packet?.replicas.dims
+    const visual_replicas = !!dims && dims[0] * dims[1] * dims[2] > 1
+    if (
+      !visual_replicas ||
+      !show_image_atoms ||
+      !owner ||
+      !(`lattice` in owner) ||
+      visual_boundary_owner_id === bond_owner_id && visual_boundary_ready
+    ) return
+
+    const generation = ++visual_boundary_generation
+    const owner_id = bond_owner_id
+    visual_boundary_owner_id = owner_id
+    visual_boundary_atom_images = EMPTY_PERIODIC_IMAGES
+    visual_boundary_ready = false
+    void find_pbc_images_fast(
+      owner as Parameters<typeof find_pbc_images_fast>[0],
+      { bond_completion: false },
+    ).then((result) => {
+      if (
+        generation !== visual_boundary_generation ||
+        bond_input !== owner ||
+        bond_owner_id !== owner_id
+      ) return
+      visual_boundary_atom_images = displayed_image_atoms_to_instance_table(
+        result.sites,
+        result.num_original_sites,
+        result.image_to_original_map,
+      )
+      visual_boundary_ready = true
+    }).catch((error) => {
+      if (
+        generation !== visual_boundary_generation ||
+        bond_input !== owner ||
+        bond_owner_id !== owner_id
+      ) return
+      console.warn(`[StructureScene] failed to prepare visual-supercell boundary atoms`, error)
+      // Mark the request settled so a reactive flush cannot spin retries.
+      // The raw decorator set remains available as a conservative fallback.
+      visual_boundary_ready = true
+    })
+  })
+
+  let manager_atom_images = $derived.by(() => {
+    if (!show_image_atoms) return EMPTY_PERIODIC_IMAGES
+    if (displayed_manager_atom_images.count > 0) {
+      return displayed_manager_atom_images
+    }
+    return visual_boundary_owner_id === bond_owner_id && visual_boundary_ready
+      ? visual_boundary_atom_images
+      : EMPTY_PERIODIC_IMAGES
+  })
+  // The final ordinary boundary contract: bond decorators cover the exact
+  // image spheres rendered from displayed_structure. Clone and extend the raw
+  // CrystalToolkit map once, then publish this same aligned set to WebGPU.
+  let ordinary_sites_to_draw = $derived.by(() => {
+    if (sites_to_draw === null) return null
+    return merge_image_instances_into_sites_to_draw(
+      sites_to_draw,
+      manager_atom_images,
+    )
+  })
+  let image_atom_layout = $derived.by((): ImageAtomLayout => {
+    if (ordinary_sites_to_draw === null) return empty_image_atom_layout()
+    void bond_manager.version
+    return build_image_atom_layout(ordinary_sites_to_draw, bond_manager)
+  })
+  let manager_periodic_images = $derived.by(() => {
+    const entries = ordinary_sites_to_draw
+    if (entries === null) return EMPTY_PERIODIC_IMAGES
+    return image_sites_to_instance_table(entries.values(), [1, 1, 1])
+  })
+  // Phase 7d partner-drawn predicate. Closes over ordinary_sites_to_draw so
+  // every atom sphere visible in normal mode can own its bond decoration.
   // renderer can dispatch decorator instances to incomplete-edge stubs when
   // a bond's partner image atom is not in the drawn set. Predicate identity
-  // changes with sites_to_draw → triggers `force_full_resync` via the
+  // changes with the map → triggers `force_full_resync` via the
   // existing layout-change $effect in BondManagerInstances.
   let partner_drawn_lookup = $derived.by((): PartnerDrawnLookup | null => {
-    const std = sites_to_draw
+    const std = ordinary_sites_to_draw
     if (std === null) return null
     return (idx, jx, jy, jz) => std.has(make_image_site_key(idx, [jx, jy, jz]))
   })
@@ -3612,16 +3811,17 @@
     }
   })
   $effect.pre(() => {
-    // WebGPU overlay active: this WebGL scene is covered and not painting, and
-    // the overlay computes its own GPU bonds — so skip the per-frame trajectory
-    // bond-pair rebuild (compute_bond_connectivity_for_frame +
-    // build_trajectory_bond_pairs). Read suspend FIRST (reactive) so toggle-OFF
-    // (true→false) re-fires this effect; the resume branch then bypasses the
-    // memo so bonds rebuild for the current frame even if positions advanced
-    // (under the overlay) without `trajectory_frame_positions` identity having
-    // changed since the last build before suspension.
+    // WebGPU overlay active: skip only the PER-FRAME trajectory bond-pair
+    // rebuild. Static large-system rendering now consumes bond_manager's final
+    // ordinary graph, so a structure/options edit while the overlay is visible
+    // must still flow through this effect once and republish that graph.
+    // Read suspend FIRST (reactive) so toggle-OFF (true→false) re-fires this
+    // effect; the resume branch then bypasses the memo for trajectory frames.
     const __suspended = webgl_suspended
-    if (__suspended) { __bbp_was_suspended = true; return }
+    if (__suspended && trajectory_step_idx >= 0) {
+      __bbp_was_suspended = true
+      return
+    }
     const __resuming_bbp = __bbp_was_suspended
     __bbp_was_suspended = false
     if (import.meta.env?.DEV) __probe_bbp_fires++
@@ -3832,7 +4032,7 @@
         counts.set(bp.site_idx_1, (counts.get(bp.site_idx_1) ?? 0) + 1)
         counts.set(bp.site_idx_2, (counts.get(bp.site_idx_2) ?? 0) + 1)
       }
-      const std = sites_to_draw
+      const std = ordinary_sites_to_draw
       const n = structure.sites.length
       const low_bond_sites: Array<{ site_idx: number; bond_count: number }> = []
       for (let i = 0; i < n; i++) {
@@ -4056,7 +4256,6 @@
     }
     return out
   })
-
   // --- Polyhedra computation (bond-graph: uses filtered_bond_pairs) ---
   let polyhedra_data = $derived.by(() => {
     // Polyhedra depend on a synchronous atom_radii bond compute (compute_bonds_sync
@@ -4780,6 +4979,16 @@
         mgr.commit_orders_batch()
       }
     }
+
+    // Publish graph ownership only after the manager diff above has completed.
+    // If the next structure's async connectivity is not ready,
+    // last_bond_structure is null/old and the parent-side owner check safely
+    // withholds this graph for that transient frame.
+    const graph_owner = bond_state.last_bond_structure
+    // Only stamp the parent-issued token when the graph and current pre-image
+    // structure share the exact owner inside this component.
+    manager_graph_owner_id = graph_owner === bond_input ? bond_owner_id : 0
+    manager_graph_atom_count = graph_owner?.sites?.length ?? 0
   })
 
   // ═══ AtomManager SoA shadow store ═══
@@ -5445,16 +5654,122 @@
     // key also triggers per-key .get() subscribers below.
     const _sco_size = site_color_overrides?.size ?? 0
     void _sco_size
-    const out = new Float32Array(sites.length * 3)
-    for (let i = 0; i < sites.length; i++) {
-      const override_hex = site_color_overrides?.get(i)
-      const hex = override_hex ?? get_majority_color(sites[i], colors.element, bond_color)
-      const [r, g, b] = __hex_to_linear_rgb(hex)
-      out[i * 3]     = r
-      out[i * 3 + 1] = g
-      out[i * 3 + 2] = b
+    // Mirror atom_data/manager invalidation: enabling, disabling, adding, or
+    // removing an atom-color hook must publish a new authoritative buffer.
+    const _hook_count = pluginManager.structureHooks.get(`atomColors`)?.length ?? 0
+    const _enabled_plugin_count = pluginManager.enabledPlugins.length
+    void [_hook_count, _enabled_plugin_count]
+    const initial_colors: (string | null)[] = sites.map((site, site_idx) => {
+      const orig_idx = get_orig_site_idx(site, site_idx)
+      const element = site.species[0]?.element
+      return property_colors?.colors[orig_idx] ?? colors.element?.[element] ?? null
+    })
+    const plugin_colors = pluginManager.applyAtomColorsHooks(sites, initial_colors)
+    return resolve_atom_colors_linear({
+      sites,
+      element_colors: colors.element,
+      site_color_overrides,
+      property_colors,
+      plugin_colors,
+      fallback: bond_color,
+    })
+  })
+
+  /** Build the one shared visual snapshot consumed by both backend adapters.
+   *  Background and atom colors are resolved once by StructureScene. The exact
+   *  WebGL group transform is carried alongside them so WebGPU positions,
+   *  lattice directions, and cell origin cannot drift independently. */
+  function resolve_current_visual_state(): ResolvedVisualState {
+    // The useTask that normally keeps the depth-cue planes tracking the camera
+    // is part of the WebGL render loop — suspended while the overlay is up. So
+    // recompute here, against the current camera, rather than reading a value
+    // that stopped updating the moment performance mode was switched on.
+    update_depth_cue_uniforms()
+    const cam = threlte.camera.current
+    const pbr = style_pbr(render_style)
+    const bg = depth_cue_uniforms.uDepthCueBgColor.value
+    return {
+      render_style_source: render_style,
+      shading: {
+        light_dir: [light_dir.x, light_dir.y, light_dir.z],
+        is_ortho: Boolean((cam as { isOrthographicCamera?: boolean } | undefined)?.isOrthographicCamera),
+        ambient: active_ambient_light,
+        directional: active_directional_light,
+        spec_strength: active_highlight_strength,
+        roughness: pbr.roughness,
+        metalness: pbr.metalness,
+        render_style: render_style_to_backend(render_style, `webgpu`),
+        outline: depth_cue_uniforms.uOutlineStrength.value,
+        bond_outline: depth_cue_uniforms.uBondOutlineStrength.value,
+        depth_cueing: depth_cue_uniforms.uDepthCueing.value,
+        depth_near: depth_cue_uniforms.uDepthNear.value,
+        depth_far: depth_cue_uniforms.uDepthFar.value,
+        // LINEAR rgb — the overlay's shaders sRGB-encode it themselves, exactly
+        // as the WebGL atom shader does with uDepthCueBgColor.
+        depth_bg: [bg.r, bg.g, bg.b],
+        // Toon thresholds: the same constants the WebGL material is built with.
+        toon_shadow_threshold: TOON_SHADOW_THRESHOLD,
+        toon_highlight_threshold: TOON_HIGHLIGHT_THRESHOLD,
+        toon_shadow_brightness: TOON_SHADOW_BRIGHTNESS,
+      },
+      background_linear: [...resolved_background_linear],
+      atom_colors_linear: atom_colors_buffer,
+      view_transform: resolve_view_transform(rotation, rotation_target),
     }
-    return out
+  }
+
+  // One monotonic semantic revision owns shading, background, atom colors, the
+  // view transform, and mutable camera matrices. Camera paths bump the explicit
+  // camera_revision because Three's internal matrix writes are not reactive.
+  let visual_revision = 0
+  let resolved_visual_state = $state.raw<ResolvedVisualState | null>(null)
+  $effect(() => {
+    void [
+      render_style,
+      active_light_azimuth,
+      active_light_elevation,
+      active_ambient_light,
+      active_directional_light,
+      active_highlight_strength,
+      depth_cueing,
+      depth_cue_start,
+      depth_cue_end,
+      atom_outline_strength,
+      bond_outline_strength,
+      background_color ?? `#000000`,
+      background_opacity,
+      camera_projection,
+      theme_revision,
+      atom_colors_buffer,
+      rotation[0],
+      rotation[1],
+      rotation[2],
+      rotation_target?.[0],
+      rotation_target?.[1],
+      rotation_target?.[2],
+      camera_position[0],
+      camera_position[1],
+      camera_position[2],
+      computed_zoom,
+      fov,
+      camera_near,
+      camera_far,
+      camera_revision,
+    ]
+    visual_revision += 1
+    const snapshot = resolve_current_visual_state()
+    resolved_visual_state = snapshot
+    const r = threlte.renderer
+    if (r) apply_webgl_background(r, snapshot, __scratch_bg)
+    visual_state_source = {
+      revision: visual_revision,
+      resolve: () => snapshot,
+    }
+    mark_dirty()
+  })
+  onDestroy(() => {
+    visual_state_source = null
+    resolved_visual_state = null
   })
 
   // ── Manager-ready trajectory packet ───────────────────────────────────────
@@ -5462,7 +5777,10 @@
   // scene resolves the exact display attributes and the FINAL live bond graph
   // after typed/object/filter/manual synchronization, then shares one packet
   // object with both render managers.
-  let manager_display_radii = $derived.by(() => {
+  // RenderPacket keeps logical radii. WebGL replica drawing and its ID picker
+  // each apply VISUAL_RADIUS_SCALE at their GPU-attribute boundary; the
+  // WebGPU overlay builds final display radii separately.
+  let manager_logical_radii = $derived.by(() => {
     const sites = structure?.sites
     if (!sites || sites.length === 0) return EMPTY_RADII
     // Track both object and SvelteMap-style override mutations.
@@ -5470,7 +5788,7 @@
     const _site_override_size = site_radius_overrides?.size ?? 0
     void _element_override_keys
     void _site_override_size
-    return build_display_radii(sites, {
+    return build_logical_radii(sites, {
       atom_radius,
       same_size_atoms,
       element_radius_overrides,
@@ -5507,6 +5825,32 @@
     return manager_graph_snapshot
   })
 
+  // Atom ghosts and bond decorators now share the ACTUAL final ordinary
+  // boundary set. Keeping both fields explicit preserves the renderer
+  // contract while preventing either backend from independently adding or
+  // dropping a boundary row.
+  // Owner barrier for the ordinary graph bridge. This is advanced only by the
+  // bond-manager shadow-sync transaction below, after it has reconciled the
+  // graph for bond_state.last_bond_structure. During an async structure swap
+  // the old graph therefore keeps its old owner and the WebGPU adapter rejects
+  // it instead of interpreting old jimages with the new lattice.
+  $effect(() => {
+    // During a cold visual-supercell start the exact lightweight atom table
+    // arrives asynchronously from WASM. Keep the interim publication aligned
+    // (raw/raw) so WebGPU never draws decorator bonds without their spheres;
+    // the next publication replaces both lanes with the exact final 19/19 set.
+    const atom_images = manager_atom_images.count > 0
+      ? manager_atom_images
+      : manager_periodic_images
+    periodic_decoration_source = {
+      graph: manager_bond_graph,
+      owner_id: manager_graph_owner_id,
+      atom_count: manager_graph_atom_count,
+      atom_images,
+      images: manager_periodic_images,
+    }
+  })
+
   let manager_topology_attribute_key_cache:
     | ManagerTopologyAttributeKey
     | null = null
@@ -5521,7 +5865,7 @@
     )?.topology ?? null
     if (upstream === null) return null
     const colors = atom_colors_buffer
-    const radii = manager_display_radii
+    const radii = manager_logical_radii
     const packet_owned_graph = trajectory_frame_positions != null &&
         prepared_render_packet?.topology === upstream &&
         packet_render_features_eligible()
@@ -5542,7 +5886,7 @@
         ...upstream,
         version: manager_topology_version,
         colors: atom_colors_buffer,
-        radii: manager_display_radii,
+        radii: manager_logical_radii,
         bond_graph,
       }
       manager_topology_attribute_key_cache = next_attribute_key
@@ -5569,6 +5913,34 @@
       frame: upstream.frame,
       replicas: upstream.replicas,
     }
+  })
+  // The normal WebGL packet renderer consumes the same final ordinary
+  // boundary tables as the large-system renderer. Expand the authoritative
+  // 1× image ownership onto the visual replica surface instead of letting
+  // either WebGL renderer independently infer endpoint-B-only ghosts.
+  let manager_packet_boundary_atom_images = $derived.by(
+    (): ImageInstanceTable | null => {
+      const packet = manager_render_packet
+      if (packet?.replicas.boundary_policy !== `ghost-images`) return null
+      const images = manager_atom_images.count > 0
+        ? manager_atom_images
+        : manager_periodic_images
+      return expand_ordinary_image_table(images, packet.replicas.dims)
+    },
+  )
+  let manager_packet_boundary_decoration_images = $derived.by(
+    (): ImageInstanceTable | null => {
+      const packet = manager_render_packet
+      if (packet?.replicas.boundary_policy !== `ghost-images`) return null
+      return expand_ordinary_image_table(
+        manager_periodic_images,
+        packet.replicas.dims,
+      )
+    },
+  )
+  let visual_packet_replication_active = $derived.by(() => {
+    const dims = manager_render_packet?.replicas.dims
+    return !!dims && dims[0] * dims[1] * dims[2] > 1
   })
 
   function packet_render_features_eligible(): boolean {
@@ -6508,7 +6880,7 @@
 
   let gizmo_props = $derived.by(() => {
     const axis_options = Object.fromEntries(
-      [...axis_colors, ...neg_axis_colors].map(([axis, color, hover_color]) => [
+      [...GIZMO_AXIS_COLORS, ...GIZMO_NEG_AXIS_COLORS].map(([axis, color, hover_color]) => [
         axis,
         {
           color,
@@ -6527,7 +6899,7 @@
       className: `responsive-gizmo`,
       ...axis_options,
       ...(typeof gizmo === `boolean` ? {} : gizmo),
-      offset: { left: 5, bottom: 5 },
+      offset: gizmo_dom_offset(hud_safe),
       onend: handle_gizmo_end,
     }
   })
@@ -6990,6 +7362,8 @@
           {#if manager_render_packet && combined_packet_renderer_owned && !webgl_suspended}
             <WebGLReplicaLayer
               packet={manager_render_packet}
+              boundary_atom_images={manager_packet_boundary_atom_images}
+              boundary_decoration_images={manager_packet_boundary_decoration_images}
               gpu_positions_rgba={manager_gpu_positions}
               position_resource={shared_position_texture}
               color_resource={shared_atom_color_texture}
@@ -7001,6 +7375,7 @@
               directional_light={active_directional_light}
               {light_dir}
               {render_style}
+              visual_state={resolved_visual_state}
               {matcap_preset}
               highlight_strength={active_highlight_strength}
               opacity={1}
@@ -7026,6 +7401,7 @@
             ambient_light={active_ambient_light}
             directional_light={active_directional_light}
             {render_style}
+            visual_state={resolved_visual_state}
             {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}
@@ -7158,7 +7534,7 @@
             <T.Mesh>
               <T.SphereGeometry
                 args={[
-                  0.5,
+                  VISUAL_RADIUS_SCALE,
                   sphere_segments,
                   sphere_segments,
                   atom.start_phi,
@@ -7170,11 +7546,11 @@
 
             {#if atom.has_partial_occupancy}
               <T.Mesh rotation={[0, atom.start_phi, 0]}>
-                <T.CircleGeometry args={[0.5, sphere_segments]} />
+                <T.CircleGeometry args={[VISUAL_RADIUS_SCALE, sphere_segments]} />
                 {@render atom_material(display_color, true, is_outside && cut_opacity < 1, cut_opacity)}
               </T.Mesh>
               <T.Mesh rotation={[0, atom.end_phi, 0]}>
-                <T.CircleGeometry args={[0.5, sphere_segments]} />
+                <T.CircleGeometry args={[VISUAL_RADIUS_SCALE, sphere_segments]} />
                 {@render atom_material(display_color, true, is_outside && cut_opacity < 1, cut_opacity)}
               </T.Mesh>
             {/if}
@@ -7211,10 +7587,12 @@
           {incomplete_periodic_edge_mode}
           {incomplete_edge_length_scale}
           {hide_incomplete_bonds}
-          image_atom_layout={combined_packet_renderer_owned
+          image_atom_layout={combined_packet_renderer_owned ||
+            visual_packet_replication_active
             ? empty_image_atom_layout()
             : image_atom_layout}
-          partner_drawn_lookup={combined_packet_renderer_owned
+          partner_drawn_lookup={combined_packet_renderer_owned ||
+            visual_packet_replication_active
             ? null
             : partner_drawn_lookup}
           multibond_enabled={bond_order_perception}
@@ -7781,8 +8159,8 @@
 
 <style>
   :global(.structure .responsive-gizmo) {
-    width: clamp(70px, 18cqmin, 100px) !important;
-    height: clamp(70px, 18cqmin, 100px) !important;
+    width: var(--structure-gizmo-size) !important;
+    height: var(--structure-gizmo-size) !important;
   }
   /* Force all Threlte HTML wrappers for labels to not block pointer events
      and prevent text selection when dragging from outside (e.g. sidebar) */

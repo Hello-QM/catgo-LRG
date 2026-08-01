@@ -1,5 +1,9 @@
 import type { FileInfo } from '$lib'
 import { load_binary_traj } from '$lib/trajectory/parse'
+import {
+  decompress_binary_structure_data,
+  is_binary_structure_filename,
+} from './decompress'
 
 export * from './decompress'
 export * from './export'
@@ -24,8 +28,20 @@ export async function load_from_url(
   url: string,
   callback: (content: string | ArrayBuffer, filename: string) => Promise<void> | void,
 ): Promise<void> {
-  const url_basename = url.split(`/`).pop() || url
+  // Vite dev URLs retain resource queries (for example `sample.traj?url`).
+  // Extension detection must use the pathname only or binary trajectories
+  // fall through to `resp.text()` and the parser reports "Unsupported text
+  // format". Hashes are likewise not part of a filename.
+  const url_path = url.split(/[?#]/, 1)[0]
+  const encoded_basename = url_path.split(`/`).pop() || url_path
+  let url_basename = encoded_basename
+  try {
+    url_basename = decodeURIComponent(encoded_basename)
+  } catch {
+    // Keep the literal basename for malformed/legacy URLs.
+  }
   const ext = url_basename.split(`.`).pop()?.toLowerCase() || ``
+  const binary_structure = is_binary_structure_filename(url_basename)
 
   const extract_filename = (headers?: Headers): string => {
     const fallback = url_basename
@@ -56,12 +72,24 @@ export async function load_from_url(
     // Handle gzipped files with proper content-encoding detection
     if (ext === `gz` || ext === `gzip`) {
       if (resp.headers.get(`content-encoding`) === `gzip`) {
-        // Browser automatically decompressed it, so it's text
+        // Browser automatically decompressed the response body. Preserve raw
+        // bytes for compressed ASE/HDF5 containers; text trajectories still
+        // take the existing string path.
+        if (binary_structure) {
+          return callback(
+            await resp.arrayBuffer(),
+            filename.replace(/\.(?:gz|gzip)$/i, ``),
+          )
+        }
         return callback(await resp.text(), filename)
       } else {
-        // Need to decompress manually
-        const { decompress_data } = await import(`./decompress`)
         const buffer = await resp.arrayBuffer()
+        if (binary_structure) {
+          const decoded = await decompress_binary_structure_data(buffer, filename)
+          return callback(decoded.content, decoded.filename)
+        }
+        // Need to decompress text manually.
+        const { decompress_data } = await import(`./decompress`)
         const content = await decompress_data(buffer, `gzip`)
         // Remove .gz extension when manually decompressing
         return callback(content, filename.replace(/\.gz$/, ``))

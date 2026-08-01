@@ -32,6 +32,7 @@ import type {
   FrameGeometry,
   RenderPacket,
   ReplicaLayout,
+  ReplicaSemantics,
 } from './render-packet'
 import { assert_render_packet } from './render-packet'
 
@@ -84,6 +85,10 @@ export type RenderPacketInput = {
   /** Visual replica dims. Defaults to [1,1,1] (no replication). */
   dims?: readonly [number, number, number]
   boundary_policy?: BoundaryPolicy
+  /** True Build supercells keep a base-sized render topology while mapping
+   *  every GPU replica to its unique materialized physical site. */
+  replica_semantics?: ReplicaSemantics
+  physical_site_map?: Uint32Array
   /** Optional per-atom color floats (3N or 4N, consumed zero-copy). Color
    *  resolution (palettes, overrides) is an adapter concern — defaults to
    *  white until the consuming renderer supplies the resolved buffer. */
@@ -300,20 +305,28 @@ export function create_render_packet_builder(): {
       }
     }
 
-    // ── replica layout: visual-shared-base only (true Build supercells are
-    //    a separate explicit operation channel — design §9) ──
+    // ── replica layout: visual copies share base ids; a freshly materialized
+    //    true Build supercell may instead retain its physical-site map and lift
+    //    the same base topology over unique editable output sites (design §9.4).
     const dims = input.dims ?? [1, 1, 1]
     const boundary_policy = input.boundary_policy ?? `stub`
+    const semantics = input.replica_semantics ?? `visual-shared-base`
+    const physical_site_map = semantics === `physical-distinct-sites`
+      ? input.physical_site_map
+      : undefined
     if (
       replicas === null || replicas.dims[0] !== dims[0] ||
       replicas.dims[1] !== dims[1] || replicas.dims[2] !== dims[2] ||
-      replicas.boundary_policy !== boundary_policy
+      replicas.boundary_policy !== boundary_policy ||
+      replicas.semantics !== semantics ||
+      replicas.physical_site_map !== physical_site_map
     ) {
       replicas = {
         version: ++version_counter,
         dims: [dims[0], dims[1], dims[2]],
         boundary_policy,
-        semantics: `visual-shared-base`,
+        semantics,
+        physical_site_map,
       }
     }
 

@@ -19,11 +19,11 @@
  */
 import { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
 import { AtomInstancedRenderer } from '$lib/structure/atoms/atom-instanced-renderer'
+import { VISUAL_RADIUS_SCALE } from '$lib/structure/rendering/visual-state'
 import * as THREE from 'three'
 import { beforeEach, describe, expect, test } from 'vitest'
 
 const CAPACITY = 32
-const VISUAL_RADIUS_SCALE = 0.5 // renderer's logical→GPU radius scale
 
 let mesh: THREE.InstancedMesh
 let manager: AtomManager

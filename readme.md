@@ -382,7 +382,7 @@ CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
 please include the following acknowledgement and the preferred ChemRxiv citation:
 
 ```
-This work used CatGo (https://catgo-ucsd.org).
+This work used CatGo (https://app.catgo-ucsd.org).
 ```
 
 Use this preferred ChemRxiv citation:

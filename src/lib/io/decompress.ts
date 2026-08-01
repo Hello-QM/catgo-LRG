@@ -7,6 +7,13 @@ import {
 export type CompressionFormat = keyof typeof COMPRESSION_FORMATS
 export type CompressionExtension = (typeof COMPRESSION_EXTENSIONS)[number]
 
+/** Binary structure/trajectory containers that must never pass through a
+ * text decoder. Compression suffixes are ignored for routing purposes. */
+export function is_binary_structure_filename(filename: string): boolean {
+  const base_name = filename.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
+  return /\.(traj|h5|hdf5)$/i.test(base_name)
+}
+
 export function detect_compression_format(
   filename: string,
 ): CompressionFormat | null {
@@ -45,20 +52,49 @@ export async function decompress_data(
   }
 }
 
+/** Decompress a binary structure container without converting its bytes to
+ * Unicode text. The returned filename has the compression suffix removed so
+ * downstream format detection sees `.traj`, `.h5`, or `.hdf5`. */
+export async function decompress_binary_structure_data(
+  data: ArrayBuffer,
+  filename: string,
+): Promise<{ content: ArrayBuffer; filename: string }> {
+  const format = detect_compression_format(filename)
+  if (!format) return { content: data, filename }
+  if (format === `zip` || format === `xz` || format === `bz2`) {
+    throw new Error(
+      `${format.toUpperCase()} decompression is not supported in the browser. Please extract the ${format.toUpperCase()} file first.`,
+    )
+  }
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(data))
+      controller.close()
+    },
+  })
+  const content = await new Response(
+    stream.pipeThrough(
+      new DecompressionStream(format as `gzip` | `deflate` | `deflate-raw`),
+    ),
+  ).arrayBuffer()
+  return {
+    content,
+    filename: filename.replace(COMPRESSION_EXTENSIONS_REGEX, ``),
+  }
+}
+
 /** Formats that must reach the parsers as raw bytes. Reading these as text
  *  garbles the binary irreversibly: an ASE .traj picked in a browser (the
  *  static web deploy has no backend to stream through) hit every text parser
  *  as mojibake and failed with "Unsupported text format" even though a
  *  client-side ulm parser exists (`parse_ase_trajectory`). */
-const BINARY_STRUCTURE_EXTS = /\.(traj|h5|hdf5)$/i
-
 export function decompress_file(
   file: File,
 ): Promise<{ content: string | ArrayBuffer; filename: string }> {
   const format = detect_compression_format(file.name)
   const is_supported = Boolean(format && ![`zip`, `xz`, `bz2`].includes(format))
   const base_name = file.name.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
-  const wants_binary = BINARY_STRUCTURE_EXTS.test(base_name)
+  const wants_binary = is_binary_structure_filename(base_name)
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

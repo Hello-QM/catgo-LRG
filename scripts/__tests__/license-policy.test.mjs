@@ -20,7 +20,7 @@ import { legalBundleSources } from '../sync-legal-bundle.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const ACK = 'This work used CatGo (https://catgo-ucsd.org).'
+const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
 const DOI = '10.26434/chemrxiv.15002984/v1'
 const AGPL_ID = 'AGPL-3.0-or-later'
 const CITATION_REQUEST =
@@ -153,6 +153,7 @@ const licenseClaimInventory = {
   historicalGrantPreservation: [
     '.github/release-notes/v1.4.6.md',
     '.github/release-notes/v1.4.7.md',
+    '.github/release-notes/v1.4.8.md',
     '.github/workflows/tauri-build.yml',
   ],
   historicalOnly: [
@@ -291,7 +292,7 @@ test('canonical citation file requests citation without adding an AGPL condition
   assert.equal(existsSync(resolve(ROOT, 'citation.cff')), false)
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
-  assert.match(text, /^version: 1\.4\.7$/m)
+  assert.match(text, /^version: 1\.4\.8$/m)
   assert.match(text, /^license: AGPL-3\.0-or-later$/m)
   assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)
@@ -652,7 +653,7 @@ test('active user surfaces make citation a non-binding AGPL request', () => {
     assert.doesNotMatch(text,
       /CatGo Noncommercial Research License|LicenseRef-CatGo-Noncommercial|COMMERCIAL_LICENSE|prior written commercial permission/i, file)
     assert.match(text, /AGPL-3\.0-or-later/, file)
-    assert.match(text, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./, file)
+    assert.match(text, /This work used CatGo \(https:\/\/app\.catgo-ucsd\.org\)\./, file)
     assert.match(text, /CITATION\.cff/, file)
     assert.match(text, /not an additional\s+condition|不构成.*附加条件/i, file)
   }
@@ -667,7 +668,7 @@ test('contribution guides preserve third-party provenance under AGPL', () => {
   assert.match(english, /may require a separate\s+contributor agreement/i)
   assert.match(english, /right to license and enforce its\s+code/i)
   assert.match(english, /AGPL-3\.0-or-later/)
-  assert.match(english, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
+  assert.match(english, /This work used CatGo \(https:\/\/app\.catgo-ucsd\.org\)\./)
   assert.match(english, /CITATION\.cff/)
   assert.match(english, /not an additional\s+condition/i)
 
@@ -679,7 +680,7 @@ test('contribution guides preserve third-party provenance under AGPL', () => {
   assert.match(chinese, /维护者可在接受贡献前要求单独的贡献者协议/)
   assert.match(chinese, /许可和维权的权利/)
   assert.match(chinese, /AGPL-3\.0-or-later/)
-  assert.match(chinese, /This work used CatGo \(https:\/\/catgo-ucsd\.org\)\./)
+  assert.match(chinese, /This work used CatGo \(https:\/\/app\.catgo-ucsd\.org\)\./)
   assert.match(chinese, /CITATION\.cff/)
   assert.match(chinese, /不构成.*附加条件/)
 })

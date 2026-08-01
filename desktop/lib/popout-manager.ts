@@ -96,16 +96,25 @@ export async function open_structure_in_new_window(structure: AnyStructure, file
 }
 
 /** Parse content and open the structure in a new window. */
-export async function parse_and_open_structure_window(content: string, filename: string, is_tauri: boolean, reuse = false) {
+export async function parse_and_open_structure_window(
+  content: string | ArrayBuffer,
+  filename: string,
+  is_tauri: boolean,
+  reuse = false,
+) {
   try {
     const { is_trajectory_file, parse_trajectory_data } = await import(`$lib/trajectory/parse`)
-    if (is_trajectory_file(filename, content)) {
+    if (is_trajectory_file(
+      filename,
+      typeof content === `string` ? content : undefined,
+    )) {
       const traj = await parse_trajectory_data(content, filename)
       if (traj?.frames?.length) {
         await open_structure_in_new_window(traj.frames[0].structure as AnyStructure, filename, is_tauri, reuse)
         return
       }
     }
+    if (typeof content !== `string`) return
     const { parse_structure_file } = await import(`$lib/structure/parse`)
     let parsed: AnyStructure | null | undefined = null
     try {

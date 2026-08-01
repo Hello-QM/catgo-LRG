@@ -6,7 +6,7 @@ import test from 'node:test'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const source = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const APP_VERSION = '1.4.7'
+const APP_VERSION = '1.4.8'
 const WORKFLOW_INVENTORY = {
   'android-build.yml': {
     classification: 'root-versioned-publisher',
@@ -131,7 +131,7 @@ function workflowStep(path, name) {
   return workflow.slice(start, next === -1 ? undefined : next)
 }
 
-test('all CatGo application version surfaces target v1.4.7', () => {
+test('all CatGo application version surfaces target v1.4.8', () => {
   const packageJson = JSON.parse(source('package.json'))
   const tauriConfig = JSON.parse(source('src-tauri/tauri.conf.json'))
   const cargoLockMatch =
@@ -153,7 +153,7 @@ test('all CatGo application version surfaces target v1.4.7', () => {
   )
 })
 
-test('VSIX and citation package metadata target v1.4.7', () => {
+test('VSIX and citation package metadata target v1.4.8', () => {
   const vscodePackage = JSON.parse(source('extensions/vscode/package.json'))
   assert.equal(vscodePackage.version, APP_VERSION)
 
@@ -174,13 +174,13 @@ test('the dependency lock remains a pnpm v9 root-importer lock', () => {
   assert.match(lock, /^importers:\n\n  \.:\n/m)
 })
 
-test('the desktop draft release notes describe v1.4.7', () => {
+test('the desktop draft release notes describe v1.4.8', () => {
   const workflow = source('.github/workflows/tauri-build.yml')
 
-  assert.match(workflow, /### New in 1\.4\.7/)
-  assert.match(workflow, /Windows desktop app closes normally again/)
-  assert.match(workflow, /VS Code structure generation consistently loads compatible WASM/)
-  assert.match(workflow, /More reliable multi-platform releases/)
+  assert.match(workflow, /### New in 1\.4\.8/)
+  assert.match(workflow, /Consistent periodic structures in both rendering modes/)
+  assert.match(workflow, /Database search works again across the app and VS Code/)
+  assert.match(workflow, /Large System Performance Mode remains WebGPU-accelerated/)
 })
 
 test('VSIX publishing fails on duplicate marketplace versions', () => {

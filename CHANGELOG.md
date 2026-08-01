@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.8] - 2026-07-30
+
+### Fixed
+
+- **Consistent periodic rendering in standard and large-system modes** — WebGL and WebGPU now share authoritative atom, bond, boundary, camera, and visual-state data, fixing missing or extra boundary atoms, dangling or transient long bonds, lattice-vector differences, and stale interaction updates.
+- **Materials Project, OPTIMADE, and PubChem search restored** — provider routing, current API fields, fallbacks, pagination, totals, and cache keys now behave consistently in the app and VS Code extension.
+- **VS Code bundled assets load reliably** — relative webview URLs keep packaged WASM and worker files on the extension resource path.
+
 ## [1.4.7] - 2026-07-28
 
 ### Fixed
@@ -21,7 +29,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **AGPL license and citation request** — CatGo 1.4.6 distributions use `AGPL-3.0-or-later`. If CatGo contributes to your work, please include `This work used CatGo (https://catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. This request is not an additional condition of the AGPL license. Third-party materials retain their own licenses, and historical AGPL grants remain in effect.
+- **AGPL license and citation request** — CatGo 1.4.6 distributions use `AGPL-3.0-or-later`. If CatGo contributes to your work, please include `This work used CatGo (https://app.catgo-ucsd.org).` and cite DOI `10.26434/chemrxiv.15002984/v1`. This request is not an additional condition of the AGPL license. Third-party materials retain their own licenses, and historical AGPL grants remain in effect.
 - **Cloudflare-only app acquisition and updates** — normal in-app downloads, Linux update checks, and signed Tauri updater packages use the dedicated Cloudflare domain instead of the GitHub API or release pages.
 - **Release integrity gates** — every platform workflow contributes only to a draft release; the R2 mirror selects stable CatGo app tags, publishes root metadata only for the latest app release, and excludes the independent STT accelerator series.
 
