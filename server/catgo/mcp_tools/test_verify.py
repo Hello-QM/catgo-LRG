@@ -257,6 +257,86 @@ def test_workflow_batch_results_is_numeric_but_status_is_not():
     assert not enf._is_numeric("catgo_workflow", {"action": "results"})
 
 
+def test_terminal_scheduler_submit_classifier_covers_wrappers_and_paths():
+    blocked = [
+        {"action": "run", "command": "sbatch job.sh"},
+        {"action": "run", "command": "cd /scratch/run && /opt/slurm/bin/sbatch job.sh"},
+        {"action": "run", "command": "env OMP_NUM_THREADS=4 qsub submit.pbs"},
+        {"action": "run", "command": "sudo -u alice /usr/bin/bsub < job.lsf"},
+        {"action": "run", "command": "bash -lc 'cd /work && sbatch job.sh'"},
+        {"action": "run", "command": "env -i PATH=/opt/bin /bin/sh -c 'qsub job.pbs'"},
+        {"action": "run", "command": "ssh -p 2222 cluster '/usr/bin/sbatch job.sh'"},
+        {"action": "run", "command": "nohup condor_submit job.sub"},
+        {"action": "run", "command": "timeout --signal TERM 5s srun vasp_std"},
+        {"action": "run", "command": "setsid --wait /usr/bin/sbatch job.sh"},
+        {"action": "run", "command": "printf 'a\\n' | xargs -n 1 /usr/bin/qsub"},
+        {"action": "run", "command": "flux submit job.sh"},
+        {"action": "run", "command": "flux mini run calculation.toml"},
+        {"action": "run", "command": "echo ready\nllsubmit job.cmd"},
+        {"action": "send_keys", "keys": "cd /work && sbatch job.sh<enter>"},
+        {"action": "send_keys", "keys": "env FOO=1 /usr/bin/qsub job.pbs\r"},
+    ]
+    for args in blocked:
+        assert enf._terminal_starts_scheduler_job(args), args
+
+
+def test_terminal_scheduler_classifier_keeps_diagnostics_free():
+    allowed = [
+        {"action": "read", "lines": 100},
+        {"action": "run", "command": "squeue -u $USER"},
+        {"action": "run", "command": "tail -f slurm-123.out"},
+        {"action": "run", "command": "grep sbatch scheduler.log"},
+        {"action": "run", "command": "command -v sbatch"},
+        {"action": "run", "command": "bash -lc 'grep qsub scheduler.log'"},
+        {"action": "run", "command": "ssh cluster grep sbatch scheduler.log"},
+        {"action": "run", "command": "echo 'sbatch job.sh'"},
+        {"action": "send_keys", "keys": "y<enter>"},
+        # Merely typing without Enter cannot start the command yet.
+        {"action": "send_keys", "keys": "sbatch job.sh"},
+    ]
+    for args in allowed:
+        assert not enf._terminal_starts_scheduler_job(args), args
+
+
+def test_terminal_scheduler_submit_obeys_the_verification_ledger():
+    sk = "terminal-submit-gate"
+    _fresh(sk)
+    enf.postmark("catgo_analyze", {"action": "rdf"}, ok=True, session_key=sk)
+    for args in (
+        {"action": "run", "command": "sbatch job.sh"},
+        {"action": "send_keys", "keys": "bash -lc 'qsub job.pbs'<enter>"},
+    ):
+        decision, reason = enf.precheck("catgo_terminal", args, session_key=sk)
+        assert decision == enf.FORBIDDEN and "unverified" in reason, (args, reason)
+    assert enf.precheck(
+        "catgo_terminal", {"action": "run", "command": "tail -n 50 OUTCAR"},
+        session_key=sk,
+    )[0] == enf.ALLOW
+    _fresh(sk)
+
+    failed_sk = "terminal-submit-failed-gate"
+    _fresh(failed_sk)
+    result = _arm_bound_result(failed_sk, label="terminal-failed")
+    enf.mark_verified(
+        True,
+        failed_gates=["energy_physical"],
+        result_digest=result["result_digest"],
+        session_key=failed_sk,
+    )
+    decision, reason = enf.precheck(
+        "catgo_terminal", {"action": "run", "command": "/usr/bin/sbatch job.sh"},
+        session_key=failed_sk,
+    )
+    assert decision == enf.FORBIDDEN and "energy_physical" in reason
+    _fresh(failed_sk)
+
+    # With a clean ledger, terminal approval remains the existing app's job.
+    assert enf.precheck(
+        "catgo_terminal", {"action": "run", "command": "sbatch job.sh"},
+        session_key="terminal-clean",
+    )[0] == enf.ALLOW
+
+
 def test_only_a_literal_zero_item_batch_is_empty():
     assert prov.batch_payload_is_empty('{"items": []}')
     assert not prov.batch_payload_is_empty(

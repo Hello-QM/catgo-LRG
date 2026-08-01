@@ -2,6 +2,7 @@
 import asyncio
 
 from catgo.mcp_tools import server_claude_code as scc
+from catgo.mcp_tools import verify_enforcement as enf
 from catgo.routers import terminal_bridge as tb
 
 
@@ -72,3 +73,40 @@ def test_error_surfaced(monkeypatch):
     )
     out = _run({"action": "read"})
     assert "No terminal responded" in out[0].text
+
+
+def test_real_wrapper_blocks_scheduler_submit_but_dispatches_diagnostics(monkeypatch):
+    """The shared stdio/HTTP wrapper must block before the terminal bridge."""
+    session_key = "terminal-wrapper-submit-gate"
+    enf.drop_session(session_key)
+    enf.postmark(
+        "catgo_analyze", {"action": "rdf"}, ok=True, session_key=session_key,
+    )
+    monkeypatch.setattr(scc, "_verification_session_key", lambda: session_key)
+    dispatched = []
+
+    async def fake_dispatch(name, arguments):
+        dispatched.append((name, arguments))
+        return [scc.TextContent(type="text", text="terminal dispatched")]
+
+    try:
+        blocked = asyncio.run(scc.run_with_verification(
+            "catgo_terminal",
+            {"action": "run", "command": "env FOO=1 bash -lc 'sbatch job.sh'"},
+            fake_dispatch,
+        ))
+        assert blocked[0].text.startswith("BLOCKED:")
+        assert dispatched == []
+
+        diagnostic = asyncio.run(scc.run_with_verification(
+            "catgo_terminal",
+            {"action": "run", "command": "tail -n 20 slurm-123.out"},
+            fake_dispatch,
+        ))
+        assert diagnostic[0].text == "terminal dispatched"
+        assert dispatched == [(
+            "catgo_terminal",
+            {"action": "run", "command": "tail -n 20 slurm-123.out"},
+        )]
+    finally:
+        enf.drop_session(session_key)

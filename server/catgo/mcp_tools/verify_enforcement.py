@@ -32,6 +32,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import time
 from pathlib import Path
 
@@ -71,6 +72,278 @@ _IRREVERSIBLE_ACTIONS = {
 _RESULT_RELEASE_ACTIONS = {
     ("catgo_campaign", "report"),
 }
+
+# Scheduler submission commands reachable through ``catgo_terminal``.  The
+# terminal is intentionally a general-purpose escape hatch, but that must not
+# also be an escape hatch around the numeric-result verification ledger.  Keep
+# this list to commands that start scheduler work; diagnostics such as squeue,
+# qstat, sacct, tail, and grep remain free.
+_SCHEDULER_SUBMIT_COMMANDS = {
+    "sbatch",          # Slurm
+    "salloc",          # Slurm interactive allocation
+    "srun",            # Slurm job/step launch (allocates when outside a job)
+    "qsub",            # PBS / Torque / SGE / Cobalt
+    "bsub",            # LSF
+    "msub",            # Moab
+    "llsubmit",        # LoadLeveler
+    "pjsub",           # Fujitsu PJM
+    "condor_submit",   # HTCondor
+}
+_SHELL_COMMANDS = {"sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish"}
+_SHELL_CONTROL = {"!", "{", "}", "if", "then", "elif", "else", "while", "until", "do"}
+_SHELL_SEPARATORS = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "\n"}
+_REDIRECTIONS = {"<", ">", ">>", "<<", "<<<", "<>", ">&", "<&", ">|"}
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SEND_KEYS_ENTER_RE = re.compile(r"<enter>|[\r\n]", re.IGNORECASE)
+
+
+def _command_basename(token):
+    """Return a Unix command basename without consulting the local filesystem."""
+    return str(token or "").rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def _shell_tokens(command):
+    """Best-effort shell lexer with command separators preserved.
+
+    Invalid/incomplete shell text cannot execute through ``run`` and therefore
+    is not classified as a submission.  The renderer still applies its normal
+    user-approval path to the terminal request.
+    """
+    try:
+        lexer = shlex.shlex(
+            str(command or ""),
+            posix=True,
+            punctuation_chars=";&|()<>\n",
+        )
+        lexer.whitespace_split = True
+        # Preserve newlines as command boundaries.  ``#`` keeps ordinary shell
+        # comments from turning examples such as ``echo ok # sbatch ...`` into
+        # false positives.
+        lexer.whitespace = " \t\r"
+        lexer.commenters = "#"
+        return list(lexer)
+    except ValueError:
+        return []
+
+
+def _simple_commands(tokens):
+    """Split lexer tokens at shell control operators."""
+    current = []
+    for token in tokens:
+        if token in _SHELL_SEPARATORS:
+            if current:
+                yield current
+                current = []
+        else:
+            current.append(token)
+    if current:
+        yield current
+
+
+def _strip_command_prefix(tokens):
+    """Drop assignments, control keywords, and leading redirections."""
+    tokens = list(tokens)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in _SHELL_CONTROL or _ASSIGNMENT_RE.match(token):
+            index += 1
+            continue
+        if token.isdigit() and index + 1 < len(tokens) and tokens[index + 1] in _REDIRECTIONS:
+            index += 3  # fd, redirection, destination
+            continue
+        if token in _REDIRECTIONS:
+            index += 2  # redirection, destination
+            continue
+        break
+    return tokens[index:]
+
+
+def _skip_wrapper_options(tokens, *, value_options=()):
+    """Return a wrapper's command tail after conservative option parsing."""
+    tokens = list(tokens)
+    index = 0
+    value_options = set(value_options)
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return tokens[index + 1:]
+        if _ASSIGNMENT_RE.match(token):
+            index += 1
+            continue
+        if not token.startswith("-") or token == "-":
+            break
+        option = token.split("=", 1)[0]
+        if option in value_options and "=" not in token:
+            index += 2
+        else:
+            index += 1
+    return tokens[index:]
+
+
+def _simple_starts_scheduler_job(tokens, depth=0):
+    """Whether one simple command launches a scheduler submission."""
+    if depth > 8:
+        return False
+    tokens = _strip_command_prefix(tokens)
+    if not tokens:
+        return False
+    executable = _command_basename(tokens[0])
+    tail = tokens[1:]
+
+    if executable in _SCHEDULER_SUBMIT_COMMANDS:
+        return True
+    if executable == "flux":
+        flux_tail = _skip_wrapper_options(tail)
+        if not flux_tail:
+            return False
+        subcommand = str(flux_tail[0]).lower()
+        if subcommand in {"submit", "batch", "run"}:
+            return True
+        return (
+            subcommand == "mini"
+            and len(flux_tail) > 1
+            and str(flux_tail[1]).lower() in {"submit", "batch", "run"}
+        )
+
+    # A shell's -c/-lc argument is a fresh command language; recurse into it.
+    if executable in _SHELL_COMMANDS:
+        for index, token in enumerate(tail):
+            if token == "-c" or (
+                token.startswith("-")
+                and not token.startswith("--")
+                and "c" in token[1:]
+            ):
+                if index + 1 < len(tail):
+                    return _command_starts_scheduler_job(tail[index + 1], depth + 1)
+                return False
+        return False
+
+    if executable == "env":
+        for index, token in enumerate(tail):
+            if token in {"-S", "--split-string"} and index + 1 < len(tail):
+                if _command_starts_scheduler_job(tail[index + 1], depth + 1):
+                    return True
+            if token.startswith("--split-string="):
+                if _command_starts_scheduler_job(token.split("=", 1)[1], depth + 1):
+                    return True
+        nested = _skip_wrapper_options(
+            tail,
+            value_options={"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+        )
+        return _simple_starts_scheduler_job(nested, depth + 1)
+
+    if executable in {"sudo", "doas", "runuser"}:
+        nested = _skip_wrapper_options(
+            tail,
+            value_options={
+                "-u", "--user", "-g", "--group", "-h", "--host",
+                "-p", "--prompt", "-C", "--close-from", "-T",
+                "--command-timeout", "-R", "--chroot", "-D", "--chdir",
+                "-r", "--role", "-t", "--type", "-U", "--other-user",
+            },
+        )
+        return _simple_starts_scheduler_job(nested, depth + 1)
+
+    if executable == "su":
+        for index, token in enumerate(tail):
+            if token in {"-c", "--command"} and index + 1 < len(tail):
+                return _command_starts_scheduler_job(tail[index + 1], depth + 1)
+        return False
+
+    if executable == "command":
+        # ``command -v sbatch`` and ``command -V sbatch`` are diagnostics, not
+        # execution.  Other command wrappers execute their remaining argv.
+        if any(token in {"-v", "-V"} for token in tail):
+            return False
+        return _simple_starts_scheduler_job(_skip_wrapper_options(tail), depth + 1)
+
+    if executable == "timeout":
+        nested = _skip_wrapper_options(
+            tail,
+            value_options={"-k", "--kill-after", "-s", "--signal"},
+        )
+        # timeout's first positional argument is always DURATION.
+        return _simple_starts_scheduler_job(nested[1:], depth + 1) if nested else False
+
+    wrapper_value_options = {
+        "nice": {"-n", "--adjustment"},
+        "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+        "time": {"-f", "--format", "-o", "--output"},
+        "setsid": set(),
+        "nohup": set(),
+        "exec": set(),
+    }
+    if executable in wrapper_value_options:
+        nested = _skip_wrapper_options(
+            tail,
+            value_options=wrapper_value_options[executable],
+        )
+        return _simple_starts_scheduler_job(nested, depth + 1)
+
+    if executable == "eval":
+        return _command_starts_scheduler_job(" ".join(tail), depth + 1)
+
+    if executable == "ssh":
+        # Locate the host after ssh options, then parse the remote command.  Do
+        # not merely search for a token: ``ssh host grep sbatch log`` is benign.
+        ssh_tail = _skip_wrapper_options(
+            tail,
+            value_options={
+                "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i",
+                "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R",
+                "-S", "-W", "-w",
+            },
+        )
+        if len(ssh_tail) < 2:
+            return False
+        return _command_starts_scheduler_job(" ".join(ssh_tail[1:]), depth + 1)
+
+    command_wrapper_value_options = {
+        "xargs": {
+            "-a", "--arg-file", "-d", "--delimiter", "-E", "--eof",
+            "-I", "--replace", "-L", "--max-lines", "-n", "--max-args",
+            "-P", "--max-procs", "-s", "--max-chars",
+        },
+        "parallel": {
+            "-j", "--jobs", "-S", "--sshlogin", "--delay", "--timeout",
+        },
+        "watch": {"-n", "--interval"},
+    }
+    if executable in command_wrapper_value_options:
+        nested = _skip_wrapper_options(
+            tail,
+            value_options=command_wrapper_value_options[executable],
+        )
+        return _simple_starts_scheduler_job(nested, depth + 1)
+    return False
+
+
+def _command_starts_scheduler_job(command, depth=0):
+    """Conservatively recognize scheduler submission in shell command text."""
+    return any(
+        _simple_starts_scheduler_job(simple, depth)
+        for simple in _simple_commands(_shell_tokens(command))
+    )
+
+
+def _terminal_starts_scheduler_job(args):
+    """True for terminal requests that execute a scheduler submission.
+
+    ``send_keys`` only executes text when Enter is present.  Keystrokes used to
+    answer an interactive prompt (``y<enter>``) remain unguarded unless the same
+    request contains a submit command.
+    """
+    action = str((args or {}).get("action", "")).lower()
+    if action == "run":
+        return _command_starts_scheduler_job((args or {}).get("command", ""))
+    if action == "send_keys":
+        keys = str((args or {}).get("keys", ""))
+        if not _SEND_KEYS_ENTER_RE.search(keys):
+            return False
+        command = _SEND_KEYS_ENTER_RE.sub("\n", keys)
+        return _command_starts_scheduler_job(command)
+    return False
 
 # numeric-producing tool families — matched by PREFIX so this covers BOTH server
 # variants: the merged variant (catgo_analyze / catgo_catalysis) AND the 61-tool
@@ -344,7 +617,11 @@ def _is_submit(tool, args):
 
 def _is_guarded_release(tool, args):
     action = str((args or {}).get("action", "")).lower()
-    return _is_submit(tool, args) or (tool, action) in _RESULT_RELEASE_ACTIONS
+    return (
+        _is_submit(tool, args)
+        or (tool, action) in _RESULT_RELEASE_ACTIONS
+        or (tool == "catgo_terminal" and _terminal_starts_scheduler_job(args))
+    )
 
 
 def _is_numeric(tool, args):
