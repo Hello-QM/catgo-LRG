@@ -379,23 +379,22 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
 
 **CatRender** 是 CatGo 的 Rust/WASM 分子 SVG 渲染器。它以忠实复现为目标移植自 [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender)；后者的技术脉络还包括 [xyz2svg](https://github.com/briling/xyz2svg)。CatRender 在此基础上增加了 CatGo 的交互控制和导出集成。
 
-CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明下列致谢并使用首选的 ChemRxiv 引用。
+CatGo 采用 AGPL-3.0-or-later。若 CatGo 对你的工作有所帮助，请注明下列致谢并使用首选期刊引用。
 
 ```
 This work used CatGo (https://app.catgo-ucsd.org).
 ```
 
-首选 ChemRxiv 引用如下：
+首选期刊引用如下：
 
 ```bibtex
-@misc{liu2026catgo,
-  author    = {Liu, Guangsheng and Ma, Xiao and Zhang, Leshen and Pascasio, Jenedith and Yang, Jonathan and Chen, Yuxiang and Li, Wan-Lu},
-  title     = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
-  year      = {2026},
-  doi       = {10.26434/chemrxiv.15002984/v1},
-  url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
-  publisher = {ChemRxiv},
-  note      = {Preprint},
+@article{liu2026catgo,
+  author  = {Liu, Guangsheng and Ma, Xiao and Zhang, Leshen and Pascasio, Jenedith and Yang, Jonathan and Chen, Yuxiang and Li, Wan-Lu},
+  title   = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
+  journal = {Digital Discovery},
+  year    = {2026},
+  doi     = {10.1039/D6DD00273K},
+  url     = {https://doi.org/10.1039/D6DD00273K},
 }
 ```
 
