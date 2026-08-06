@@ -202,8 +202,8 @@ license.
 
 > This work used CatGo (https://app.catgo-ucsd.org).
 
-Please cite CatGo using the preferred ChemRxiv DOI
-[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1).
+Please cite the CatGo article in *Digital Discovery*
+[10.1039/D6DD00273K](https://doi.org/10.1039/D6DD00273K).
 See the repository's [CITATION.cff](../../CITATION.cff) for the canonical
 citation metadata.
 

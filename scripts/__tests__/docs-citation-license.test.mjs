@@ -52,7 +52,7 @@ test('CITATION.cff carries the exact non-binding citation request', () => {
     'license-url: https://github\\.com/Hello-QM/catgo-LRG/blob/main/license$',
     'm',
   ))
-  assert.match(cff, /^\s+doi: 10\.26434\/chemrxiv\.15002984\/v1$/m)
+  assert.match(cff, /^\s+doi: 10\.1039\/D6DD00273K$/m)
 })
 
 function escapeRegExp(value) {

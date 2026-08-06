@@ -21,7 +21,7 @@ import { legalBundleSources } from '../sync-legal-bundle.mjs'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
-const DOI = '10.26434/chemrxiv.15002984/v1'
+const DOI = '10.1039/D6DD00273K'
 const AGPL_ID = 'AGPL-3.0-or-later'
 const CITATION_REQUEST =
   'If CatGo contributes to your work, please acknowledge and cite it as ' +

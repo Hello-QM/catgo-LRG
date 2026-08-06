@@ -379,23 +379,22 @@ CatGo's structure viewer, periodic table, and parts of its core UI originate fro
 **CatRender** is CatGo's Rust/WASM molecular SVG renderer. It is implemented as a fidelity-oriented port of [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender), whose lineage includes [xyz2svg](https://github.com/briling/xyz2svg), with CatGo-specific interactive controls and export integration.
 
 CatGo is licensed under AGPL-3.0-or-later. If CatGo contributes to your work,
-please include the following acknowledgement and the preferred ChemRxiv citation:
+please include the following acknowledgement and the preferred journal citation:
 
 ```
 This work used CatGo (https://app.catgo-ucsd.org).
 ```
 
-Use this preferred ChemRxiv citation:
+Use this preferred journal citation:
 
 ```bibtex
-@misc{liu2026catgo,
-  author    = {Liu, Guangsheng and Ma, Xiao and Zhang, Leshen and Pascasio, Jenedith and Yang, Jonathan and Chen, Yuxiang and Li, Wan-Lu},
-  title     = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
-  year      = {2026},
-  doi       = {10.26434/chemrxiv.15002984/v1},
-  url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
-  publisher = {ChemRxiv},
-  note      = {Preprint},
+@article{liu2026catgo,
+  author  = {Liu, Guangsheng and Ma, Xiao and Zhang, Leshen and Pascasio, Jenedith and Yang, Jonathan and Chen, Yuxiang and Li, Wan-Lu},
+  title   = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
+  journal = {Digital Discovery},
+  year    = {2026},
+  doi     = {10.1039/D6DD00273K},
+  url     = {https://doi.org/10.1039/D6DD00273K},
 }
 ```
 

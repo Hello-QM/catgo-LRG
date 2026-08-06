@@ -31,8 +31,8 @@ preferred-citation:
     - family-names: Li
       given-names: Wan-Lu
   year: 2026
-  doi: 10.26434/chemrxiv.15002984/v1
-  url: https://doi.org/10.26434/chemrxiv.15002984/v1
+  journal: Digital Discovery
+  doi: 10.1039/D6DD00273K
+  url: https://doi.org/10.1039/D6DD00273K
   publisher:
-    name: ChemRxiv
-  notes: Preprint
+    name: Royal Society of Chemistry

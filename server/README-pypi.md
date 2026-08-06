@@ -43,8 +43,8 @@ is not an additional condition of the AGPL license.
 This work used CatGo (https://app.catgo-ucsd.org).
 ```
 
-Please cite CatGo using the preferred ChemRxiv DOI:
-[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1),
+Please cite the CatGo article in *Digital Discovery*:
+[10.1039/D6DD00273K](https://doi.org/10.1039/D6DD00273K),
 and the canonical
 [CITATION.cff](https://github.com/Hello-QM/catgo-LRG/blob/main/CITATION.cff).
 Third-party materials retain their own terms and are excluded from this license.

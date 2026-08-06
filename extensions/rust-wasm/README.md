@@ -7,7 +7,7 @@ request is not an additional condition of the AGPL license.
 
 > This work used CatGo (https://app.catgo-ucsd.org).
 
-Please cite CatGo using the preferred ChemRxiv DOI
-[10.26434/chemrxiv.15002984/v1](https://doi.org/10.26434/chemrxiv.15002984/v1).
+Please cite the CatGo article in *Digital Discovery*
+[10.1039/D6DD00273K](https://doi.org/10.1039/D6DD00273K).
 See `CITATION.cff` for the complete citation metadata and
 `THIRD_PARTY_NOTICES.md` for separately licensed material.
