@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Color, type Camera } from 'three'
-  import type { AnyStructure, ElementSymbol } from '$lib/structure'
+  import type {
+    AnyStructure,
+    ElementSymbol,
+    Pbc,
+    PymatgenLattice,
+  } from '$lib/structure'
   import {
     get_webgpu_lease,
     invalidate_webgpu_lease,
@@ -16,7 +21,6 @@
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
   import { should_show_bonds } from '$lib/structure/scene'
   import { DEFAULTS, type ShowBonds } from '$lib/settings'
-  import type { PymatgenLattice } from '$lib/structure'
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
@@ -424,11 +428,34 @@
   let bond_source: AnyStructure | undefined = undefined
   let bond_covalent: Float32Array = new Float32Array(0)
   let bond_lattice: Float32Array = new Float32Array(9)
-  let bond_periodic = false
+  // Preserve per-axis periodicity. Slabs are periodic only in-plane, so
+  // collapsing [true,true,false] to a boolean would incorrectly let the
+  // detector wrap through the vacuum direction.
+  let bond_pbc: Pbc | null = null
   let bond_options_sig = ``
   let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_bond_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
+
+  /** Resolve the exact periodic axes used by the ordinary viewer. A lattice
+   *  without an explicit mask is treated as fully periodic for compatibility
+   *  with older structures, while molecules remain non-periodic. */
+  function resolve_bond_pbc(
+    lattice: PymatgenLattice | undefined,
+    has_lattice: boolean,
+  ): Pbc | null {
+    if (!has_lattice) return null
+    const pbc = lattice?.pbc
+    return pbc
+      ? [!!pbc[0], !!pbc[1], !!pbc[2]]
+      : [true, true, true]
+  }
+
+  function lattice_signature(lattice: Float32Array, pbc: Pbc | null): string {
+    let sig = ``
+    for (let i = 0; i < 9; i++) sig += `${lattice[i]};`
+    return `${sig}|${pbc ? pbc.map(Number).join(``) : `none`}`
+  }
 
   // ── Per-element-pair distance-rule state ───────────────────────────────────
   // Encoded inputs for the GPU rule POST-FILTER (per-atom element ids + packed
@@ -633,10 +660,10 @@
       `${origin[0]},${origin[1]},${origin[2]}|${lat_sig}`
     if (sig === cell_sig) return false
     cell_sig = sig
-    // bond_periodic means the structure/current frame carries a lattice; pass
+    // bond_pbc means the structure/current frame carries a lattice; pass
     // null otherwise so molecules never draw a (degenerate) box.
     renderer.set_cell(
-      bond_periodic ? visible_cell_lattice : null,
+      bond_pbc ? visible_cell_lattice : null,
       show_cell,
       [cr, cg, cb],
       origin,
@@ -734,12 +761,12 @@
         ]
       : null
     packet_positions_revision++
-    let sig = ``
-    for (let i = 0; i < 9; i++) sig += `${packed[i]};`
+    const next_pbc = resolve_bond_pbc(structure_lattice, has_lattice)
+    const sig = lattice_signature(packed, next_pbc)
     if (sig !== frame_lattice_sig) {
       frame_lattice_sig = sig
       bond_lattice = packed
-      bond_periodic = has_lattice
+      bond_pbc = next_pbc
       bonds_dirty = true
     }
   }
@@ -766,7 +793,7 @@
     if (!sites || sites.length === 0) {
       bond_covalent = new Float32Array(0)
       bond_lattice = new Float32Array(9)
-      bond_periodic = false
+      bond_pbc = null
       return
     }
     // Bond compute runs over HOME atoms only (see bond_home_count): slice off
@@ -791,13 +818,12 @@
       raw_lattice,
       current_view_transform(),
     )
-    bond_periodic = !!lat || frame_lattice?.length === 3
+    const has_lattice = !!lat || frame_lattice?.length === 3
+    bond_pbc = resolve_bond_pbc(lat, has_lattice)
     bond_compute_opts = to_compute_options(bonding_options ?? {})
     // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
     // doesn't redundantly re-push the lattice it just packed here.
-    let lat_sig = ``
-    for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
-    frame_lattice_sig = lat_sig
+    frame_lattice_sig = lattice_signature(bond_lattice, bond_pbc)
   }
 
   // Hex -> linear RGB, matching the WebGL path (StructureScene.__hex_to_linear_rgb).
@@ -1236,7 +1262,7 @@
     if (bonds_visible && !authoritative_bonds_active) {
       rebuild_bonds_if_needed()
       if (bonds_dirty) {
-        renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
+        renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_pbc)
         bonds_dirty = false
         dirty = true
       }
