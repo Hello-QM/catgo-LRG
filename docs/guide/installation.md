@@ -142,7 +142,7 @@ The server listens on `http://localhost:8000` with CORS enabled for the frontend
 ### Windows
 
 - **HPC connect fails with `ImportError` for `pywintypes` or `pythoncom`** — fixed in v1.0.1. If you're on an older build, upgrade. The bundled backend now ships the required `pywin32` DLLs.
-- **CatBot chat exits immediately** — the agent-bridge sidecar requires the `claude` CLI for the Claude provider. Install it via `npm i -g @anthropic-ai/claude-cli`, or switch CatBot to the Gemini / Codex provider in *Settings*.
+- **CatBot chat exits immediately** — the agent-bridge sidecar requires the `claude` CLI for the Claude provider. Install it via `npm i -g @anthropic-ai/claude-code`, or switch CatBot to the Gemini / Codex provider in *Settings*.
 
 ### Linux (`.AppImage`)
 
