@@ -1,5 +1,5 @@
 /** Workflow status values */
-export type WorkflowStatus = `draft` | `running` | `completed` | `not_converged` | `failed` | `paused`
+export type WorkflowStatus = `draft` | `running` | `check` | `completed` | `not_converged` | `failed` | `paused`
 export type StepStatus = `pending` | `queued` | `submitting` | `running` | `completed` | `not_converged` | `failed` | `skipped`
 export type EdgeType = `sequential` | `parallel` | `conditional`
 
@@ -17,6 +17,7 @@ export const STATUS_COLORS: Record<string, string> = {
   pending: `#475569`,
   queued: `#a78bfa`,
   running: `#3b82f6`,
+  check: `#f59e0b`,
   completed: `#22c55e`,
   not_converged: `#f59e0b`,
   pending_review: `#f59e0b`,

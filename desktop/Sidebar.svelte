@@ -34,7 +34,7 @@
     read_file,
   } from '$lib/api/project'
   import type { ProjectSummary, DbInfo, BrowseResult, FileBrowseItem } from '$lib/api/project'
-  import { get_workflow_results, get_workflow } from '$lib/api/workflow'
+  import { delete_workflow, get_workflow_results, get_workflow } from '$lib/api/workflow'
   import { NODE_DEFINITIONS } from '$lib/workflow/node-definitions'
   import {
     LAST_DB_KEY,
@@ -162,6 +162,10 @@
   let db_workflow_nodes = $state<Record<string, WfNodeInfo[]>>({})
   let db_expanded = $state<Set<string>>(new Set())  // expanded project IDs
   let db_expanded_workflows = $state<Set<string>>(new Set())
+  let selected_workflow_ids = $state<Set<string>>(new Set())
+  let workflow_selection_anchor = $state<string | null>(null)
+  let deleting_selected_workflows = $state(false)
+  let selected_workflow_count = $derived(selected_workflow_ids.size)
   let db_loading = $state(false)
   let db_error = $state(``)
   let db_loading_result = $state<number | null>(null)
@@ -437,6 +441,13 @@
       load_current_db_info()  // fire-and-forget
       db_projects = projects
       db_workflows = wfs
+      const live_workflow_ids = new Set(wfs.map(wf => wf.id))
+      selected_workflow_ids = new Set(
+        [...selected_workflow_ids].filter(id => live_workflow_ids.has(id)),
+      )
+      if (workflow_selection_anchor && !live_workflow_ids.has(workflow_selection_anchor)) {
+        workflow_selection_anchor = null
+      }
       // Refresh results for all currently expanded projects
       for (const pid of db_expanded) {
         load_project_saved(pid)
@@ -541,6 +552,71 @@
     }
   }
 
+  function set_workflow_selected(workflow_id: string, selected: boolean) {
+    const next = new Set(selected_workflow_ids)
+    if (selected) next.add(workflow_id)
+    else next.delete(workflow_id)
+    selected_workflow_ids = next
+    workflow_selection_anchor = workflow_id
+  }
+
+  function select_workflow_range(workflow_id: string, selected = true) {
+    if (!workflow_selection_anchor) {
+      set_workflow_selected(workflow_id, selected)
+      return
+    }
+    const ids = db_workflows.map(wf => wf.id)
+    const anchor_index = ids.indexOf(workflow_selection_anchor)
+    const target_index = ids.indexOf(workflow_id)
+    if (anchor_index < 0 || target_index < 0) {
+      set_workflow_selected(workflow_id, selected)
+      return
+    }
+    const [start, end] = anchor_index < target_index
+      ? [anchor_index, target_index]
+      : [target_index, anchor_index]
+    const next = new Set(selected_workflow_ids)
+    for (const id of ids.slice(start, end + 1)) {
+      if (selected) next.add(id)
+      else next.delete(id)
+    }
+    selected_workflow_ids = next
+  }
+
+  function handle_workflow_row_click(e: MouseEvent, wf: DbWorkflow) {
+    if (e.shiftKey) {
+      select_workflow_range(wf.id)
+    } else if (e.ctrlKey || e.metaKey) {
+      set_workflow_selected(wf.id, !selected_workflow_ids.has(wf.id))
+    } else {
+      toggle_workflow(wf.id)
+    }
+  }
+
+  function handle_workflow_checkbox_click(e: MouseEvent, wf: DbWorkflow) {
+    e.stopPropagation()
+    const checked = (e.currentTarget as HTMLInputElement).checked
+    if (e.shiftKey) select_workflow_range(wf.id, checked)
+    else set_workflow_selected(wf.id, checked)
+  }
+
+  function clear_workflow_selection() {
+    selected_workflow_ids = new Set()
+    workflow_selection_anchor = null
+  }
+
+  function toggle_workflow_group(workflows: DbWorkflow[]) {
+    const ids = workflows.map(wf => wf.id)
+    const select_all = ids.some(id => !selected_workflow_ids.has(id))
+    const next = new Set(selected_workflow_ids)
+    for (const id of ids) {
+      if (select_all) next.add(id)
+      else next.delete(id)
+    }
+    selected_workflow_ids = next
+    workflow_selection_anchor = select_all ? ids.at(-1) ?? null : null
+  }
+
   async function handle_result_click(row_id: number, formula: string) {
     db_loading_result = row_id
     try {
@@ -635,6 +711,67 @@
       await load_db() // [2025-02] refresh after delete
     } catch (e) {
       console.error(`Failed to delete result:`, e)
+    }
+  }
+
+  async function handle_delete_workflow(workflow: DbWorkflow) {
+    close_context_menu()
+    if (!confirm(`${t('app.confirm_delete_workflow')}\n${workflow.name}`)) return
+    try {
+      await delete_workflow(workflow.id)
+      selected_workflow_ids = new Set(
+        [...selected_workflow_ids].filter(id => id !== workflow.id),
+      )
+      db_expanded_workflows = new Set(
+        [...db_expanded_workflows].filter(id => id !== workflow.id),
+      )
+      await load_db()
+    } catch (e) {
+      db_error = e instanceof Error ? e.message : t('app.failed_to_load_database')
+    }
+  }
+
+  async function handle_delete_selected_workflows() {
+    const workflows = db_workflows.filter(wf => selected_workflow_ids.has(wf.id))
+    if (workflows.length === 0 || deleting_selected_workflows) return
+
+    const preview_limit = 8
+    const preview = workflows.slice(0, preview_limit).map(wf => `• ${wf.name}`).join(`\n`)
+    const remainder = workflows.length > preview_limit
+      ? `\n${t('sidebar.and_more_workflows', { count: String(workflows.length - preview_limit) })}`
+      : ``
+    const message = `${t('sidebar.confirm_delete_workflows', { count: String(workflows.length) })}\n\n${preview}${remainder}`
+    if (!confirm(message)) return
+
+    deleting_selected_workflows = true
+    const failed: DbWorkflow[] = []
+    try {
+      // Serialize DB writes so SQLite, Tauri, and browser-WASM modes all get
+      // one reliable user action followed by one list refresh.
+      for (const workflow of workflows) {
+        try {
+          await delete_workflow(workflow.id)
+        } catch {
+          failed.push(workflow)
+        }
+      }
+      const failed_ids = new Set(failed.map(wf => wf.id))
+      const deleted_ids = new Set(
+        workflows.filter(wf => !failed_ids.has(wf.id)).map(wf => wf.id),
+      )
+      selected_workflow_ids = failed_ids
+      db_expanded_workflows = new Set(
+        [...db_expanded_workflows].filter(id => !deleted_ids.has(id)),
+      )
+      await load_db()
+      if (failed.length > 0) {
+        db_error = t('sidebar.failed_delete_workflows', {
+          failed: String(failed.length),
+          total: String(workflows.length),
+        })
+      }
+    } finally {
+      deleting_selected_workflows = false
     }
   }
 
@@ -875,16 +1012,32 @@
 
 {#snippet workflow_row(wf: DbWorkflow, indent: number = 22)}
   <!-- [2025-02] click=expand results, dblclick=open workflow editor -->
-  <button
+  <div
     class="file-item db-workflow-row"
+    class:selected={selected_workflow_ids.has(wf.id)}
     style:padding-left="{indent}px"
     draggable={true}
     ondragstart={(e) => { drag_data = { type: `workflow`, id: wf.id }; e.dataTransfer?.setData(`text/plain`, `workflow:${wf.id}`) }}
     ondragend={() => { drag_data = null; drop_target_id = null }}
-    onclick={() => toggle_workflow(wf.id)}
+    onclick={(e) => handle_workflow_row_click(e, wf)}
     ondblclick={() => on_open_workflow?.(wf.id)}
     oncontextmenu={(e) => { const target = make_workflow_target(wf); const menu = open_context_menu(e, target); ctx_menu = { ...menu, ...clamp_context_position(menu.x, menu.y, 240, 320) }; ctx_target_snapshot = target }}
+    role="button"
+    tabindex="0"
+    onkeydown={(e) => {
+      if (e.key === `Enter`) toggle_workflow(wf.id)
+      if (e.key === ` `) { e.preventDefault(); set_workflow_selected(wf.id, !selected_workflow_ids.has(wf.id)) }
+    }}
   >
+    <input
+      class="workflow-select-checkbox"
+      type="checkbox"
+      checked={selected_workflow_ids.has(wf.id)}
+      disabled={deleting_selected_workflows}
+      aria-label={t('sidebar.select_workflow', { name: wf.name })}
+      title={t('sidebar.select_workflow', { name: wf.name })}
+      onclick={(e) => handle_workflow_checkbox_click(e, wf)}
+    />
     <svg class="chevron small" class:open={db_expanded_workflows.has(wf.id)} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <path d="M9 18l6-6-6-6" />
     </svg>
@@ -897,7 +1050,7 @@
     <span class="db-wf-status" class:completed={wf.status === `completed`} class:failed={wf.status === `failed`} class:running={wf.status === `running`}>
       {wf.status}
     </span>
-  </button>
+  </div>
   {#if db_expanded_workflows.has(wf.id)}
     <div class="db-results" transition:slide={{ duration: 120 }}>
       <!-- Workflow nodes (graph steps) -->
@@ -1398,6 +1551,21 @@
           </div>
 
           {#if structures_section_open}
+            {#if selected_workflow_count > 0}
+              <div class="workflow-selection-bar" role="status">
+                <span>{t('sidebar.workflows_selected', { count: String(selected_workflow_count) })}</span>
+                <button
+                  class="workflow-selection-clear"
+                  disabled={deleting_selected_workflows}
+                  onclick={clear_workflow_selection}
+                >{t('sidebar.clear_selection')}</button>
+                <button
+                  class="workflow-selection-delete"
+                  disabled={deleting_selected_workflows}
+                  onclick={handle_delete_selected_workflows}
+                >{deleting_selected_workflows ? t('sidebar.deleting_workflows') : t('sidebar.delete_selected_workflows')}</button>
+              </div>
+            {/if}
             {#if root_projects.length === 0}
               <div class="db-empty">{t('sidebar.no_project_folders')}</div>
             {/if}
@@ -1410,6 +1578,15 @@
             <!-- Unassigned workflows (not in any project) -->
             {#if unassigned_workflows.length > 0}
               <div class="section-header db-section-header" style="margin-top: 4px; padding-left: 22px">
+                <input
+                  class="workflow-select-checkbox workflow-group-checkbox"
+                  type="checkbox"
+                  checked={unassigned_workflows.every(wf => selected_workflow_ids.has(wf.id))}
+                  disabled={deleting_selected_workflows}
+                  aria-label={unassigned_workflows.every(wf => selected_workflow_ids.has(wf.id)) ? t('common.deselect_all') : t('common.select_all')}
+                  title={unassigned_workflows.every(wf => selected_workflow_ids.has(wf.id)) ? t('common.deselect_all') : t('common.select_all')}
+                  onclick={(e) => { e.stopPropagation(); toggle_workflow_group(unassigned_workflows) }}
+                />
                 <span class="section-title" style="font-size: 10px; opacity: 0.7">{t('sidebar.unassigned')}</span>
                 <span class="section-badge">{unassigned_workflows.length}</span>
               </div>
@@ -1610,6 +1787,16 @@
         {#if ctx_wf_copy_submenu}
           {@render move_wf_project_tree(wf.id, root_projects, 0)}
         {/if}
+      {/if}
+      <div class="ctx-divider"></div>
+      {#if selected_workflow_ids.has(wf.id) && selected_workflow_count > 1}
+        <button class="ctx-item ctx-danger" onclick={handle_delete_selected_workflows}>
+          {t('sidebar.delete_selected_workflows_count', { count: String(selected_workflow_count) })}
+        </button>
+      {:else}
+        <button class="ctx-item ctx-danger" onclick={() => handle_delete_workflow(wf)}>
+          {t('common.delete')}
+        </button>
       {/if}
     {:else if ctx_target_snapshot.type === `result`}
       {@const result = ctx_target_snapshot.result}
@@ -2566,6 +2753,76 @@
 
   .db-workflow-row {
     gap: 5px;
+  }
+
+  .db-workflow-row.selected {
+    background: rgba(59, 130, 246, 0.16);
+    color: var(--text-color, #e2e8f0);
+  }
+
+  .workflow-select-checkbox {
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    flex: 0 0 13px;
+    cursor: pointer;
+    accent-color: var(--accent-color, #3b82f6);
+  }
+
+  .workflow-select-checkbox:disabled {
+    cursor: wait;
+    opacity: 0.55;
+  }
+
+  .workflow-group-checkbox {
+    margin-right: 2px;
+  }
+
+  .workflow-selection-bar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(59, 130, 246, 0.18);
+    background: rgba(59, 130, 246, 0.08);
+    color: var(--text-color, #e2e8f0);
+    font-size: 10px;
+  }
+
+  .workflow-selection-bar > span {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .workflow-selection-clear,
+  .workflow-selection-delete {
+    border: 1px solid rgba(128, 128, 128, 0.22);
+    border-radius: 3px;
+    padding: 2px 6px;
+    background: transparent;
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 9px;
+    cursor: pointer;
+  }
+
+  .workflow-selection-delete {
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #f87171;
+  }
+
+  .workflow-selection-clear:hover:not(:disabled) {
+    background: rgba(128, 128, 128, 0.14);
+  }
+
+  .workflow-selection-delete:hover:not(:disabled) {
+    background: rgba(248, 113, 113, 0.12);
+  }
+
+  .workflow-selection-clear:disabled,
+  .workflow-selection-delete:disabled {
+    cursor: wait;
+    opacity: 0.55;
   }
 
   .chevron.small {

@@ -42,5 +42,14 @@ const sidebar: Record<string, string> = {
   new_project_folder: `新建项目文件夹`,
   no_project_folders: `暂无项目文件夹。点击 + 创建。`,
   unassigned: `未分配`,
+  select_workflow: `选择工作流 {name}`,
+  workflows_selected: `已选择 {count} 个`,
+  clear_selection: `清除`,
+  delete_selected_workflows: `删除所选`,
+  delete_selected_workflows_count: `删除所选（{count}）`,
+  deleting_workflows: `正在删除…`,
+  confirm_delete_workflows: `确定删除选中的 {count} 个工作流吗？此操作无法撤销。`,
+  and_more_workflows: `……以及另外 {count} 个`,
+  failed_delete_workflows: `选中的 {total} 个工作流中有 {failed} 个删除失败，失败项仍保持选中。`,
 }
 export default sidebar

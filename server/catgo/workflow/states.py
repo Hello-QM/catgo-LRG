@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from enum import Enum
+from typing import Iterable
 
 
 class TaskState(str, Enum):
@@ -57,6 +58,108 @@ _HPC_SUBMITTED_STATES = {
     TaskState.SUBMITTED, TaskState.QUEUED, TaskState.RUNNING,
     TaskState.COMPLETED_REMOTE,
 }
+
+
+_DELETE_BLOCKING_TASK_STATES = {
+    TaskState.GENERATING,
+    TaskState.UPLOADING,
+    TaskState.SUBMITTED,
+    TaskState.QUEUED,
+    TaskState.RUNNING,
+    TaskState.COMPLETED_REMOTE,
+    TaskState.COLLECTING,
+}
+
+_RUNNABLE_TASK_STATES = {
+    TaskState.READY,
+    *_DELETE_BLOCKING_TASK_STATES,
+}
+
+
+def _coerce_task_states(states: Iterable[str | TaskState]) -> set[TaskState]:
+    """Normalize persisted task-state strings, ignoring unknown legacy values."""
+    normalized: set[TaskState] = set()
+    for state in states:
+        try:
+            normalized.add(state if isinstance(state, TaskState) else TaskState(str(state).upper()))
+        except ValueError:
+            continue
+    return normalized
+
+
+def workflow_display_status(
+    workflow_status: str,
+    task_states: Iterable[str | TaskState],
+) -> str:
+    """Return the user-facing workflow state without changing engine scheduling.
+
+    A workflow waiting at the human review gate is persisted as ``running`` so
+    the scanner can resume immediately after confirmation.  Calling that state
+    RUNNING in list views is misleading because no calculation is executing.
+    """
+    status = str(workflow_status or "draft").lower()
+    states = _coerce_task_states(task_states)
+    if status == WorkflowState.RUNNING.value:
+        if states & _DELETE_BLOCKING_TASK_STATES:
+            return status
+        if TaskState.PENDING_REVIEW in states:
+            return "check"
+        # FAILED and REMOTE_ERROR are both presented as failed task nodes in
+        # the DAG.  If no task is executing or ready to run, keeping the card
+        # labelled RUNNING contradicts the graph and the progress summary.
+        # The persisted workflow may remain ``running`` so the scanner can
+        # still auto-recover a transient SSH failure in the background.
+        if (
+            states & {TaskState.FAILED, TaskState.REMOTE_ERROR}
+            and not (states & _RUNNABLE_TASK_STATES)
+        ):
+            return WorkflowState.FAILED.value
+        if TaskState.PAUSED in states:
+            return WorkflowState.PAUSED.value
+    return status
+
+
+def workflow_delete_block_reason(
+    workflow_status: str,
+    task_states: Iterable[str | TaskState],
+    *,
+    has_unresolved_remote_jobs: bool = False,
+) -> str | None:
+    """Explain why a workflow cannot be deleted, or return ``None``.
+
+    PAUSED is explicitly deletable: it is a scheduling state, not proof that a
+    job is still executing.  Terminal workflows are also deletable even when
+    old rows contain stale active-looking task states.  For a live workflow we
+    protect actual execution states, while a PENDING_REVIEW/CHECK gate is safe
+    to remove because it has not submitted a calculation.
+    """
+    status = str(workflow_status or "draft").lower()
+    states = _coerce_task_states(task_states)
+    executing = states & _DELETE_BLOCKING_TASK_STATES
+
+    if status == "resetting":
+        return "workflow reset is in progress"
+    if status in {
+        WorkflowState.PAUSED.value,
+        WorkflowState.COMPLETED.value,
+        WorkflowState.FAILED.value,
+    }:
+        return None
+    if status == WorkflowState.RUNNING.value:
+        if TaskState.PENDING_REVIEW in states and not executing:
+            return None
+        if workflow_display_status(status, states) == WorkflowState.FAILED.value:
+            if has_unresolved_remote_jobs:
+                return "remote job status is unresolved"
+            return None
+        if executing:
+            names = ", ".join(sorted(state.value for state in executing))
+            return f"tasks are executing ({names})"
+        return "workflow scheduler is active"
+    if executing:
+        names = ", ".join(sorted(state.value for state in executing))
+        return f"tasks are executing ({names})"
+    return None
 
 
 class WorkflowState(str, Enum):

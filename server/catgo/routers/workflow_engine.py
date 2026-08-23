@@ -42,10 +42,26 @@ def _summarize_workflow(db: WorkflowDB, wf: dict) -> dict:
     for t in tasks:
         s = t["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
+    from catgo.workflow.states import workflow_delete_block_reason, workflow_display_status
+
+    task_states = [str(task.get("status") or "") for task in tasks]
+    has_unresolved_remote_jobs = any(
+        str(task.get("status") or "").upper() == "REMOTE_ERROR"
+        and bool(task.get("hpc_job_id"))
+        for task in tasks
+    )
+    delete_block_reason = workflow_delete_block_reason(
+        wf["status"],
+        task_states,
+        has_unresolved_remote_jobs=has_unresolved_remote_jobs,
+    )
     return {
         "id": wf["id"],
         "name": wf["name"],
         "status": wf["status"],
+        "display_status": workflow_display_status(wf["status"], task_states),
+        "delete_blocked": delete_block_reason is not None,
+        "delete_block_reason": delete_block_reason,
         "created_at": wf.get("created_at"),
         "updated_at": wf.get("updated_at"),
         "task_count": len(tasks),
@@ -168,6 +184,37 @@ class ConvertRequest(BaseModel):
     graph_json: str
     config: dict | None = None
     project_id: str | None = None  # Optional: assign workflow to project on creation
+
+
+class WorkflowBatchDeleteRequest(BaseModel):
+    workflow_ids: list[str]
+
+
+def _delete_workflows(db: WorkflowDB, workflow_ids: list[str]) -> list[str]:
+    ids = list(dict.fromkeys(str(wf_id).strip() for wf_id in workflow_ids if str(wf_id).strip()))
+    if not ids:
+        raise HTTPException(422, "workflow_ids must contain at least one ID")
+    if len(ids) > 500:
+        raise HTTPException(422, "At most 500 workflows can be deleted at once")
+    try:
+        return db.delete_workflows(ids)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/batch-delete")
+def batch_delete_workflows(body: WorkflowBatchDeleteRequest):
+    """Atomically delete a set of inactive Engine workflows."""
+    deleted_ids = _delete_workflows(_get_db(), body.workflow_ids)
+    return {"deleted_ids": deleted_ids, "deleted_count": len(deleted_ids)}
+
+
+@router.delete("/{workflow_id}", status_code=204)
+def delete_workflow(workflow_id: str):
+    """Delete one inactive Engine workflow and its persisted tasks/results."""
+    _delete_workflows(_get_db(), [workflow_id])
 
 
 @router.post("/convert")

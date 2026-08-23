@@ -239,6 +239,80 @@ class WorkflowDB:
         conn.close()
         return [dict(r) for r in rows]
 
+    def delete_workflow(self, workflow_id: str) -> None:
+        """Delete one inactive workflow and all of its persisted graph data."""
+        self.delete_workflows([workflow_id])
+
+    def delete_workflows(self, workflow_ids: list[str]) -> list[str]:
+        """Atomically delete inactive workflows, tasks, links, and results.
+
+        Workflows with actual local/HPC work in flight are rejected as a group
+        so a batch request can never partially delete active work. Duplicate
+        IDs are harmless and preserve first-seen order.
+        """
+        ids = list(dict.fromkeys(str(wf_id).strip() for wf_id in workflow_ids if str(wf_id).strip()))
+        if not ids:
+            return []
+
+        placeholders = ",".join("?" for _ in ids)
+        with self._lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                f"SELECT id, status FROM workflows WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            found = {str(row["id"]): str(row["status"] or "") for row in rows}
+            missing = [wf_id for wf_id in ids if wf_id not in found]
+            if missing:
+                raise KeyError(f"Workflow(s) not found: {', '.join(missing)}")
+
+            task_rows = conn.execute(
+                f"SELECT workflow_id, status, hpc_job_id FROM tasks WHERE workflow_id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            task_states: dict[str, list[str]] = {wf_id: [] for wf_id in ids}
+            unresolved_remote_jobs: dict[str, bool] = {wf_id: False for wf_id in ids}
+            for row in task_rows:
+                workflow_id = str(row["workflow_id"])
+                status = str(row["status"] or "")
+                task_states[workflow_id].append(status)
+                if status.upper() == "REMOTE_ERROR" and row["hpc_job_id"]:
+                    unresolved_remote_jobs[workflow_id] = True
+
+            from catgo.workflow.states import workflow_delete_block_reason
+
+            blocked = {
+                wf_id: reason
+                for wf_id in ids
+                if (
+                    reason := workflow_delete_block_reason(
+                        found[wf_id],
+                        task_states.get(wf_id, []),
+                        has_unresolved_remote_jobs=unresolved_remote_jobs.get(wf_id, False),
+                    )
+                )
+            }
+            if blocked:
+                raise RuntimeError(
+                    "Cannot delete active workflow(s): "
+                    + "; ".join(f"{wf_id}: {reason}" for wf_id, reason in blocked.items())
+                )
+
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(f"DELETE FROM task_links WHERE workflow_id IN ({placeholders})", ids)
+                conn.execute(f"DELETE FROM task_results WHERE workflow_id IN ({placeholders})", ids)
+                conn.execute(f"DELETE FROM provenance WHERE workflow_id IN ({placeholders})", ids)
+                conn.execute(f"DELETE FROM tasks WHERE workflow_id IN ({placeholders})", ids)
+                conn.execute(f"DELETE FROM workflows WHERE id IN ({placeholders})", ids)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        return ids
+
     # --- Tasks ---
 
     def create_task(
