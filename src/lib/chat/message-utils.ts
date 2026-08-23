@@ -28,6 +28,9 @@ export const FALLBACK_MODELS: Partial<Record<LLMProvider, { id: string; label: s
     { id: `opus`, label: `Opus` },
     { id: `haiku`, label: `Haiku` },
   ],
+  // Empty id lets the installed Codex CLI choose its current default. The
+  // backend replaces this label with model/list metadata when reachable.
+  'sdk-codex': [{ id: ``, label: `Default` }],
 }
 
 /** SDK agent installation info */

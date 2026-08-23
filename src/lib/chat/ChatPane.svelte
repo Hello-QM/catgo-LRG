@@ -91,6 +91,12 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         providers = p
         providers_loaded = true
         const models = get_models(chat_config.provider, p, chat_config.fetched_models ?? {})
+        // Older CatGo versions persisted gpt-5.5 when the user selected the
+        // then-hardcoded "Default" option. Migrate that legacy value once to
+        // the new empty-id default, which follows Codex model/list over time.
+        if (chat_config.provider === `sdk-codex` && chat_config.model === `gpt-5.5` && models[0]?.id === ``) {
+          update_config({ model: `` })
+        }
         if (chat_config.provider === `ollama` && !chat_config.model && models.length > 0) {
           update_config({ model: models[0].id, base_url: p.find((provider) => provider.id === `ollama`)?.base_url ?? chat_config.base_url })
         }

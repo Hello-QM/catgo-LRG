@@ -3887,7 +3887,9 @@ async def run_with_verification(name: str, arguments: dict, dispatch) -> list[Te
 async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:
     T = TextContent
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # This client routes consolidated tools to CatGo's loopback API.  Proxy
+        # environment variables must not make local MCP calls require socksio.
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
             if name == "catgo_structure":
                 return await _handle_structure(client, arguments)
             elif name == "catgo_pane":

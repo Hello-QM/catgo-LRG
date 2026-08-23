@@ -16,6 +16,7 @@ from mcp.types import TextContent
 
 mcp_http = importlib.import_module("catgo.routers.mcp_http")
 scc = importlib.import_module("catgo.mcp_tools.server_claude_code")
+full_mcp = importlib.import_module("catgo.mcp_tools.server")
 enf = importlib.import_module("catgo.mcp_tools.verify_enforcement")
 helpers = importlib.import_module("catgo.mcp_tools.helpers")
 prov = importlib.import_module("catgo.mcp_tools.provenance")
@@ -42,6 +43,58 @@ def test_the_http_path_runs_the_same_verification_wrapper():
     assert "run_with_verification" in src, (
         "the HTTP transport bypassed precheck/postmark entirely"
     )
+
+
+@pytest.mark.asyncio
+async def test_http_mcp_internal_client_ignores_proxy_environment(monkeypatch):
+    """Loopback dispatch must not require optional SOCKS proxy support."""
+    client_options = {}
+
+    class _LocalClient:
+        def __init__(self, **kwargs):
+            client_options.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(mcp_http.httpx, "AsyncClient", _LocalClient)
+
+    result = await mcp_http._dispatch("catgo_skills", {"action": "list"})
+
+    assert client_options["trust_env"] is False
+    assert result[0].text.startswith("Available skills:\n")
+
+
+@pytest.mark.asyncio
+async def test_special_workflow_client_ignores_proxy_environment(monkeypatch):
+    """The nested legacy workflow dispatch must also bypass SOCKS proxies."""
+    client_options = {}
+
+    class _LocalClient:
+        def __init__(self, **kwargs):
+            client_options.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    async def _workflow(_client, _arguments):
+        return [TextContent(type="text", text="ok")]
+
+    monkeypatch.setattr(full_mcp.httpx, "AsyncClient", _LocalClient)
+    monkeypatch.setattr(full_mcp, "_handle_workflow", _workflow)
+
+    result = await full_mcp._handle_special_tool(
+        "catgo_workflow", "__special__/workflow", {"action": "list"},
+    )
+
+    assert client_options["trust_env"] is False
+    assert result[0].text == "ok"
 
 
 def test_the_wrapper_is_shared_not_copied():

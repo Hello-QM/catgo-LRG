@@ -1,5 +1,6 @@
 """AI Chat assistant proxy — streams LLM responses via SSE."""
 
+import asyncio
 import json
 import logging
 import os
@@ -9,7 +10,7 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -220,22 +221,21 @@ _API_FORMATS = {
 # latest stable model in that family. The labels carry NO version number so the
 # dropdown auto-tracks Anthropic releases (the alias always runs the latest) and
 # never displays a stale version — no need to rev these strings on every launch.
-# (Codex/Gemini below keep versions: their ids are specific models, not aliases.)
+# Gemini below keeps versions because its ids are specific models, not aliases.
+# Codex is discovered dynamically from `codex app-server` further below.
 _SDK_CLAUDE_MODELS = [
     {"id": "sonnet", "label": "Default (Sonnet)"},
     {"id": "opus", "label": "Opus"},
     {"id": "haiku", "label": "Haiku"},
 ]
 
-# Empirically verified against this user's ChatGPT-account Codex on
-# @openai/codex 0.132.0-alpha.1 (other gpt-5* variants returned
-# "not supported when using Codex with a ChatGPT account").
-_SDK_CODEX_MODELS = [
-    {"id": "gpt-5.5",       "label": "Default (GPT-5.5)"},
-    {"id": "gpt-5.4",       "label": "GPT-5.4"},
-    {"id": "gpt-5.4-mini",  "label": "GPT-5.4 mini"},
-    {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
-]
+# Safe fallback for old/unavailable Codex CLIs. An empty id deliberately means
+# "do not pass --model": Codex then selects its own current default. Keeping the
+# fallback label versionless prevents the UI from presenting stale metadata.
+_SDK_CODEX_MODELS_FALLBACK = [{"id": "", "label": "Default"}]
+_CODEX_MODEL_CACHE_TTL_SECONDS = 300.0
+_CODEX_MODEL_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_codex_models_cache: Optional[tuple[str, float, list[dict]]] = None
 
 # Empirically verified against gemini-cli 0.42.0 + this user's OAuth account.
 _SDK_GEMINI_MODELS = [
@@ -248,7 +248,7 @@ _SDK_GEMINI_MODELS = [
 # Dispatch table — list_providers() looks up the seed by provider id.
 _SDK_MODELS = {
     "sdk-claude": _SDK_CLAUDE_MODELS,
-    "sdk-codex":  _SDK_CODEX_MODELS,
+    "sdk-codex":  _SDK_CODEX_MODELS_FALLBACK,
     "sdk-gemini": _SDK_GEMINI_MODELS,
 }
 
@@ -280,6 +280,133 @@ _API_MODELS = {
 
 
 _OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+
+
+async def _discover_codex_models(binary: str) -> list[dict]:
+    """Query Codex App Server's official ``model/list`` capability."""
+    proc = await asyncio.create_subprocess_exec(
+        binary,
+        "app-server",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+
+    async def send(message: dict) -> None:
+        if proc.stdin is None:
+            raise RuntimeError("Codex App Server stdin is unavailable")
+        line = json.dumps(message, separators=(",", ":")) + "\n"
+        proc.stdin.write(line.encode())
+        await proc.stdin.drain()
+
+    async def receive(response_id: int) -> dict:
+        if proc.stdout is None:
+            raise RuntimeError("Codex App Server stdout is unavailable")
+        while True:
+            line = await asyncio.wait_for(
+                proc.stdout.readline(),
+                timeout=_CODEX_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+            )
+            if not line:
+                raise RuntimeError("Codex App Server closed before returning models")
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("id") == response_id:
+                return message
+
+    try:
+        await send({
+            "method": "initialize",
+            "id": 0,
+            "params": {
+                "clientInfo": {
+                    "name": "catgo",
+                    "title": "CatGo",
+                    "version": "1.0.0",
+                }
+            },
+        })
+        initialized = await receive(0)
+        if initialized.get("error"):
+            raise RuntimeError("Codex App Server rejected initialization")
+        await send({"method": "initialized", "params": {}})
+        await send({
+            "method": "model/list",
+            "id": 1,
+            "params": {"limit": 100, "includeHidden": False},
+        })
+        response = await receive(1)
+    except TimeoutError as exc:
+        raise RuntimeError("Codex model discovery timed out") from exc
+    finally:
+        if proc.stdin is not None:
+            proc.stdin.close()
+            try:
+                await proc.stdin.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1.0)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+
+    if not response or response.get("error"):
+        raise RuntimeError("Codex App Server did not return model/list")
+
+    payload = response.get("result", {})
+    raw_models = payload.get("data", []) if isinstance(payload, dict) else []
+    discovered: list[tuple[bool, dict]] = []
+    seen: set[str] = set()
+    for item in raw_models:
+        if not isinstance(item, dict) or item.get("hidden") is True:
+            continue
+        model_id = item.get("id") or item.get("model")
+        if not isinstance(model_id, str) or not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        display_name = item.get("displayName") or item.get("display_name") or model_id
+        is_default = item.get("isDefault") is True or item.get("is_default") is True
+        discovered.append((
+            is_default,
+            {
+                # Empty means "follow the CLI default". This keeps both the
+                # displayed label and the actual selected model future-proof.
+                "id": "" if is_default else model_id,
+                "label": f"Default ({display_name})" if is_default else display_name,
+            },
+        ))
+
+    discovered.sort(key=lambda entry: not entry[0])
+    models = [model for _, model in discovered]
+    if not models:
+        raise RuntimeError("Codex App Server returned no visible models")
+    return models
+
+
+async def _get_codex_models(binary: Optional[str]) -> list[dict]:
+    """Return live Codex models with a short cache and versionless fallback."""
+    global _codex_models_cache
+
+    if not binary:
+        return [dict(model) for model in _SDK_CODEX_MODELS_FALLBACK]
+
+    now = time.monotonic()
+    if _codex_models_cache is not None:
+        cached_binary, cached_at, cached_models = _codex_models_cache
+        if cached_binary == binary and now - cached_at < _CODEX_MODEL_CACHE_TTL_SECONDS:
+            return [dict(model) for model in cached_models]
+
+    try:
+        models = await _discover_codex_models(binary)
+    except Exception as exc:
+        logger.warning("Codex model discovery failed; using CLI default: %s", exc)
+        return [dict(model) for model in _SDK_CODEX_MODELS_FALLBACK]
+
+    _codex_models_cache = (binary, now, [dict(model) for model in models])
+    return models
 
 
 def _ollama_running(host: str = "127.0.0.1", port: int = 11434, timeout: float = 0.3) -> bool:
@@ -315,13 +442,19 @@ async def list_providers() -> dict:
     """Return the provider catalogue with live availability flags."""
     providers: list[dict] = []
 
+    resolved_binaries = {
+        pid: shutil.which(binary)
+        for pid, (binary, _) in _CLI_BINARIES.items()
+    }
+    codex_models = await _get_codex_models(resolved_binaries.get("sdk-codex"))
+
     for pid, (binary, label) in _CLI_BINARIES.items():
         providers.append({
             "id": pid,
             "name": label,
             "type": "cli",
-            "available": shutil.which(binary) is not None,
-            "models": _SDK_MODELS.get(pid, []),
+            "available": resolved_binaries[pid] is not None,
+            "models": codex_models if pid == "sdk-codex" else _SDK_MODELS.get(pid, []),
             "base_url": None,
         })
 

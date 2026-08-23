@@ -9,7 +9,7 @@ import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
 //
 // `@openai/codex-sdk` HARD-PINS an old `@openai/codex` as a dependency and its
 // findCodexPath() runs THAT vendored copy — so `npm i -g @openai/codex@latest`
-// has zero effect and newer models (e.g. gpt-5.5, which needs a codex newer
+// has zero effect and newer models (e.g. gpt-5.6, which needs a codex newer
 // than the SDK's pin) stay rejected with "requires a newer version of Codex".
 // The SDK does expose `codexPathOverride`, which becomes the spawned
 // executable verbatim (no shell), so point it at the globally-installed
@@ -114,6 +114,29 @@ function resolveCodexExecutable(): string | undefined {
 // on item.completed.
 const _item_text_seen = new Map<string, string>()
 
+// Never reuse the conventional `catgo` key for the desktop transport. A
+// user's global Codex config commonly defines it as a stdio server connected
+// to another CatGo checkout/database. Keep the user's other MCP servers, but
+// disable that legacy CatGo entry inside CatBot so the model cannot silently
+// create a workflow in the wrong application instance.
+export const CODEX_CATGO_MCP_SERVER = `catgo_desktop`
+const CODEX_LEGACY_CATGO_MCP_SERVER = `catgo`
+
+export function buildCodexMcpConfig(
+  mcpServerUrl: string,
+  tabId?: string,
+): Record<string, Record<string, unknown>> {
+  const catgo: Record<string, unknown> = {
+    url: mcpServerUrl,
+    startup_timeout_sec: 20,
+  }
+  if (tabId) catgo.http_headers = { 'X-CatGo-Tab-Id': tabId }
+  return {
+    [CODEX_LEGACY_CATGO_MCP_SERVER]: { enabled: false },
+    [CODEX_CATGO_MCP_SERVER]: catgo,
+  }
+}
+
 function emit_text_delta(itemId: string, fullText: string): string | null {
   const prev = _item_text_seen.get(itemId) ?? ''
   if (!fullText || fullText === prev) return null
@@ -122,7 +145,7 @@ function emit_text_delta(itemId: string, fullText: string): string | null {
   return delta || null
 }
 
-function* translateEvent(evt: any): Generator<AgentEvent> {
+export function* translateEvent(evt: any): Generator<AgentEvent> {
   const type: string = evt?.type ?? ''
 
   // Codex SDK ≥0.117 ThreadEvent union:
@@ -208,8 +231,11 @@ function* translateEvent(evt: any): Generator<AgentEvent> {
       return
     }
     if (item_type === 'error') {
-      yield { type: 'result', isError: true, errorMessage: item.message }
-      yield { type: 'done' }
+      // ErrorItem is non-fatal in the Codex SDK event model. Codex may emit
+      // one for a recoverable discovery warning (for example the optional
+      // skills-description budget), then continue with an agent message and
+      // turn.completed. Only top-level error / turn.failed events below end a
+      // CatBot stream.
       return
     }
     return
@@ -259,8 +285,16 @@ export function createCodexAdapter(): AgentAdapter {
       // MCP: wire CatGO's backend MCP server so Codex gets the same `catgo_*`
       // tools Claude/Gemini do (this adapter previously dropped mcpServerUrl
       // entirely — Codex had NO CatGO tools). codex-sdk flattens `config`
-      // into `--config mcp_servers.catgo.*` overrides; codex ≥0.132 speaks
-      // streamable-HTTP MCP from a `url` (+ `http_headers` for tab routing).
+      // into `--config mcp_servers.catgo_desktop.*` overrides; codex ≥0.132
+      // speaks streamable-HTTP MCP from a `url` (+ `http_headers` for tab
+      // routing).
+      //
+      // Keep the injected bridge in a CatBot-specific namespace. A user's
+      // ~/.codex/config.toml may already define a STDIO server named `catgo`;
+      // reusing that key makes Codex deep-merge this HTTP URL into the STDIO
+      // table and fail with "url is not supported for stdio". The distinct
+      // key avoids the collision while preserving the complete user config,
+      // including plugins, ChemMate skills, and their MCP dependencies.
       //
       // dangerously_bypass_approvals_and_sandbox: codex-sdk's headless `exec`
       // wires NO approval responder, so EVERY tool call — including MCP — is
@@ -283,38 +317,30 @@ export function createCodexAdapter(): AgentAdapter {
         codexConfig.developer_instructions = systemPrompt
       }
       if (mcpServerUrl) {
-        const catgo: Record<string, any> = {
-          url: mcpServerUrl,
-          startup_timeout_sec: 20,
-        }
-        if (tabId) catgo.http_headers = { 'X-CatGo-Tab-Id': tabId }
-        codexConfig.mcp_servers = { catgo }
+        codexConfig.mcp_servers = buildCodexMcpConfig(mcpServerUrl, tabId)
       }
 
-      // codex-sdk turns the model into a `--model` CLI flag, which OVERRIDES
-      // ~/.codex/config.toml. Leaving it unset does NOT — the user's global
-      // config wins, and a pinned `model = "gpt-5.5"` there is rejected by
-      // older Codex CLIs ("requires a newer version of Codex"), which stalled
-      // the chat. So when the UI sends no model, fall back to a known-good
-      // default. Override in one place via CATGO_CODEX_MODEL (catgo-native.bat).
+      // codex-sdk turns the model into a `--model` CLI flag. When the UI sends
+      // no model, omit the option so the installed Codex CLI selects its live
+      // default. CATGO_CODEX_MODEL remains an explicit deployment override.
       //
       // IMPORTANT: runStreamed() reads the model from the *thread* options
       // (`this._threadOptions.model`), NOT the Codex() constructor — passing
       // it to `new Codex({model})` alone is silently ignored. It must go to
       // startThread()/resumeThread().
-      const resolvedModel =
-        model || process.env.CATGO_CODEX_MODEL || 'gpt-5-codex'
+      const resolvedModel = model || process.env.CATGO_CODEX_MODEL || undefined
 
       const codexExe = resolveCodexExecutable()
       const codex = new Codex({
-        model: resolvedModel,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         ...(codexExe ? { codexPathOverride: codexExe } : {}),
         config: codexConfig,
       }) as any
 
+      const threadOptions = resolvedModel ? { model: resolvedModel } : {}
       const thread = sessionId
-        ? (codex.resumeThread(sessionId, { model: resolvedModel }) as any)
-        : (codex.startThread({ model: resolvedModel }) as any)
+        ? (codex.resumeThread(sessionId, threadOptions) as any)
+        : (codex.startThread(threadOptions) as any)
 
       const abortController = new AbortController()
       if (abortSignal) {

@@ -480,7 +480,10 @@ _SPECIAL_HANDLERS = {
 async def _handle_special_tool(name: str, endpoint: str, arguments: dict) -> list[TextContent]:
     """Handle special tools: viewer-dependent ops and database imports."""
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Special handlers talk to CatGo's own loopback backend.  Do not let a
+        # user's HTTP(S)/SOCKS proxy intercept these requests (or make client
+        # construction depend on the optional ``socksio`` package).
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
 
             # Check for structure/viewer handlers
             handler = _SPECIAL_HANDLERS.get(endpoint)
