@@ -24,6 +24,7 @@
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { PacketSyncEvidence } from '$lib/structure/trajectory-presentation-commit'
   import type { PeriodicDecorationSource } from '$lib/structure/scene/periodic-decoration-snapshot'
   import {
     build_physical_supercell_render_source,
@@ -1420,18 +1421,60 @@
   let structure_aligned_id = $state<string | null>(null)
   let trajectory_active = $derived(trajectory_frame_positions != null)
   let presented_frame_source = $state.raw<TrajectoryFrameSource | null>(null)
+  let presented_frame_packet = $state.raw<RenderPacket | null>(null)
+  let presented_frame_idx = $state(-1)
+  let large_overlay_packet_sync_evidence = $state.raw<PacketSyncEvidence | null>(null)
+  function adopt_prepared_trajectory_frame(
+    frame_idx: number,
+    positions_version: number,
+    prepared_packet: RenderPacket | null,
+  ): void {
+    const source = get_trajectory_frame_source?.(frame_idx) ?? null
+    if (
+      source &&
+      source.positions_version === positions_version &&
+      prepared_packet?.frame.frame_idx === frame_idx &&
+      prepared_packet.frame.positions_version === positions_version &&
+      prepared_packet.frame.positions === source.positions
+    ) {
+      presented_frame_source = source
+      presented_frame_packet = prepared_packet
+      presented_frame_idx = frame_idx
+    }
+  }
+  function handle_trajectory_frame_prepared(
+    frame_idx: number,
+    positions_version: number,
+    prepared_packet: RenderPacket,
+  ): void {
+    adopt_prepared_trajectory_frame(
+      frame_idx,
+      positions_version,
+      prepared_packet,
+    )
+  }
   function handle_trajectory_frame_presented(
     frame_idx: number,
     positions_version: number,
+    prepared_packet: RenderPacket | null,
   ): void {
-    const source = get_trajectory_frame_source?.(frame_idx) ?? null
-    if (source && source.positions_version === positions_version) {
-      presented_frame_source = source
-    }
+    adopt_prepared_trajectory_frame(
+      frame_idx,
+      positions_version,
+      prepared_packet,
+    )
     on_trajectory_frame_presented?.(frame_idx, positions_version)
   }
   $effect(() => {
-    if (!trajectory_active) presented_frame_source = null
+    if (!trajectory_active) {
+      presented_frame_source = null
+      presented_frame_packet = null
+      presented_frame_idx = -1
+      large_overlay_packet_sync_evidence = null
+    }
+  })
+  $effect(() => {
+    if (!large_system_mode) large_overlay_packet_sync_evidence = null
   })
 
   // T5 pause writeback (search "T5 pause writeback" in src/lib/trajectory/Trajectory.svelte):
@@ -4772,8 +4815,11 @@
             {trajectory_frame_count}
             {get_trajectory_frame_source}
             {request_trajectory_frame_source}
+            on_trajectory_frame_prepared={handle_trajectory_frame_prepared}
             on_trajectory_frame_presented={handle_trajectory_frame_presented}
             {on_trajectory_buffer_state}
+            external_renderer_owned={large_system_mode}
+            external_packet_sync_evidence={large_overlay_packet_sync_evidence}
             {render_packet}
             {...scene_props}
             {hud_safe}
@@ -4959,6 +5005,9 @@
             frame_lattice={get_trajectory_frame_source
               ? presented_frame_source?.lattice ?? null
               : trajectory_frame_lattice}
+            prepared_trajectory_packet={get_trajectory_frame_source
+              ? presented_frame_packet
+              : null}
             realtime_position_overrides={interaction.realtime_position_overrides}
             supercell={physical_supercell_render?.dims ??
               (visual_replicas_active ? gpu_supercell_factors : [1, 1, 1])}
@@ -4992,7 +5041,9 @@
             show_cell_vectors={lattice_props.show_cell_vectors}
             show_gizmo={scene_props.show_gizmo}
             {trajectory_positions_version}
-            {trajectory_step_idx}
+            trajectory_step_idx={get_trajectory_frame_source
+              ? presented_frame_idx
+              : trajectory_step_idx}
             visual_state_source={scene_visual_state_source}
             periodic_decoration_source={trajectory_packet_active
               ? null
@@ -5000,6 +5051,9 @@
             {hud_safe}
             {selected_sites}
             on_pick={handle_overlay_pick}
+            on_packet_synced={(evidence) => {
+              large_overlay_packet_sync_evidence = evidence
+            }}
             on_fallback={(reason) => {
               // Atomic renderer swap (Bonds T6). The WebGL2+WASM fallback
               // CANDIDATE already exists: the Threlte canvas below the overlay

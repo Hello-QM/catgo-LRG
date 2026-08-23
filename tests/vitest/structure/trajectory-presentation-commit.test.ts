@@ -197,6 +197,7 @@ describe(`trajectory presentation committer`, () => {
       current.prepared_packet,
       current.key,
       false,
+      false,
       install_direct,
     )).toBe(`direct`)
     expect(committer.reconcile(
@@ -204,6 +205,7 @@ describe(`trajectory presentation committer`, () => {
       null,
       current.prepared_packet,
       current.key,
+      false,
       false,
       install_direct,
     )).toBe(`direct`)
@@ -240,6 +242,7 @@ describe(`trajectory presentation committer`, () => {
       current.prepared_packet,
       current.key,
       true,
+      false,
       install_direct,
     )).toBe(`renderer`)
     expect(install_direct).not.toHaveBeenCalled()
@@ -250,6 +253,7 @@ describe(`trajectory presentation committer`, () => {
       current.display_packet,
       current.prepared_packet,
       current.key,
+      false,
       false,
       install_direct,
     )).toBe(`direct`)
@@ -298,11 +302,57 @@ describe(`trajectory presentation committer`, () => {
       current.prepared_packet,
       current.key,
       false,
+      false,
       install_direct,
     )).toBe(`stale`)
     expect(install_direct).not.toHaveBeenCalled()
     expect(record_presented).not.toHaveBeenCalled()
     expect(record_renderer_installed).not.toHaveBeenCalled()
     expect(acknowledge).not.toHaveBeenCalled()
+  })
+
+  test(`waits for a matching external renderer instead of installing legacy state`, () => {
+    const record_presented = vi.fn()
+    const record_renderer_installed = vi.fn()
+    const acknowledge = vi.fn()
+    const install_direct = vi.fn()
+    const committer = create_trajectory_presentation_committer({
+      record_presented,
+      record_renderer_installed,
+      acknowledge,
+    })
+    const current = fixture()
+    const external_evidence: PacketSyncEvidence = {
+      ...current.evidence,
+      packet: current.prepared_packet,
+      topology_version: current.prepared_packet.topology.version,
+    }
+
+    committer.publish(current.presentation)
+    expect(committer.reconcile(
+      current.presentation,
+      null,
+      current.prepared_packet,
+      current.key,
+      false,
+      true,
+      install_direct,
+    )).toBe(`renderer`)
+    expect(install_direct).not.toHaveBeenCalled()
+    expect(acknowledge).not.toHaveBeenCalled()
+
+    expect(committer.external_renderer_synced(
+      external_evidence,
+      current.prepared_packet,
+      current.key,
+    )).toBe(true)
+    expect(committer.external_renderer_synced(
+      external_evidence,
+      current.prepared_packet,
+      current.key,
+    )).toBe(false)
+    expect(record_presented).not.toHaveBeenCalled()
+    expect(record_renderer_installed).toHaveBeenCalledOnce()
+    expect(acknowledge).toHaveBeenCalledWith(3, 13)
   })
 })

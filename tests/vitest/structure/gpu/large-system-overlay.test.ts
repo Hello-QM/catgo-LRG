@@ -408,7 +408,34 @@ describe(`visual source ownership and wiring`, () => {
     expect(structure).toContain(`style:--structure-gizmo-size={GIZMO_SIZE_CSS}`)
     expect(structure).toContain(`visual_state_source={scene_visual_state_source}`)
     expect(structure).toContain(`periodic_decoration_source={trajectory_packet_active`)
+    expect(structure).toContain(`prepared_trajectory_packet={get_trajectory_frame_source`)
+    expect(structure).toContain(`? presented_frame_idx`)
     expect(structure).toContain(`            {hud_safe}`)
+  })
+
+  it(`hands WebGPU the exact prepared graph paired with the presented positions`, () => {
+    const scene = readFileSync(
+      resolve_path(`src/lib/structure/StructureScene.svelte`),
+      `utf8`,
+    )
+    const structure = readFileSync(
+      resolve_path(`src/lib/structure/Structure.svelte`),
+      `utf8`,
+    )
+    const overlay = readFileSync(
+      resolve_path(`src/lib/structure/gpu/LargeSystemOverlay.svelte`),
+      `utf8`,
+    )
+
+    expect(scene).toContain(`prepared_render_packet,`)
+    expect(structure).toContain(
+      `prepared_packet.frame.positions === source.positions`,
+    )
+    expect(overlay).toContain(`matching_trajectory_bond_graph(`)
+    expect(overlay).toContain(
+      `const next_authoritative = prepared_packet_present || source !== null`,
+    )
+    expect(overlay).toContain(`const decoration_source = prepared_packet_present ? null : source`)
   })
 })
 

@@ -36,6 +36,7 @@
     type FrameRequestOutcome,
   } from './frame-loading'
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
+  import { create_frame_source_cache } from './frame-source-cache'
   import type {
     ParseProgress,
     FramePositionData,
@@ -340,6 +341,12 @@
       get_current_frame_x0(): number | null {
         return trajectory?.frames?.[current_step_idx]?.structure?.sites?.[0]?.xyz?.[0] ?? null
       },
+      get_frame_source_x0(frame_idx: number): number | null {
+        return get_trajectory_frame_source(frame_idx)?.positions[0] ?? null
+      },
+      get frame_source_cache_size(): number {
+        return requested_frame_sources.size()
+      },
     }
     ;(globalThis as { __catgo_traj_test?: typeof api }).__catgo_traj_test = api
     return () => {
@@ -498,12 +505,14 @@
   let current_frame = $state.raw<TrajectoryFrame | null>(null)
   let displayed_frame_idx = $state<number | null>(null)
   const frame_requests = create_frame_request_loader()
+  const requested_frame_sources = create_frame_source_cache()
 
   // A completion from an earlier trajectory must never replace the current
   // trajectory's frame, even when no newer frame request has started yet.
   $effect(() => {
     const active_trajectory = trajectory
     frame_requests.invalidate()
+    requested_frame_sources.clear()
     if (!active_trajectory) {
       current_frame = null
       displayed_frame_idx = null
@@ -1821,7 +1830,16 @@
   function get_trajectory_frame_source(
     frame_idx: number,
   ): TrajectoryFrameSource | null {
-    const frame = trajectory?.frames?.[frame_idx]
+    const owner = trajectory
+    if (owner) {
+      const requested = requested_frame_sources.get(
+        owner,
+        trajectory_positions_version.v,
+        frame_idx,
+      )
+      if (requested) return requested
+    }
+    const frame = owner?.frames?.[frame_idx]
     const sites = frame?.structure?.sites
     const cached_frame = sites?.length
       ? frame_pos_cache.get(frame_idx, sites)
@@ -1876,6 +1894,7 @@
     const cached = get_trajectory_frame_source(frame_idx)
     if (cached) return cached
     const owner = trajectory
+    const positions_version = trajectory_positions_version.v
     const loader = (owner as PaneTrajectory | undefined)?.frame_loader
     if (!owner || !loader || frame_has_unmaterialized_ops(owner, frame_idx)) {
       return null
@@ -1890,23 +1909,31 @@
     if (loader.load_frame_positions) {
       const data: FramePositionData | null =
         await loader.load_frame_positions(source_data, frame_idx)
-      if (trajectory !== owner || !data?.positions) return null
-      return {
+      if (
+        trajectory !== owner ||
+        trajectory_positions_version.v !== positions_version ||
+        !data?.positions
+      ) return null
+      return requested_frame_sources.set(owner, positions_version, {
         frame_idx,
         positions: data.positions,
         forces: data.forces ?? null,
         lattice: data.lattice ?? base_lattice,
-        positions_version: trajectory_positions_version.v,
+        positions_version,
         topology_stable: !data.topology_changed,
-      }
+      })
     }
     const frame = await owner.effective_frames?.resolve(
       frame_idx,
       (idx) => loader.load_frame(source_data, idx),
     )
-    if (trajectory !== owner || !frame?.structure?.sites?.length) return null
+    if (
+      trajectory !== owner ||
+      trajectory_positions_version.v !== positions_version ||
+      !frame?.structure?.sites?.length
+    ) return null
     const cached_frame = frame_pos_cache.get(frame_idx, frame.structure.sites)
-    return {
+    return requested_frame_sources.set(owner, positions_version, {
       frame_idx,
       positions: cached_frame.positions,
       forces: frame.position_data?.forces ?? cached_frame.forces ?? null,
@@ -1915,9 +1942,9 @@
           | { lattice?: { matrix?: number[][] } }
           | undefined)?.lattice?.matrix ??
         base_lattice,
-      positions_version: trajectory_positions_version.v,
+      positions_version,
       topology_stable: false,
-    }
+    })
   }
 
   function handle_trajectory_frame_presented(

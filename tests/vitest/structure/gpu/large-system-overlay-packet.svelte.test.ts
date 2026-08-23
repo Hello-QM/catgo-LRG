@@ -368,6 +368,147 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(mocks.renderer.set_bond_rules).not.toHaveBeenCalled()
   })
 
+  it(`publishes one prepared trajectory snapshot without GPU bond redetection`, async () => {
+    const structure = make_structure()
+    const positions = new Float32Array([1.1, 0, 0, 0, 1.1, 0])
+    const graph: BaseBondGraph = {
+      version: 31,
+      pairs: new Uint32Array([0, 1]),
+      jimages: new Int8Array([0, 0, 0]),
+      kinds: new Uint8Array([0]),
+      strengths: new Float32Array([1]),
+    }
+    const prepared_trajectory_packet: RenderPacket = {
+      topology: {
+        version: 4,
+        atom_count: 2,
+        site_ids: new Uint32Array([0, 1]),
+        atomic_numbers: new Uint8Array([6, 8]),
+        radii: new Float32Array([0.76, 0.66]),
+        colors: new Float32Array(6),
+        bond_graph: graph,
+      },
+      frame: {
+        owner: structure,
+        frame_idx: 31,
+        positions_version: 8,
+        positions,
+        lattice: new Float32Array([10, 0, 0, 0, 10, 0, 0, 0, 10]),
+      },
+      replicas: {
+        version: 1,
+        dims: [1, 1, 1],
+        boundary_policy: `stub`,
+        semantics: `visual-shared-base`,
+      },
+    }
+    const on_packet_synced = vi.fn()
+    const props = $state({
+      enabled: true,
+      structure,
+      frame_positions: positions,
+      frame_lattice: [[10, 0, 0], [0, 10, 0], [0, 0, 10]],
+      trajectory_step_idx: 31,
+      prepared_trajectory_packet,
+      on_packet_synced,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      show_bonds: `always` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+
+    expect(last_packet().topology.bond_graph).toStrictEqual(graph)
+    expect(last_packet().frame.frame_idx).toBe(31)
+    expect(mocks.renderer.set_bond_data).not.toHaveBeenCalled()
+    expect(mocks.renderer.set_bond_rules).not.toHaveBeenCalled()
+    expect(on_packet_synced).toHaveBeenCalledOnce()
+    expect(on_packet_synced).toHaveBeenCalledWith({
+      packet: prepared_trajectory_packet,
+      owner: prepared_trajectory_packet.frame.owner,
+      frame_idx: 31,
+      positions_version: 8,
+      topology_version: 4,
+      graph_version: 31,
+      bond_count: 1,
+      atom_renderer_synced: true,
+      bond_renderer_synced: true,
+    })
+
+    run_overlay_frame()
+    expect(on_packet_synced).toHaveBeenCalledOnce()
+  })
+
+  it(`fails closed instead of mixing a previous graph with current positions`, async () => {
+    const structure = make_structure()
+    const old_positions = new Float32Array([1, 0, 0, 0, 1, 0])
+    const current_positions = new Float32Array([7, 0, 0, 0, 7, 0])
+    const prepared_trajectory_packet: RenderPacket = {
+      topology: {
+        version: 4,
+        atom_count: 2,
+        site_ids: new Uint32Array([0, 1]),
+        atomic_numbers: new Uint8Array([6, 8]),
+        radii: new Float32Array([0.76, 0.66]),
+        colors: new Float32Array(6),
+        bond_graph: {
+          version: 30,
+          pairs: new Uint32Array([0, 1]),
+          jimages: new Int8Array([0, 0, 0]),
+          kinds: new Uint8Array([0]),
+          strengths: new Float32Array([1]),
+        },
+      },
+      frame: {
+        owner: structure,
+        frame_idx: 30,
+        positions_version: 7,
+        positions: old_positions,
+        lattice: new Float32Array([10, 0, 0, 0, 10, 0, 0, 0, 10]),
+      },
+      replicas: {
+        version: 1,
+        dims: [1, 1, 1],
+        boundary_policy: `stub`,
+        semantics: `visual-shared-base`,
+      },
+    }
+    const on_packet_synced = vi.fn()
+    const props = $state({
+      enabled: true,
+      structure,
+      frame_positions: current_positions,
+      frame_lattice: [[10, 0, 0], [0, 10, 0], [0, 0, 10]],
+      trajectory_step_idx: 31,
+      prepared_trajectory_packet,
+      on_packet_synced,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      show_bonds: `always` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+    run_overlay_frame()
+
+    expect(last_packet().topology.bond_graph?.pairs).toHaveLength(0)
+    expect(mocks.renderer.set_bond_data).not.toHaveBeenCalled()
+    expect(mocks.renderer.set_bond_rules).not.toHaveBeenCalled()
+    expect(on_packet_synced).not.toHaveBeenCalled()
+  })
+
   it(`rejects a same-sized ordinary graph owned by the previous structure`, async () => {
     const structure = make_structure()
     const previous_owner = make_structure()
