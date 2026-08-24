@@ -82,6 +82,21 @@ def test_locked_slab_poscar_keeps_atom_count_and_constraints():
     assert sum(1 for l in lines if "T T T" in l) == 1   # the free atom
 
 
+def test_actual_vasp_engine_inherits_locked_slab_constraints():
+    """The production VASP writer must not replace a finalized slab's exact
+    fixed-atom set with a fresh z-layer interpretation from geo_opt params."""
+    from workflow.engines.vasp import generate_vasp_input_files
+
+    files, _, _ = generate_vasp_input_files(
+        "geo_opt",
+        {"software": "vasp", "ENCUT": 520, "frozen_layers": 2},
+        _locked_slab_json(),
+    )
+    poscar = files["POSCAR"]
+    assert sum(1 for line in poscar.splitlines() if "F F F" in line) == 1
+    assert sum(1 for line in poscar.splitlines() if "T T T" in line) == 1
+
+
 def test_unlocked_slab_still_regenerates_from_bulk():
     # Without slab_locked, the generator builds from the bulk (different result),
     # so it must NOT just echo the 2-atom structure_json.

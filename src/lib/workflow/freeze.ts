@@ -62,6 +62,23 @@ export function apply_freeze_to_structure(struct_json: string | null, params: Re
     const struct = JSON.parse(struct_json)
     if (!struct.sites?.length) return struct_json
     const n = struct.sites.length
+
+    // Fixed atoms are a structure property. A downstream geo_opt layer count
+    // is a fallback for unconstrained inputs, not permission to replace a
+    // manually finalized slab. The config panel sets the explicit override
+    // marker when the user actually changes the geo_opt field.
+    const has_existing_constraints = struct.sites.some((site: any) => {
+      const sd = site.properties?.selective_dynamics
+      return Array.isArray(sd) && sd.some((free: unknown) => free === false)
+    })
+    if (
+      has_existing_constraints
+      && (mode === `layers` || mode === `bottom`)
+      && params.override_structure_constraints !== true
+    ) {
+      return struct_json
+    }
+
     const frozen = new Set<number>()
 
     if (mode === `z_range`) {

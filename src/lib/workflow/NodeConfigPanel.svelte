@@ -242,6 +242,12 @@
 
   function update_param(key: string, value: unknown) {
     const next = { ...node.params, [key]: value }
+    // Structure-level Selective Dynamics is inherited by default. Changing
+    // this geo_opt field is the explicit signal that this node should replace
+    // the upstream constraint set instead of merely displaying it.
+    if (node.type === `geo_opt` && key === `frozen_layers`) {
+      next.override_structure_constraints = true
+    }
     emit(next)
   }
 

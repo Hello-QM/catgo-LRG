@@ -106,6 +106,37 @@ describe(`apply_freeze_to_structure`, () => {
     })).toEqual({ frozen_layers: 2, freeze_mode: `bottom` })
   })
 
+  it(`preserves an upstream manual constraint set for geo_opt`, () => {
+    const slab = JSON.parse(make_slab())
+    slab.sites.forEach((site: any, index: number) => {
+      const free = index >= 2
+      site.properties.selective_dynamics = [free, free, free]
+    })
+    const input = JSON.stringify(slab)
+
+    const inherited = apply_freeze_to_structure(input, {
+      freeze_mode: `bottom`,
+      frozen_layers: 1,
+    })
+    expect(inherited).toBe(input)
+    expect(frozen_indices_from_structure(inherited)).toEqual([0, 1])
+  })
+
+  it(`replaces upstream constraints after an explicit geo_opt override`, () => {
+    const slab = JSON.parse(make_slab())
+    slab.sites.forEach((site: any, index: number) => {
+      const free = index >= 2
+      site.properties.selective_dynamics = [free, free, free]
+    })
+
+    const overridden = apply_freeze_to_structure(JSON.stringify(slab), {
+      freeze_mode: `bottom`,
+      frozen_layers: 1,
+      override_structure_constraints: true,
+    })
+    expect(frozen_indices_from_structure(overridden)).toEqual([0])
+  })
+
   it(`returns the input unchanged when no freeze params are given`, () => {
     const input = make_slab()
     const out = apply_freeze_to_structure(input, {})
