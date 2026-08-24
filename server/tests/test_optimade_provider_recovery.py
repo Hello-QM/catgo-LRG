@@ -15,6 +15,37 @@ def _clear_provider_caches():
 
 
 @pytest.mark.asyncio
+async def test_external_requests_do_not_inherit_agent_proxy_env(monkeypatch):
+    created_with = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            created_with.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(optimade.httpx, "AsyncClient", FakeAsyncClient)
+
+    await optimade.fetch_json("https://optimade.example/v1/structures")
+
+    assert created_with == [{"timeout": optimade.HTTP_TIMEOUT, "trust_env": False}]
+
+
+@pytest.mark.asyncio
 async def test_registry_failure_does_not_cache_fallback_forever(monkeypatch):
     calls = 0
 

@@ -29,7 +29,7 @@ class MPSearchRequest(BaseModel):
 async def validate_api_key(x_api_key: str = Header(..., alias="X-API-KEY")):
     """Validate a Materials Project API key."""
     print(f"[MP DEBUG] Validating API key: {x_api_key[:8]}...")
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         try:
             # Try the dedicated API check endpoint first
             check_url = "https://www.materialsproject.org/rest/v1/api_check"
@@ -119,7 +119,7 @@ async def search_structures(
 
     print(f"[MP DEBUG] Search params: {params}")
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         try:
             url = f"{MP_API_BASE}/materials/summary/"
             print(f"[MP DEBUG] Search URL: {url}")
@@ -186,7 +186,7 @@ async def get_structure(
 
     print(f"[MP DEBUG] Fetching structure: {material_id}")
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         try:
             url = f"{MP_API_BASE}/materials/summary/"
             print(f"[MP DEBUG] URL: {url}")

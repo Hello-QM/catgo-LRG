@@ -18,9 +18,10 @@ class _FakeResponse:
 
 class _FakeAsyncClient:
     requests: list[dict] = []
+    created_with: list[dict] = []
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.created_with.append(kwargs)
 
     async def __aenter__(self):
         return self
@@ -28,7 +29,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    async def get(self, url, *, params, headers):
+    async def get(self, url, *, params=None, headers):
         self.requests.append({"url": url, "params": params, "headers": headers})
         return _FakeResponse()
 
@@ -36,6 +37,7 @@ class _FakeAsyncClient:
 @pytest.fixture(autouse=True)
 def _mock_httpx(monkeypatch):
     _FakeAsyncClient.requests = []
+    _FakeAsyncClient.created_with = []
     monkeypatch.setattr(materials_project.httpx, "AsyncClient", _FakeAsyncClient)
 
 
@@ -67,3 +69,22 @@ async def test_single_structure_request_includes_geometry_field():
     assert request["params"]["_limit"] == "1"
     fields = request["params"]["_fields"].split(",")
     assert "structure" in fields
+
+
+@pytest.mark.asyncio
+async def test_mp_requests_do_not_inherit_agent_proxy_env():
+    await materials_project.validate_api_key(x_api_key="test-key")
+    await materials_project.search_structures(
+        materials_project.MPSearchRequest(formula="WO3"),
+        x_api_key="test-key",
+    )
+    await materials_project.get_structure("mp-1933", x_api_key="test-key")
+
+    assert len(_FakeAsyncClient.created_with) == 3
+    assert all(
+        kwargs == {
+            "timeout": materials_project.HTTP_TIMEOUT,
+            "trust_env": False,
+        }
+        for kwargs in _FakeAsyncClient.created_with
+    )
