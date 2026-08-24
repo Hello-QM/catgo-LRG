@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   guard_terminal_dimensions,
+  TERMINAL_REFLOW_CURSOR_LINE,
   TERMINAL_SCROLLBAR_GUARD_COLS,
 } from '../terminal-fit'
 
 describe('terminal scrollbar guard', () => {
+  it('keeps the active Codex TUI transcript eligible for resize reflow', () => {
+    expect(TERMINAL_REFLOW_CURSOR_LINE).toBe(true)
+  })
+
   it('reserves one complete full-width glyph beyond FitAddon geometry', () => {
     expect(TERMINAL_SCROLLBAR_GUARD_COLS).toBe(2)
     expect(guard_terminal_dimensions({ cols: 131, rows: 28 })).toEqual({

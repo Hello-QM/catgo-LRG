@@ -7,6 +7,9 @@
  */
 export const TERMINAL_SCROLLBAR_GUARD_COLS = 2
 
+/** Preserve the active wrapped-line group when font/viewport changes resize it. */
+export const TERMINAL_REFLOW_CURSOR_LINE = true
+
 export interface TerminalDimensions {
   cols: number
   rows: number

@@ -7,7 +7,7 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
-  import { guard_terminal_dimensions } from './terminal-fit'
+  import { guard_terminal_dimensions, TERMINAL_REFLOW_CURSOR_LINE } from './terminal-fit'
   import { open_terminal_click } from './terminal-path-nav'
 
   let {
@@ -247,6 +247,11 @@
           cursorBlink: true,
           fontSize: terminal_font_state.font_size,
           fontFamily: terminal_font_state.font_family,
+          // Codex and similar inline TUIs keep their visible transcript in the
+          // cursor's wrapped-line group. xterm excludes that group from resize
+          // reflow by default, so increasing the font size permanently trims
+          // the right-hand cells. Preserve and reflow it like normal scrollback.
+          reflowCursorLine: TERMINAL_REFLOW_CURSOR_LINE,
           theme: {
             background: term_bg,
             foreground: term_fg,
