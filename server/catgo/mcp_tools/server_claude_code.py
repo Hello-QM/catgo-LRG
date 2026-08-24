@@ -31,7 +31,7 @@ import weakref
 from contextvars import ContextVar
 
 import httpx
-from catgo.mcp_tools.helpers import _push_workflow_navigate
+from catgo.mcp_tools.helpers import API_BASE, _push_workflow_navigate
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -49,8 +49,6 @@ for _runtime_dir in (_server_dir, _bundled_dir):
         sys.path.insert(0, _runtime_dir)
 
 logger = logging.getLogger(__name__)
-
-API_BASE = os.environ.get("CATGO_API", "http://localhost:8000/api")
 
 server = Server("catgo-claude-code")
 

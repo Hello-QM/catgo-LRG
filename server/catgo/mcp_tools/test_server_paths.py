@@ -13,6 +13,7 @@ import os
 import sys
 import asyncio
 import json
+import subprocess
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SERVER = os.path.dirname(os.path.dirname(_HERE))          # server/
@@ -41,6 +42,30 @@ def test_server_catgo_is_not_ahead_of_server_on_path():
     if inner in sys.path:
         assert sys.path.index(_SERVER) < sys.path.index(inner), \
             "server/catgo must never precede server/ on sys.path"
+
+
+def test_consolidated_server_honors_runtime_backend_port():
+    """The embedded MCP must call back into the backend that hosts it.
+
+    Desktop/worktree instances intentionally run on ports other than 8000.
+    A private fallback in ``server_claude_code`` previously ignored
+    ``SERVER_PORT`` and made healthy instances report that their backend was
+    disconnected as soon as a tool needed an HTTP callback.
+    """
+    env = os.environ.copy()
+    env.pop("CATGO_API", None)
+    env["SERVER_PORT"] = "8123"
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "from catgo.mcp_tools.server_claude_code import API_BASE; print(API_BASE)",
+        ],
+        cwd=_SERVER,
+        env=env,
+        text=True,
+    ).strip()
+    assert output == "http://localhost:8123/api"
 
 
 # ---- the provenance envelope the numeric tools now return ------------------
