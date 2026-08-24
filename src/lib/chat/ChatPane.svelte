@@ -341,32 +341,46 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
       .map(([el, n]) => (n > 1 ? `${el}${n}` : el))
       .join(``)
   }
+
+  function stage_loaded_structure(
+    data: { intent?: string; had_structure?: boolean; structure?: AnyStructure },
+    replay = false,
+  ) {
+    // Fresh edits should not nag the user, but a replay snapshot is the only
+    // recovery path when a viewer-less CatBot window outlives its Structure
+    // tab/window.
+    if (!replay && data?.intent !== `load`) return
+    // Docked chat has a sibling viewer and only needs a card for overwrite
+    // conflicts. Standalone panes and popouts are always viewer-less.
+    if (!is_pane && !is_popout && !data?.had_structure) return
+    const s = data?.structure
+    const n = s?.sites?.length ?? 0
+    if (!n) return
+    const fp = `${n}:${struct_formula(s)}`
+    // Do not repeat reconnect snapshots or duplicate a card that is already
+    // visible. A later explicit load of the same structure is still allowed to
+    // restore a dismissed card.
+    if (fp === last_loaded_fp && (replay || loaded_view_card)) return
+    last_loaded_fp = fp
+    loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id!, structure: s }
+  }
+
   $effect(() => {
     if (STATIC_ONLY || !tab_id) return
     if (!on_view_split && !on_view_new_window && !on_view_overwrite) return
     const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=${encodeURIComponent(tab_id)}`)
-    // `structure` only (not `snapshot`): we want real new pushes, not the
-    // replay the backend sends on connect.
+    // Viewer-less panes/popouts also consume the initial replay so closing the
+    // original Structure tab cannot strand a structure in backend state.
+    es.addEventListener(`snapshot`, (ev) => {
+      if (!is_pane && !is_popout) return
+      try {
+        stage_loaded_structure(JSON.parse((ev as MessageEvent).data), true)
+      } catch { /* ignore parse errors */ }
+    })
     es.addEventListener(`structure`, (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data)
-        // Only fresh loads raise the card; edits (supercell, etc.) carry
-        // intent:edit and must not nag the user to re-open a viewer.
-        if (data?.intent !== `load`) return
-        // Docked chat (beside a viewer, !is_pane): only surface the card when the
-        // load landed in an ALREADY-occupied viewer (had_structure) — that's when
-        // the user must choose overwrite/split/new-window. A load into an EMPTY
-        // docked viewer auto-applies and is shown, so no card. The standalone
-        // viewer-less chat pane (is_pane) has no viewer to render the load, so it
-        // always cards (PR #370 behaviour).
-        if (!is_pane && !data?.had_structure) return
-        const s = data?.structure
-        const n = s?.sites?.length ?? 0
-        if (!n) return
-        const fp = `${n}:${struct_formula(s)}`
-        if (fp === last_loaded_fp) return
-        last_loaded_fp = fp
-        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id!, structure: s }
+        stage_loaded_structure(data)
       } catch { /* ignore parse errors */ }
     })
     return () => es.close()
@@ -383,7 +397,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     const pend = pending_client_load_state().value
     if (!pend) return
     const fp = `${pend.n}:${pend.formula}`
-    if (fp === last_loaded_fp) return
+    if (fp === last_loaded_fp && loaded_view_card) return
     last_loaded_fp = fp
     loaded_view_card = {
       formula: pend.formula,

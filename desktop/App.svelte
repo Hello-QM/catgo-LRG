@@ -280,6 +280,15 @@
   // Thin wrappers that pass deps
   function popout_pane(tab_id: string, leaf_id: string) { return _popout_pane(tab_id, leaf_id, tab_states, is_tauri) }
   function popout_workflow() { return _popout_workflow(is_tauri, close_tab, switch_to_structure) }
+  async function view_catbot_structure_in_new_window(_panel_id: string, struct: AnyStructure) {
+    try {
+      if (struct?.sites?.length) {
+        await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+      }
+    } catch (e) {
+      console.warn(`[CatGo] open structure window failed:`, e)
+    }
+  }
   function handle_sidebar_load(content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) { _handle_sidebar_load(sidebar_deps, content, filename, file_path, session_id) }
   function handle_sidebar_preview(mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) { _handle_sidebar_preview(sidebar_deps, mode, filename, file_path, session_id, content, binary_data, mime_type) }
   function handle_sidebar_open_editor(content: string, filename: string, file_path: string, session_id: string) { _handle_sidebar_open_editor(sidebar_deps, content, filename, file_path, session_id) }
@@ -2252,7 +2261,11 @@
 
 {#if !STATIC_ONLY && popout_chat_mode}
 <div class="standalone-chat">
-  <ChatPane is_popout={true} tab_id={popout_chat_tab_id} />
+  <ChatPane
+    is_popout={true}
+    tab_id={popout_chat_tab_id}
+    on_view_new_window={view_catbot_structure_in_new_window}
+  />
 </div>
 {:else if popout_status_mode}
 <StatusPopout />
@@ -2740,15 +2753,7 @@
                   ts.active_leaf_id = res.newLeafId
                   update_tab_label(tab.id)
                 }}
-                on_view_new_window={async (_panelId, struct) => {
-                  try {
-                    if (struct?.sites?.length) {
-                      await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
-                    }
-                  } catch (e) {
-                    console.warn(`[CatGo] open structure window failed:`, e)
-                  }
-                }}
+                on_view_new_window={view_catbot_structure_in_new_window}
                 has_sibling_structure={leaves(ts.root).some(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })}
                 on_view_overwrite={(_panelId, struct) => {
                   // Overwrite the FIRST content-bearing sibling structure leaf
