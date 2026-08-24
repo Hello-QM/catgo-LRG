@@ -147,7 +147,7 @@ export const WORKFLOW_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: `plan_and_build_workflow`,
-    description: `🚀 PREFERRED: Build an entire workflow in ONE call. Provide a simplified plan (node types + connections) and the system deterministically builds the full graph with correct IDs, handles, defaults, and layout. Use this instead of create→add_node→connect→set_params sequences. Connections reference nodes by label or index (0-based). Handle routing is automatic.
+    description: `🚀 PREFERRED: Build an entire workflow in ONE call. Provide a simplified plan (node types + connections) and the system deterministically builds the full graph with correct IDs, handles, defaults, and layout. Use this instead of create→add_node→connect→set_params sequences. Connections reference nodes by label or index (0-based). Handle routing is automatic. For every surface-reaction/free-energy workflow, the clean slab MUST be relaxed before adsorbate placement: slab_gen → geo_opt(clean slab) → adsorbate_place; reuse that relaxed slab for every adsorbate branch and never connect slab_gen directly to adsorbate_place.
 
 Example: {name: "VASP Relax+DOS", nodes: [{type: "structure_input", label: "input"}, {type: "geo_opt", label: "relax", software: "vasp"}, {type: "single_point", label: "static", software: "vasp", params: {LORBIT: 11}}], connections: [[0,1], [1,2]]}`,
     input_schema: {

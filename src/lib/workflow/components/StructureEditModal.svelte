@@ -112,7 +112,9 @@
           </div>
         {/if}
         <div class="struct-edit3d-actions">
-          {#if show_confirm && onconfirm}
+          {#if freeze_mode}
+            <button class="struct-edit3d-save" onclick={handle_save}>{t('common.save_and_close')}</button>
+          {:else if show_confirm && onconfirm}
             <button class="struct-edit3d-save" onclick={onconfirm}>{t('common.confirm')}</button>
           {:else if !readonly}
             <button class="struct-edit3d-save" onclick={handle_save}>
@@ -125,11 +127,14 @@
       {#if freeze_mode}
         {@const n_frozen = frozen_indices?.size ?? 0}
         {@const n_total = structure?.sites?.length ?? 0}
+        {@const selected_frozen = editor_selected_sites.filter(i => frozen_indices?.has(i)).length}
+        {@const selected_free = editor_selected_sites.length - selected_frozen}
         <div class="freeze-toolbar">
           <span class="freeze-toolbar-stat">
             {@html t('workflow.frozen_free_count', { frozen: n_frozen, free: n_total - n_frozen })}
           </span>
-          <button class="freeze-tb-btn" disabled={editor_selected_sites.length === 0}
+          <span class="freeze-toolbar-hint">{t('workflow.freeze_visual_hint')}</span>
+          <button class="freeze-tb-btn" disabled={selected_free === 0}
             onclick={() => {
               const next = new Set(frozen_indices ?? new Set<number>())
               for (const i of editor_selected_sites) next.add(i)
@@ -137,7 +142,7 @@
             }}>
             {t('workflow.freeze_selected_count', { n: editor_selected_sites.length })}
           </button>
-          <button class="freeze-tb-btn" disabled={editor_selected_sites.length === 0}
+          <button class="freeze-tb-btn" disabled={selected_frozen === 0}
             onclick={() => {
               const next = new Set(frozen_indices ?? new Set<number>())
               for (const i of editor_selected_sites) next.delete(i)
@@ -261,6 +266,9 @@
   }
   .freeze-toolbar-stat {
     font-size: 11px; color: var(--text-color, #eee); margin-right: auto;
+  }
+  .freeze-toolbar-hint {
+    font-size: 10px; color: var(--text-color-muted, #64748b);
   }
   .freeze-tb-btn {
     padding: 4px 10px; border-radius: 5px; font-size: 10px; font-weight: 600;

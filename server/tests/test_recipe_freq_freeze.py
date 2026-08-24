@@ -31,3 +31,26 @@ def test_geo_opt_keeps_bottom_layer_freeze():
             if n["type"] == "geo_opt":
                 fm = n["params"].get("freeze_mode")
                 assert fm in ("bottom", "layers"), f"{name} geo_opt freeze_mode={fm}"
+
+
+def test_adsorbate_recipes_relax_clean_slab_before_placement():
+    """Every adsorbate branch must reuse one relaxed clean slab."""
+    recipes = _quickbuild_recipes()
+    for name in _ADSORBATE_RECIPES:
+        graph = recipes[name]
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        edges = set(graph["edges"])
+
+        assert nodes["slab_opt"]["type"] == "geo_opt"
+        assert ("slab", "slab_opt") in edges
+
+        adsorbate_ids = [
+            node_id for node_id, node in nodes.items()
+            if node["type"] == "adsorbate_place"
+        ]
+        assert adsorbate_ids, f"{name} has no adsorbate branch"
+        for adsorbate_id in adsorbate_ids:
+            assert ("slab_opt", adsorbate_id) in edges, (
+                f"{name} places {adsorbate_id} before clean-slab relaxation"
+            )
+            assert ("slab", adsorbate_id) not in edges

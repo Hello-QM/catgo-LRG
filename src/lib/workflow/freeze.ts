@@ -92,3 +92,45 @@ export function apply_freeze_to_structure(struct_json: string | null, params: Re
     return struct_json
   }
 }
+
+/** Return fully frozen atom indices from pymatgen selective_dynamics flags. */
+export function frozen_indices_from_structure(struct_json: string | null): number[] {
+  if (!struct_json) return []
+  try {
+    const struct = JSON.parse(struct_json)
+    if (!Array.isArray(struct?.sites)) return []
+    const frozen: number[] = []
+    for (let i = 0; i < struct.sites.length; i++) {
+      const sd = struct.sites[i]?.properties?.selective_dynamics
+      if (Array.isArray(sd) && sd.length >= 3 && sd.every((v: unknown) => v === false)) {
+        frozen.push(i)
+      }
+    }
+    return frozen
+  } catch {
+    return []
+  }
+}
+
+/** Stamp a manual frozen-index selection onto a structure for live preview. */
+export function apply_manual_frozen_indices(
+  struct_json: string | null,
+  indices: Iterable<number>,
+): string | null {
+  if (!struct_json) return null
+  try {
+    const struct = JSON.parse(struct_json)
+    if (!Array.isArray(struct?.sites)) return struct_json
+    const frozen = new Set(indices)
+    for (let i = 0; i < struct.sites.length; i++) {
+      const free = !frozen.has(i)
+      struct.sites[i].properties = {
+        ...(struct.sites[i].properties ?? {}),
+        selective_dynamics: [free, free, free],
+      }
+    }
+    return JSON.stringify(struct)
+  } catch {
+    return struct_json
+  }
+}

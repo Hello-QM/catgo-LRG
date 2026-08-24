@@ -245,7 +245,10 @@ TOOLS = [
             "  3) (optional) run with run_config for HPC, or confirm:true for local.\n"
             "Every reaction-mechanism pipeline MUST include freq + free_energy nodes after "
             "geo_opt so the reported ΔG is a real Gibbs energy (electronic + ZPE + TS), not "
-            "bare DFT energy. Frequency on slabs needs freeze_mode='bottom' freeze_n_layers=2 "
+            "bare DFT energy. Every surface-reaction pipeline MUST also relax the clean slab "
+            "before placing adsorbates: slab_gen → clean-slab geo_opt → adsorbate_place. "
+            "Reuse that same relaxed clean slab for every adsorbate branch; never connect "
+            "slab_gen directly to adsorbate_place. Frequency on slabs needs the slab frozen "
             "so only the adsorbate vibrates.\n\n"
             "batch op format: {op:'add_node',node_type:str,label?:str,params?:{}}, "
             "{op:'connect',from_id:str,to_id:str,from_handle:str,to_handle:str}. "
@@ -255,17 +258,19 @@ TOOLS = [
             "  call 1: catgo_workflow {action:'create', name:'HER on Pt(111)', material_ids:['mp-126']}\n"
             "  call 2: catgo_workflow {action:'batch', operations:[\n"
             "    {op:'add_node', node_type:'slab_gen',           label:'slab', params:{miller:'1,1,1', layers:4, vacuum:15, supercell:'2x2x1'}},\n"
+            "    {op:'add_node', node_type:'geo_opt',            label:'slab_opt', params:{software:'vasp', encut:520, ediffg:-0.03, freeze_mode:'bottom', freeze_n_layers:2}},\n"
             "    {op:'add_node', node_type:'adsorbate_place', label:'ads',  params:{species:'H', site:'fcc'}},\n"
             "    {op:'add_node', node_type:'geo_opt',             label:'opt',  params:{software:'vasp', encut:520, ediffg:-0.03, freeze_mode:'bottom', freeze_n_layers:2}},\n"
             "    {op:'add_node', node_type:'freq',                label:'freq', params:{software:'vasp', freeze_mode:'bottom', freeze_n_layers:2}},\n"
             "    {op:'add_node', node_type:'free_energy',         label:'fe',   params:{temperature:298.15, reference:'CHE', target:'H'}},\n"
             "    {op:'connect', from_id:'<structure_input>', to_id:'slab'},\n"
-            "    {op:'connect', from_id:'slab',              to_id:'ads'},\n"
+            "    {op:'connect', from_id:'slab',              to_id:'slab_opt'},\n"
+            "    {op:'connect', from_id:'slab_opt',          to_id:'ads'},\n"
             "    {op:'connect', from_id:'ads',               to_id:'opt'},\n"
             "    {op:'connect', from_id:'opt',               to_id:'freq'},\n"
             "    {op:'connect', from_id:'freq',              to_id:'fe'}\n"
             "  ]}\n"
-            "That's 5 nodes + 5 edges in ONE batch operation — total two MCP round-trips. "
+            "That's 6 nodes + 6 edges in ONE batch operation — total two MCP round-trips. "
             "Do not split into add_node-then-connect-then-add_node sequences; the LLM will be "
             "tempted to but it shouldn't.\n\n"
             "EDITING AN EXISTING WORKFLOW (CRITICAL — do NOT rebuild from scratch):\n"
@@ -308,7 +313,8 @@ TOOLS = [
             "  - quick_optimize: 'none' | 'uff' | 'xtb' — optional post-placement relax.\n"
             "  DO NOT invent keys like 'mode', 'dentate', 'orientation', 'binding_mode' — the "
             "schema rejects them and the panel will look empty to the user.\n"
-            "For OER, emit three adsorbate_place nodes feeding three geo_opt+freq+gibbs_energy "
+            "For OER, first emit one clean-slab geo_opt after slab_gen, then feed its relaxed "
+            "structure to three adsorbate_place nodes and three geo_opt+freq+gibbs_energy "
             "chains that converge on ONE free_energy aggregator: species='OH', 'O', 'OOH', "
             "all with site='ontop' (or 'fcc'/'hcp' if the user explicitly requested hollow). "
             "CO₂RR / NRR / ORR follow the same shape with their respective intermediates.\n"
@@ -673,8 +679,8 @@ TOOLS = [
             "search between reactant + product structure_inputs), slow_growth "
             "(opt → NVT equilibration → constrained AIMD via ICONST → barrier "
             "analysis), DOS (geo_opt + single_point + d-band centre). All "
-            "reaction recipes terminate in freq → free_energy so reported ΔG "
-            "is a real Gibbs energy.\n\n"
+            "surface-reaction recipes relax the clean slab before adsorbate placement and "
+            "terminate in freq → free_energy so reported ΔG is a real Gibbs energy.\n\n"
             "Params: recipe (required); material_id (optional MP id like "
             "'mp-126' for Pt — omit to use the current viewer structure); "
             "name (optional custom title)."
@@ -2734,6 +2740,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
             "nodes": [
                 {"id": "slab", "type": "slab_gen",
                  "params": {"miller": "1,1,1", "layers": 4, "vacuum": 15, "supercell": "2x2x1"}},
+                {"id": "slab_opt", "type": "geo_opt", "params": vasp_opt},
                 {"id": "ads", "type": "adsorbate_place",
                  "params": {"species": "H", "site": "fcc"}},
                 {"id": "opt", "type": "geo_opt", "params": vasp_opt},
@@ -2741,7 +2748,8 @@ def _quickbuild_recipes() -> dict[str, dict]:
                 {"id": "fe", "type": "free_energy",
                  "params": {"temperature": 298.15, "reference": "CHE", "target": "H"}},
             ],
-            "edges": [("__si__", "slab"), ("slab", "ads"), ("ads", "opt"),
+            "edges": [("__si__", "slab"), ("slab", "slab_opt"),
+                      ("slab_opt", "ads"), ("ads", "opt"),
                       ("opt", "freq"), ("freq", "fe")],
         },
         "OER": {
@@ -2749,6 +2757,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
             "nodes": [
                 {"id": "slab", "type": "slab_gen",
                  "params": {"miller": "1,1,1", "layers": 4, "vacuum": 15, "supercell": "2x2x1"}},
+                {"id": "slab_opt", "type": "geo_opt", "params": vasp_opt},
                 # OH / O / OOH intermediates relax independently
                 {"id": "ads_OH", "type": "adsorbate_place",
                  "params": {"species": "OH", "site": "ontop"}},
@@ -2767,7 +2776,8 @@ def _quickbuild_recipes() -> dict[str, dict]:
             ],
             "edges": [
                 ("__si__", "slab"),
-                ("slab", "ads_OH"), ("slab", "ads_O"), ("slab", "ads_OOH"),
+                ("slab", "slab_opt"),
+                ("slab_opt", "ads_OH"), ("slab_opt", "ads_O"), ("slab_opt", "ads_OOH"),
                 ("ads_OH", "opt_OH"), ("ads_O", "opt_O"), ("ads_OOH", "opt_OOH"),
                 ("opt_OH", "freq_OH"), ("opt_O", "freq_O"), ("opt_OOH", "freq_OOH"),
                 ("freq_OH", "fe"), ("freq_O", "fe"), ("freq_OOH", "fe"),
@@ -2778,6 +2788,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
             "nodes": [
                 {"id": "slab", "type": "slab_gen",
                  "params": {"miller": "1,1,1", "layers": 4, "vacuum": 15, "supercell": "2x2x1"}},
+                {"id": "slab_opt", "type": "geo_opt", "params": vasp_opt},
                 {"id": "ads_COOH", "type": "adsorbate_place",
                  "params": {"species": "COOH", "site": "ontop"}},
                 {"id": "ads_CO", "type": "adsorbate_place",
@@ -2791,7 +2802,8 @@ def _quickbuild_recipes() -> dict[str, dict]:
             ],
             "edges": [
                 ("__si__", "slab"),
-                ("slab", "ads_COOH"), ("slab", "ads_CO"),
+                ("slab", "slab_opt"),
+                ("slab_opt", "ads_COOH"), ("slab_opt", "ads_CO"),
                 ("ads_COOH", "opt_COOH"), ("ads_CO", "opt_CO"),
                 ("opt_COOH", "freq_COOH"), ("opt_CO", "freq_CO"),
                 ("freq_COOH", "fe"), ("freq_CO", "fe"),
@@ -2802,6 +2814,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
             "nodes": [
                 {"id": "slab", "type": "slab_gen",
                  "params": {"miller": "1,1,1", "layers": 4, "vacuum": 15, "supercell": "2x2x1"}},
+                {"id": "slab_opt", "type": "geo_opt", "params": vasp_opt},
                 {"id": "ads_N2", "type": "adsorbate_place",
                  "params": {"species": "N2", "site": "ontop"}},
                 {"id": "ads_N2H", "type": "adsorbate_place",
@@ -2819,7 +2832,8 @@ def _quickbuild_recipes() -> dict[str, dict]:
             ],
             "edges": [
                 ("__si__", "slab"),
-                ("slab", "ads_N2"), ("slab", "ads_N2H"), ("slab", "ads_NH2"),
+                ("slab", "slab_opt"),
+                ("slab_opt", "ads_N2"), ("slab_opt", "ads_N2H"), ("slab_opt", "ads_NH2"),
                 ("ads_N2", "opt_N2"), ("ads_N2H", "opt_N2H"), ("ads_NH2", "opt_NH2"),
                 ("opt_N2", "freq_N2"), ("opt_N2H", "freq_N2H"), ("opt_NH2", "freq_NH2"),
                 ("freq_N2", "fe"), ("freq_N2H", "fe"), ("freq_NH2", "fe"),
@@ -2830,6 +2844,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
             "nodes": [
                 {"id": "slab", "type": "slab_gen",
                  "params": {"miller": "1,1,1", "layers": 4, "vacuum": 15, "supercell": "2x2x1"}},
+                {"id": "slab_opt", "type": "geo_opt", "params": vasp_opt},
                 {"id": "ads_OOH", "type": "adsorbate_place",
                  "params": {"species": "OOH", "site": "ontop"}},
                 {"id": "ads_O", "type": "adsorbate_place",
@@ -2847,7 +2862,8 @@ def _quickbuild_recipes() -> dict[str, dict]:
             ],
             "edges": [
                 ("__si__", "slab"),
-                ("slab", "ads_OOH"), ("slab", "ads_O"), ("slab", "ads_OH"),
+                ("slab", "slab_opt"),
+                ("slab_opt", "ads_OOH"), ("slab_opt", "ads_O"), ("slab_opt", "ads_OH"),
                 ("ads_OOH", "opt_OOH"), ("ads_O", "opt_O"), ("ads_OH", "opt_OH"),
                 ("opt_OOH", "freq_OOH"), ("opt_O", "freq_O"), ("opt_OH", "freq_OH"),
                 ("freq_OOH", "fe"), ("freq_O", "fe"), ("freq_OH", "fe"),

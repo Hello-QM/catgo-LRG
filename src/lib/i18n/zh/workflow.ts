@@ -609,6 +609,7 @@ const workflow: Record<string, string> = {
   generated_count: `已生成（{n}）`,
   save_all_and_close: `全部保存并关闭`,
   frozen_free_count: `<strong>{frozen}</strong> 个冻结 / <strong>{free}</strong> 个自由`,
+  freeze_visual_hint: `彩色环 = 固定（F）；无环 = 自由（T）`,
   freeze_selected_count: `冻结选中项（{n}）`,
   unfreeze_selected: `解冻选中项`,
   recommend_adsorbate_place_edit: `建议在下方 Adsorbate Place 面板中编辑该结构`,

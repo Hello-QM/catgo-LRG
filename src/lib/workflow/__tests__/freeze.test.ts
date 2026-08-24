@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { apply_freeze_to_structure } from '../freeze'
+import {
+  apply_freeze_to_structure,
+  apply_manual_frozen_indices,
+  frozen_indices_from_structure,
+} from '../freeze'
 
 /**
  * Behavior-lock tests for apply_freeze_to_structure (issue #222).
@@ -127,5 +131,17 @@ describe(`apply_freeze_to_structure`, () => {
     expect(flags[1]).toEqual([false, false, false])
     expect(flags[2]).toEqual([false, false, false])
     expect(flags[3]).toEqual([false, false, false])
+  })
+
+  it(`round-trips a manual frozen selection for the editor preview`, () => {
+    const out = apply_manual_frozen_indices(make_slab(), [0, 2])
+    expect(out).not.toBeNull()
+    expect(frozen_indices_from_structure(out)).toEqual([0, 2])
+    expect(sd(out!)).toEqual([
+      [false, false, false],
+      [true, true, true],
+      [false, false, false],
+      [true, true, true],
+    ])
   })
 })

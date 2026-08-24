@@ -18,6 +18,8 @@ shows up here instead of in a live CatBot prompt.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -121,3 +123,39 @@ def test_quickbuild_custom_name_used(client: TestClient) -> None:
     data = resp.json()
     assert data["ok"] is True
     assert "my-custom-dos-run" in data["message"]
+
+
+def test_run_api_blocks_surface_free_energy_without_clean_slab_relaxation(
+    client: TestClient,
+) -> None:
+    """The API guard protects non-CatBot clients and visual-editor runs too."""
+    graph = {
+        "nodes": [
+            {"id": "si", "type": "structure_input", "params": {}},
+            {"id": "slab", "type": "slab_gen", "params": {}},
+            {"id": "ads", "type": "adsorbate_place", "params": {}},
+            {"id": "opt", "type": "geo_opt", "params": {}},
+            {"id": "freq", "type": "freq", "params": {}},
+            {"id": "fe", "type": "free_energy", "params": {}},
+        ],
+        "edges": [
+            {"id": "e1", "from": "si", "to": "slab"},
+            {"id": "e2", "from": "slab", "to": "ads"},
+            {"id": "e3", "from": "ads", "to": "opt"},
+            {"id": "e4", "from": "opt", "to": "freq"},
+            {"id": "e5", "from": "freq", "to": "fe"},
+        ],
+    }
+    created = client.post(
+        "/api/workflow/",
+        json={"name": "invalid-unrelaxed-slab", "graph_json": json.dumps(graph)},
+    )
+    assert created.status_code == 201, created.text
+
+    run = client.post(
+        f"/api/workflow/{created.json()['id']}/run",
+        json={"execution_mode": "local"},
+    )
+
+    assert run.status_code == 409
+    assert "does not consume a relaxed clean slab" in run.json()["detail"]

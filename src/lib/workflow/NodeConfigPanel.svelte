@@ -459,6 +459,14 @@
           <div class="freeze-count freeze-count-empty">{t('workflow.config_no_atoms_frozen')}</div>
         {/if}
       </div>
+    {:else if node.params.freeze_mode && node.params.freeze_mode !== `none`}
+      <!-- Allow recipe-generated modes (and legacy mixed-state nodes) to be
+           materialized and refined in 3D without clearing their constraints. -->
+      <div class="freeze-edit-section">
+        <button class="freeze-edit-btn" onclick={() => onfreeze_edit?.()}>
+          {t('workflow.config_select_frozen_atoms')}
+        </button>
+      </div>
     {/if}
     {#if node.params.freeze_mode && node.params.freeze_mode !== `none`}
       <div class="freeze-edit-section" style="padding-top: 0">

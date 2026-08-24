@@ -250,11 +250,16 @@ async def api_quickbuild(req: QuickBuildRequest, request: Request):
     # optional OPTIMADE material prefetch.
     transport = httpx.ASGITransport(app=request.app)
     async with (
-        httpx.AsyncClient(timeout=30.0) as external_client,
+        # CatGo must not inherit a desktop-wide SOCKS proxy here.  Besides
+        # routing localhost incorrectly, httpx raises at construction time
+        # when socksio is not installed, so quickbuild never reaches either
+        # the internal workflow API or the optional direct OPTIMADE fetch.
+        httpx.AsyncClient(timeout=30.0, trust_env=False) as external_client,
         httpx.AsyncClient(
             transport=transport,
             base_url="http://catgo.internal",
             timeout=30.0,
+            trust_env=False,
         ) as internal_client,
     ):
         result = await _handle_quickbuild(
@@ -716,7 +721,7 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
     """
     logger.debug("api_run_workflow called with workflow_id=%s", workflow_id)
     try:
-        logger.error(f"[api_run_workflow] STARTING for workflow {workflow_id}, config keys: {list(config.dict().keys())}")
+        logger.error(f"[api_run_workflow] STARTING for workflow {workflow_id}, config keys: {list(config.model_dump().keys())}")
         try:
             wf = get_workflow(workflow_id)
             logger.error(f"[api_run_workflow] Got workflow, status={wf.status}")
@@ -729,6 +734,23 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
             raise HTTPException(
                 status_code=409,
                 detail=f"Cannot start workflow in '{wf.status}' state."
+            )
+
+        # Enforce graph and scientific topology invariants at the API boundary,
+        # not only in CatBot's optional validate tool.  This protects workflows
+        # built by every provider and by the visual editor.  In particular,
+        # surface free-energy jobs may not place adsorbates on an unrelaxed
+        # freshly cut slab.
+        try:
+            graph_dict = json.loads(wf.graph_json) if isinstance(wf.graph_json, str) else wf.graph_json
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"Workflow graph is invalid JSON: {exc}")
+        from catgo.mcp_tools.workflow_tools import _validate_graph
+        graph_errors, _graph_warnings = _validate_graph(graph_dict or {})
+        if graph_errors:
+            raise HTTPException(
+                status_code=409,
+                detail="Workflow validation failed: " + "; ".join(graph_errors),
             )
     except Exception as e:
         logger.error(f"[api_run_workflow] UNHANDLED ERROR: {type(e).__name__}: {e}", exc_info=True)

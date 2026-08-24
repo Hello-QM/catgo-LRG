@@ -1014,6 +1014,62 @@ def _validate_graph(graph: dict) -> tuple[list[str], list[str]]:
     if visited < len(node_ids):
         errors.append("Graph contains a cycle — workflow execution will fail.")
 
+    # ERROR: surface free-energy workflows must not place adsorbates on the
+    # freshly cut, unrelaxed slab.  This is a scientific invariant rather than
+    # a presentation preference: every adsorbate branch must share the same
+    # relaxed clean-slab reference.  Keep the check topology-based so custom
+    # labels and software choices remain valid.
+    node_by_id = {n["id"]: n for n in nodes}
+    parent_ids: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    for edge in edges:
+        if edge.get("from") in node_ids and edge.get("to") in node_ids:
+            parent_ids[edge["to"]].append(edge["from"])
+
+    def _ancestors(node_id: str) -> set[str]:
+        seen: set[str] = set()
+        stack = list(parent_ids.get(node_id, []))
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(parent_ids.get(current, []))
+        return seen
+
+    def _node_type(node_id: str) -> str:
+        node_type = str(node_by_id.get(node_id, {}).get("type", ""))
+        node_def = _NODE_DEFAULTS.get(node_type, {})
+        return str(node_def.get("_alias", node_type))
+
+    graph_types = {_node_type(nid) for nid in node_ids}
+    if {"slab_gen", "adsorbate_place", "free_energy"}.issubset(graph_types):
+        slab_ids = {nid for nid in node_ids if _node_type(nid) == "slab_gen"}
+        adsorbate_ids = [nid for nid in node_ids if _node_type(nid) == "adsorbate_place"]
+        relax_types = {"geo_opt", "slab_relax", "mlp_relax"}
+
+        for adsorbate_id in adsorbate_ids:
+            adsorbate_ancestors = _ancestors(adsorbate_id)
+            has_relaxed_clean_slab = False
+            for candidate_id in adsorbate_ancestors:
+                if _node_type(candidate_id) not in relax_types:
+                    continue
+                candidate_ancestors = _ancestors(candidate_id)
+                has_slab_source = bool(candidate_ancestors & slab_ids)
+                is_clean = all(
+                    _node_type(ancestor_id) != "adsorbate_place"
+                    for ancestor_id in candidate_ancestors
+                )
+                if has_slab_source and is_clean:
+                    has_relaxed_clean_slab = True
+                    break
+
+            if not has_relaxed_clean_slab:
+                errors.append(
+                    f"Node {adsorbate_id} (adsorbate_place) does not consume a relaxed "
+                    "clean slab. Add slab_gen → geo_opt → adsorbate_place and reuse "
+                    "that clean-slab geo_opt output for every adsorbate branch."
+                )
+
     # ERROR: non-input nodes missing required incoming edges
     for n in nodes:
         if n["type"] not in ("structure_input", "structure_list_input") and n["id"] not in {e["to"] for e in edges}:

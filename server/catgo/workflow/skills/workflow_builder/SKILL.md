@@ -13,7 +13,11 @@ Activities, overpotentials, and barriers reported in catalysis literature are di
 
 If the user proposes a mechanism workflow without a freq step, add one anyway and tell them one short sentence why ("Inserted a freq step so the ΔG values include ZPE + TS — without it the free-energy diagram is just an electronic-energy diagram"). If they explicitly say "skip freq for now, I just want a quick electronic-energy scan", honour it but flag that the result is not a Gibbs energy.
 
-The `freq` node must run on the *same* geometry as the final relaxation it sits after — chaining `geo_opt → freq → free_energy` keeps the geometries consistent. Frequency on a slab needs frozen bottom layers (`freeze_mode: "bottom"`, `freeze_n_layers: 2` is the usual default) so only the adsorbate + top layer vibrate.
+The `freq` node must run on the *same* geometry as the final relaxation it sits after — chaining `geo_opt → freq → free_energy` keeps the geometries consistent. For adsorbate thermochemistry, use `freeze_mode: "adsorbate"`: freeze the full slab and vibrate only atoms tagged by `adsorbate_place`.
+
+## Clean-slab invariant
+
+Every surface-reaction workflow built from a bulk structure must use `structure_input → slab_gen → geo_opt(clean slab) → adsorbate_place`. Reuse the same relaxed clean-slab output for every adsorbate branch. Never connect `slab_gen` directly to `adsorbate_place`: doing so optimizes only slab+adsorbate states and leaves no consistent relaxed clean-slab reference.
 
 ## When to use this skill
 
@@ -25,10 +29,11 @@ If the user wants to *modify* an existing workflow (add a node to one that alrea
 
 ## The fast path
 
-1. Pick a recipe from the "Recipes" section below — or assemble one from the node-type table — and prepare the `graph_json` payload.
-2. Call `catgo_workflow` with `action="create"`, `name="<descriptive>"`, `template_id` only if you genuinely want the backend's stock template (most of the time you do not, because the recipes here are tighter). Otherwise omit `template_id` — `create` will auto-add a `structure_input` node seeded from the viewer's current structure.
-3. Immediately call `catgo_workflow` with `action="batch"` and an `operations` array carrying every `add_node` + `connect` step in one round-trip. **Do not call `add_node` one at a time.**
-4. Confirm with one short sentence ("Built '<name>': N nodes, M edges. Open the Workflow tab to inspect."). Do not list every node — the user can see the graph in the editor.
+1. For stock HER/OER/ORR/NRR/CO2RR workflows, call `catgo_quickbuild` and stop; its server-side recipes enforce the clean-slab invariant. Use the manual path below only for custom graphs.
+2. Pick a recipe from the "Recipes" section below — or assemble one from the node-type table — and prepare the `graph_json` payload.
+3. Call `catgo_workflow` with `action="create"`, `name="<descriptive>"`, `template_id` only if you genuinely want the backend's stock template (most of the time you do not, because the recipes here are tighter). Otherwise omit `template_id` — `create` will auto-add a `structure_input` node seeded from the viewer's current structure.
+4. Immediately call `catgo_workflow` with `action="batch"` and an `operations` array carrying every `add_node` + `connect` step in one round-trip. **Do not call `add_node` one at a time.**
+5. Confirm with one short sentence ("Built '<name>': N nodes, M edges. Open the Workflow tab to inspect."). Do not list every node — the user can see the graph in the editor.
 
 That is the entire happy path. **Do not call `templates`, `node_types`, `node_details`, `list_presets`, or `get` before creating** unless the user explicitly asks "what templates exist?" — those calls only exist for discovery and the recipes below already cover the common cases.
 
@@ -133,14 +138,16 @@ The `iconst` template depends on the reaction coordinate — for C–N coupling 
 
 ```json
 [
-  {"op":"add_node","id":"bulk_opt","type":"cell_opt","x":300,"y":200,"params":{"software":"vasp","encut":520}},
-  {"op":"add_node","id":"slab","type":"slab_gen","x":520,"y":200,"params":{"miller":"1,1,1","layers":4,"vacuum":15}},
-  {"op":"add_node","id":"ads","type":"adsorbate_placement","x":740,"y":200,"params":{"adsorbate":"CO","site":"top"}},
-  {"op":"add_node","id":"opt","type":"geo_opt","x":960,"y":200,"params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
-  {"op":"connect","from":"si","to":"bulk_opt"},
-  {"op":"connect","from":"bulk_opt","to":"slab"},
-  {"op":"connect","from":"slab","to":"ads"},
-  {"op":"connect","from":"ads","to":"opt"}
+  {"op":"add_node","label":"bulk_opt","node_type":"cell_opt","params":{"software":"vasp","encut":520}},
+  {"op":"add_node","label":"slab","node_type":"slab_gen","params":{"miller":"1,1,1","layers":4,"vacuum":15}},
+  {"op":"add_node","label":"slab_opt","node_type":"geo_opt","params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
+  {"op":"add_node","label":"ads","node_type":"adsorbate_place","params":{"species":"CO","site":"ontop"}},
+  {"op":"add_node","label":"ads_opt","node_type":"geo_opt","params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
+  {"op":"connect","from_id":"si","to_id":"bulk_opt"},
+  {"op":"connect","from_id":"bulk_opt","to_id":"slab"},
+  {"op":"connect","from_id":"slab","to_id":"slab_opt"},
+  {"op":"connect","from_id":"slab_opt","to_id":"ads"},
+  {"op":"connect","from_id":"ads","to_id":"ads_opt"}
 ]
 ```
 
@@ -160,7 +167,7 @@ When the user asks for something not in the recipes above, you can usually compo
 | `neb` | NEB / CI-NEB TS search | `n_images`, `climbing` |
 | `ts_search` | Sella / DIMER TS | `software`, `mode` |
 | `slab_gen` | Cut slab from bulk | `miller`, `layers`, `vacuum`, `supercell` |
-| `adsorbate_placement` | Place adsorbate on slab | `adsorbate`, `site`, `height` |
+| `adsorbate_place` | Place adsorbate on slab | `species`, `site`, `height` |
 | `dos_analysis` | DOS / PDOS / d-band | `emin`, `emax`, `d_band_center` |
 | `free_energy` | ΔG with ZPE + TS corrections | `temperature`, `reference`, `target` |
 | `md_analysis` | RDF / MSD / barrier from trajectory | `mode`, `pairs` |
