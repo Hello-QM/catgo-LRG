@@ -137,6 +137,38 @@ export function buildCodexMcpConfig(
   }
 }
 
+/**
+ * Build the child environment explicitly so shell helpers and user skills see
+ * the same dynamic CatGo backend that the injected HTTP MCP transport uses.
+ *
+ * Desktop/worktree instances rarely run on the legacy :8000 default.  The SDK
+ * otherwise inherits CATGO_BACKEND_PORT only when the parent happened to set
+ * it, while generic CatGo instructions fall back to :33413 (an external
+ * reverse-tunnel port).  CATGO_API is the canonical, unambiguous endpoint.
+ */
+export function buildCodexEnvironment(
+  mcpServerUrl?: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env = Object.fromEntries(
+    Object.entries(baseEnv).filter((entry): entry is [string, string] =>
+      entry[1] !== undefined
+    ),
+  )
+  if (!mcpServerUrl) return env
+
+  try {
+    const url = new URL(mcpServerUrl)
+    const apiPath = url.pathname.replace(/\/mcp\/?$/, ``).replace(/\/$/, ``)
+    env.CATGO_API = `${url.origin}${apiPath}`
+    if (url.port) env.CATGO_BACKEND_PORT = url.port
+  } catch {
+    // The MCP config will surface a malformed URL. Keep the inherited
+    // environment intact instead of introducing a second adapter failure.
+  }
+  return env
+}
+
 function emit_text_delta(itemId: string, fullText: string): string | null {
   const prev = _item_text_seen.get(itemId) ?? ''
   if (!fullText || fullText === prev) return null
@@ -334,6 +366,7 @@ export function createCodexAdapter(): AgentAdapter {
       const codex = new Codex({
         ...(resolvedModel ? { model: resolvedModel } : {}),
         ...(codexExe ? { codexPathOverride: codexExe } : {}),
+        env: buildCodexEnvironment(mcpServerUrl),
         config: codexConfig,
       }) as any
 

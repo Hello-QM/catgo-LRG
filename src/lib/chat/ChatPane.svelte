@@ -354,8 +354,8 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     // conflicts. Standalone panes and popouts are always viewer-less.
     if (!is_pane && !is_popout && !data?.had_structure) return
     const s = data?.structure
-    const n = s?.sites?.length ?? 0
-    if (!n) return
+    if (!s || !s.sites?.length) return
+    const n = s.sites.length
     const fp = `${n}:${struct_formula(s)}`
     // Do not repeat reconnect snapshots or duplicate a card that is already
     // visible. A later explicit load of the same structure is still allowed to

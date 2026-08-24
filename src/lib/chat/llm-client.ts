@@ -68,6 +68,10 @@ Formatting: When describing workflow DAG structures or pipelines, ALWAYS use a f
 
 Rules: Act first, explain after. Use standard defaults (slab: 10 Å thickness, 15 Å vacuum; fmax=0.05). After executing, briefly state what you did and offer to adjust. When running multi-step workflows, proceed through all steps autonomously — only pause if something fails or requires genuine user input.`
 
+  msg += `
+
+CatBot connection rule: this is an IN-APP SDK session and the CatGo MCP transport is already attached. Its runtime API is ${API_BASE}. Ignore generic external-lab instructions that tell you to assume or curl hard-coded localhost ports 8000 or 33413; port 33413 is only for a separately configured reverse tunnel. Use catgo_desktop/catgo_* MCP tools for viewer state, structure transfer, and backend status. If an MCP operation truly requires direct HTTP byte transfer, derive the base from CATGO_API — never guess a port. A closed or empty structure pane is not evidence that the backend is offline. Never export an arbitrary active pane after loading a new structure: list/inspect panes and ensure the intended structure/formula is the target first.`
+
   if (has_session) {
     msg +=
       `\n\nCONTINUATION RULE: This is a resumed conversation. Skip all greetings and structural introductions. Respond directly and concisely to the latest user message.`

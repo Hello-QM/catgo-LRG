@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentEvent, PermissionResult, StreamParams } from '../../types.js'
 import {
+  buildCodexEnvironment,
   buildCodexMcpConfig,
   CODEX_CATGO_MCP_SERVER,
   createCodexAdapter,
@@ -36,6 +37,19 @@ afterEach(() => {
 })
 
 describe('codex adapter configuration composition', () => {
+  it('injects the runtime backend URL into the Codex child environment', () => {
+    const env = buildCodexEnvironment(
+      'http://localhost:8002/api/mcp/',
+      { PATH: '/usr/bin', CATGO_API: 'http://localhost:8000/api', UNSET: undefined },
+    )
+
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      CATGO_API: 'http://localhost:8002/api',
+      CATGO_BACKEND_PORT: '8002',
+    })
+  })
+
   it('keeps the injected HTTP transport independent from a global stdio catgo server', () => {
     const globalServers = {
       catgo: {
