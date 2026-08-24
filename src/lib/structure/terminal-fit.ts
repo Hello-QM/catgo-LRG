@@ -10,6 +10,28 @@ export const TERMINAL_SCROLLBAR_GUARD_COLS = 2
 /** Preserve the active wrapped-line group when font/viewport changes resize it. */
 export const TERMINAL_REFLOW_CURSOR_LINE = true
 
+export interface TerminalFontOptions {
+  fontSize: number
+  fontFamily: string
+  reflowCursorLine?: boolean
+}
+
+/**
+ * Apply all resize-sensitive font options together. This deliberately writes
+ * reflowCursorLine on every font change, not only during Terminal construction:
+ * Vite/Svelte HMR can preserve an already-running xterm instance that was
+ * created before the option existed.
+ */
+export function apply_terminal_font_options(
+  options: TerminalFontOptions,
+  font_size: number,
+  font_family: string,
+): void {
+  options.reflowCursorLine = TERMINAL_REFLOW_CURSOR_LINE
+  options.fontSize = font_size
+  options.fontFamily = font_family
+}
+
 export interface TerminalDimensions {
   cols: number
   rows: number

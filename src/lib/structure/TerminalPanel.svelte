@@ -7,7 +7,7 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
-  import { guard_terminal_dimensions, TERMINAL_REFLOW_CURSOR_LINE } from './terminal-fit'
+  import { apply_terminal_font_options, guard_terminal_dimensions, TERMINAL_REFLOW_CURSOR_LINE } from './terminal-fit'
   import { open_terminal_click } from './terminal-path-nav'
 
   let {
@@ -827,8 +827,10 @@
     const size = terminal_font_state.font_size
     const family = terminal_font_state.font_family
     if (!term_ref) return
-    term_ref.options.fontSize = size
-    term_ref.options.fontFamily = family
+    // Re-assert reflowCursorLine here as well as in the constructor. Dev HMR
+    // preserves existing xterm instances, so an older open tab would otherwise
+    // keep the former default and still trim CJK cells at a wrap boundary.
+    apply_terminal_font_options(term_ref.options, size, family)
     // Re-fit after font change to recalculate column/row count
     requestAnimationFrame(() => {
       try { fit_ref?.() } catch { /* ignore */ }
