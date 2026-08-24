@@ -1102,20 +1102,24 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    /* Terminal is always dark (#0e1117); match it so the left inset/padding
-       below doesn't show as a light strip in light mode. */
+    /* Terminal is always dark (#0e1117); match it so the left inset below
+       doesn't show as a light strip in light mode. */
     background: #0e1117;
-    /* Small left inset so the xterm content isn't flush against the pane edge
-       / the side-by-side divider (the first column read as clipped). FitAddon
-       measures the content box, so this shifts the grid right without overflow. */
-    padding-left: 8px;
   }
-  /* Ensure xterm fills the container */
-  .terminal-container :global(.xterm),
+  /* Keep the small horizontal inset on xterm itself. FitAddon subtracts padding from
+     the xterm element, but not padding from its parent. Keeping the inset on
+     the parent made FitAddon overestimate the usable width by 8px and placed
+     the final column underneath the vertical scrollbar. The right inset also
+     keeps glyph antialiasing clear of the scrollbar's edge. */
+  .terminal-container :global(.xterm) {
+    height: 100%;
+    width: 100%;
+    padding-inline: 8px;
+  }
+  /* xterm owns the screen width; only force the vertical fill here. */
   .terminal-container :global(.xterm-viewport),
   .terminal-container :global(.xterm-screen) {
     height: 100%;
-    width: 100%;
   }
   .terminal-error {
     color: #ff6b6b;
