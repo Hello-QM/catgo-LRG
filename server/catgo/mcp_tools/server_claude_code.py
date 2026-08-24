@@ -256,10 +256,10 @@ TOOLS = [
             "  call 1: catgo_workflow {action:'create', name:'HER on Pt(111)', material_ids:['mp-126']}\n"
             "  call 2: catgo_workflow {action:'batch', operations:[\n"
             "    {op:'add_node', node_type:'slab_gen',           label:'slab', params:{miller:'1,1,1', layers:4, vacuum:15, supercell:'2x2x1'}},\n"
-            "    {op:'add_node', node_type:'geo_opt',            label:'slab_opt', params:{software:'vasp', encut:520, ediffg:-0.03, freeze_mode:'bottom', freeze_n_layers:2}},\n"
+            "    {op:'add_node', node_type:'geo_opt',            label:'slab_opt', params:{software:'vasp', encut:520, ediffg:-0.03, frozen_layers:2}},\n"
             "    {op:'add_node', node_type:'adsorbate_place', label:'ads',  params:{species:'H', site:'fcc'}},\n"
-            "    {op:'add_node', node_type:'geo_opt',             label:'opt',  params:{software:'vasp', encut:520, ediffg:-0.03, freeze_mode:'bottom', freeze_n_layers:2}},\n"
-            "    {op:'add_node', node_type:'freq',                label:'freq', params:{software:'vasp', freeze_mode:'bottom', freeze_n_layers:2}},\n"
+            "    {op:'add_node', node_type:'geo_opt',             label:'opt',  params:{software:'vasp', encut:520, ediffg:-0.03, frozen_layers:2}},\n"
+            "    {op:'add_node', node_type:'freq',                label:'freq', params:{software:'vasp', freeze_mode:'adsorbate'}},\n"
             "    {op:'add_node', node_type:'free_energy',         label:'fe',   params:{temperature:298.15, reference:'CHE', target:'H'}},\n"
             "    {op:'connect', from_id:'<structure_input>', to_id:'slab'},\n"
             "    {op:'connect', from_id:'slab',              to_id:'slab_opt'},\n"
@@ -2725,7 +2725,7 @@ def _quickbuild_recipes() -> dict[str, dict]:
     """Return the recipe registry. Each entry produces nodes + edges that
     build on top of the auto-added `structure_input` node from `create`."""
     vasp_opt = {"software": "vasp", "encut": 520, "ediffg": -0.03,
-                "freeze_mode": "bottom", "freeze_n_layers": 2}
+                "frozen_layers": 2}
     # Frequency on an adsorbate/slab system must fix the ENTIRE slab and vibrate
     # only the adsorbate (harmonic-adsorbate approximation). freeze_mode=adsorbate
     # freezes every atom not tagged is_adsorbate by adsorbate_place. Bottom-N

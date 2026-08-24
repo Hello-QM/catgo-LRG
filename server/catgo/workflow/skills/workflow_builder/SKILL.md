@@ -46,7 +46,7 @@ Each recipe gives the `operations` array you pass to `batch`. The seed `structur
 ```json
 [
   {"op":"add_node","id":"opt","type":"geo_opt","x":300,"y":200,"params":{"software":"vasp","encut":520,"ediffg":-0.03}},
-  {"op":"add_node","id":"freq","type":"freq","x":520,"y":200,"params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
+  {"op":"add_node","id":"freq","type":"freq","x":520,"y":200,"params":{"software":"vasp","freeze_mode":"adsorbate"}},
   {"op":"add_node","id":"fe","type":"free_energy","x":740,"y":200,"params":{"temperature":298.15,"reference":"CHE"}},
   {"op":"connect","from":"si","to":"opt"},
   {"op":"connect","from":"opt","to":"freq"},
@@ -140,9 +140,9 @@ The `iconst` template depends on the reaction coordinate — for C–N coupling 
 [
   {"op":"add_node","label":"bulk_opt","node_type":"cell_opt","params":{"software":"vasp","encut":520}},
   {"op":"add_node","label":"slab","node_type":"slab_gen","params":{"miller":"1,1,1","layers":4,"vacuum":15}},
-  {"op":"add_node","label":"slab_opt","node_type":"geo_opt","params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
+  {"op":"add_node","label":"slab_opt","node_type":"geo_opt","params":{"software":"vasp","frozen_layers":2}},
   {"op":"add_node","label":"ads","node_type":"adsorbate_place","params":{"species":"CO","site":"ontop"}},
-  {"op":"add_node","label":"ads_opt","node_type":"geo_opt","params":{"software":"vasp","freeze_mode":"bottom","freeze_n_layers":2}},
+  {"op":"add_node","label":"ads_opt","node_type":"geo_opt","params":{"software":"vasp","frozen_layers":2}},
   {"op":"connect","from_id":"si","to_id":"bulk_opt"},
   {"op":"connect","from_id":"bulk_opt","to_id":"slab"},
   {"op":"connect","from_id":"slab","to_id":"slab_opt"},
@@ -159,11 +159,11 @@ When the user asks for something not in the recipes above, you can usually compo
 |---|---|---|
 | `structure_input` | Seed structure (POSCAR/CIF/MP-ID) | `mp_id`, `structure_json` |
 | `cell_opt` | Cell + ion relaxation (ISIF=3) | `software`, `encut`, `ediffg` |
-| `geo_opt` | Ion-only relaxation (ISIF=2) | `software`, `encut`, `ediffg`, `freeze_mode`, `freeze_n_layers` |
+| `geo_opt` | Ion-only relaxation (ISIF=2) | `software`, `encut`, `ediffg`, `frozen_layers` |
 | `single_point` | Static SCF | `software`, `encut`, `ismear` |
 | `md` | Molecular dynamics | `ensemble`, `temperature`, `nsw`, `potim` |
 | `slow_growth` | Constrained AIMD via ICONST | `iconst`, `nsw` |
-| `freq` | Vibrational frequencies | `freeze_mode`, `freeze_n_layers` |
+| `freq` | Vibrational frequencies | `freeze_mode`, `freeze_layers` |
 | `neb` | NEB / CI-NEB TS search | `n_images`, `climbing` |
 | `ts_search` | Sella / DIMER TS | `software`, `mode` |
 | `slab_gen` | Cut slab from bulk | `miller`, `layers`, `vacuum`, `supercell` |

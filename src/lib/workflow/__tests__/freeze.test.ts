@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   apply_freeze_to_structure,
   apply_manual_frozen_indices,
+  frozen_layer_count,
   frozen_indices_from_structure,
+  normalize_freeze_params,
 } from '../freeze'
 
 /**
@@ -83,6 +85,25 @@ describe(`apply_freeze_to_structure`, () => {
     expect(flags[1]).toEqual([false, false, false])
     expect(flags[2]).toEqual([true, true, true])
     expect(flags[3]).toEqual([true, true, true])
+  })
+
+  it(`uses a positive legacy layer count over an injected canonical zero`, () => {
+    const params = { frozen_layers: 0, freeze_mode: `bottom`, freeze_n_layers: 2 }
+    expect(frozen_layer_count(params)).toBe(2)
+    expect(sd(apply_freeze_to_structure(make_slab(), params)!)).toEqual([
+      [false, false, false],
+      [false, false, false],
+      [true, true, true],
+      [true, true, true],
+    ])
+  })
+
+  it(`normalizes legacy geo_opt aliases to the canonical field`, () => {
+    expect(normalize_freeze_params(`geo_opt`, {
+      frozen_layers: 0,
+      freeze_mode: `bottom`,
+      freeze_n_layers: 2,
+    })).toEqual({ frozen_layers: 2, freeze_mode: `bottom` })
   })
 
   it(`returns the input unchanged when no freeze params are given`, () => {

@@ -12,12 +12,48 @@
  * WorkflowEditor.svelte so the same logic can be unit-tested and reused at
  * slab-generation time (SlabGenPreview) as well as in the run-time overlay.
  */
+/**
+ * Resolve the bottom-layer count across current and legacy parameter names.
+ *
+ * Workflow definitions inject `frozen_layers: 0` before recipe parameters are
+ * merged. Older recipes use `freeze_n_layers: 2`, so nullish coalescing would
+ * incorrectly stop at the injected zero and erase the upstream constraints in
+ * the preview. Match the backend engine: use the first positive layer count.
+ */
+export function frozen_layer_count(params: Record<string, unknown>): number {
+  for (const key of [`frozen_layers`, `freeze_layers`, `freeze_n_layers`]) {
+    const value = Number(params[key])
+    if (Number.isFinite(value) && value > 0) return Math.floor(value)
+  }
+  return 0
+}
+
+/** Convert legacy freeze aliases to the canonical parameter for each node. */
+export function normalize_freeze_params(
+  node_type: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (node_type !== `geo_opt` && node_type !== `freq`) return params
+
+  const normalized = { ...params }
+  const layers = frozen_layer_count(normalized)
+  if (node_type === `geo_opt`) {
+    normalized.frozen_layers = layers
+    delete normalized.freeze_layers
+  } else {
+    normalized.freeze_layers = layers
+    delete normalized.frozen_layers
+  }
+  delete normalized.freeze_n_layers
+  return normalized
+}
+
 export function apply_freeze_to_structure(struct_json: string | null, params: Record<string, unknown>): string | null {
   if (!struct_json) return null
   // Tolerate every spelling: explicit freeze_mode, or a bare frozen_layers /
   // freeze_layers / freeze_n_layers (the geo_opt/slab convention) which implies
   // bottom-layer freezing. Mirrors the backend's _freeze_n_bottom_layers.
-  const n_bottom = Number(params.frozen_layers ?? params.freeze_layers ?? params.freeze_n_layers ?? 0)
+  const n_bottom = frozen_layer_count(params)
   let mode = params.freeze_mode as string
   if ((!mode || mode === `none`) && n_bottom > 0) mode = `layers`
   if (!mode || mode === `none`) return struct_json
@@ -63,7 +99,7 @@ export function apply_freeze_to_structure(struct_json: string | null, params: Re
         }
       }
     } else if (mode === `layers` || mode === `bottom`) {
-      const n_layers = n_bottom > 0 ? n_bottom : Number(params.freeze_layers ?? 0)
+      const n_layers = n_bottom
       if (n_layers > 0) {
         const zs = ([...new Set(struct.sites.map((s: any) => Math.round((s.xyz?.[2] ?? 0) * 100) / 100))] as number[]).sort((a, b) => a - b)
         const threshold = n_layers < zs.length ? (zs[n_layers - 1] + zs[n_layers]) / 2 : zs[zs.length - 1] + 0.1

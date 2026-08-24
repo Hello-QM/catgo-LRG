@@ -22,6 +22,7 @@
     apply_freeze_to_structure,
     apply_manual_frozen_indices,
     frozen_indices_from_structure,
+    normalize_freeze_params,
   } from './freeze'
   import CalcStructurePreview from './CalcStructurePreview.svelte'
   import BatchPanel from './BatchPanel.svelte'
@@ -1874,9 +1875,10 @@
       nodes = (graph.nodes || []).map((n: WfNode) => {
         // Apply default_params from node definition
         const def = NODE_DEFINITIONS[n.type]
-        const params = def?.default_params
+        const params_with_defaults = def?.default_params
           ? { ...def.default_params, ...n.params }
           : n.params
+        const params = normalize_freeze_params(n.type, params_with_defaults)
 
         return {
           ...n,
@@ -1936,6 +1938,7 @@
         if (def?.default_params) {
           params = { ...def.default_params, ...params }
         }
+        params = normalize_freeze_params(node_type, params)
 
         return {
           ...n,
