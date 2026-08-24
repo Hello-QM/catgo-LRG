@@ -21,7 +21,7 @@ import { legalBundleSources } from '../sync-legal-bundle.mjs'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (path) => readFileSync(resolve(ROOT, path), 'utf8')
 const ACK = 'This work used CatGo (https://app.catgo-ucsd.org).'
-const DOI = '10.26434/chemrxiv.15002984/v1'
+const DOI = '10.1039/D6DD00273K'
 const AGPL_ID = 'AGPL-3.0-or-later'
 const CITATION_REQUEST =
   'If CatGo contributes to your work, please acknowledge and cite it as ' +
@@ -156,6 +156,7 @@ const licenseClaimInventory = {
     '.github/release-notes/v1.4.7.md',
     '.github/release-notes/v1.4.8.md',
     '.github/release-notes/v1.4.9.md',
+    '.github/release-notes/v1.4.10.md',
     '.github/workflows/tauri-build.yml',
   ],
   historicalOnly: [
@@ -294,7 +295,7 @@ test('canonical citation file requests citation without adding an AGPL condition
   assert.equal(existsSync(resolve(ROOT, 'citation.cff')), false)
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
-  assert.match(text, /^version: 1\.4\.9$/m)
+  assert.match(text, /^version: 1\.4\.10$/m)
   assert.match(text, /^license: AGPL-3\.0-or-later$/m)
   assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)

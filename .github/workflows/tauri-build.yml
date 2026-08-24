@@ -332,13 +332,13 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License and citation
-            CatGo 1.4.9 distributions use **AGPL-3.0-or-later**.
+            CatGo 1.4.10 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
             > This work used CatGo (https://app.catgo-ucsd.org).
 
-            Please cite DOI [`10.26434/chemrxiv.15002984/v1`](https://doi.org/10.26434/chemrxiv.15002984/v1). This request is not an additional condition of the AGPL license. Third-party materials retain their own terms. Historical AGPL grants remain in effect.
+            Please cite DOI [`10.1039/D6DD00273K`](https://doi.org/10.1039/D6DD00273K). This request is not an additional condition of the AGPL license. Third-party materials retain their own terms. Historical AGPL grants remain in effect.
 
             ### Downloads
             - **Windows** — `.msi` (recommended) or `.exe`
@@ -362,10 +362,10 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.9
-            - **Large trajectories open and edit across every CatGo surface** — indexed structure-only streaming now covers the web app, desktop app, VS Code, and Antigravity, including variable-topology edits and per-frame POSCAR export.
-            - **CatBot verifies physics before numerical results are trusted** — provenance, workflow-consistency, and scientific gates catch silent failures and guard HPC submission.
-            - **Structure tools are customizable per pane** — collapse the toolbar, choose visible tools, and keep periodic bonds correct even when the frontend uses the JavaScript fallback.
+            ### New in 1.4.10
+            - **CatBot uses the installed Codex environment safely** — live model discovery, preserved user skills and MCP servers, and an isolated CatGo namespace connect to the active backend.
+            - **Surface workflows relax slabs and preserve constraints** — clean-slab optimization precedes adsorption branches, with exact frozen atoms inherited by geometry and frequency steps.
+            - **Workflow, trajectory, and terminal state stays truthful** — safe bulk deletion, task-derived statuses, synchronized bounded large-system playback, and lossless CJK terminal reflow.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
@@ -537,8 +537,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
 
-      - name: Finalize canonical release body
+      - name: Finalize canonical v1.4.9 release body
         if: env.CATGO_RELEASE_TAG == 'v1.4.9'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
+
+      - name: Finalize canonical release body
+        if: env.CATGO_RELEASE_TAG == 'v1.4.10'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"

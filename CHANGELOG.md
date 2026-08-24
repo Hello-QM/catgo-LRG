@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.10] - 2026-08-24
+
+### Added
+
+- **CatBot inherits the installed Codex environment safely** — model labels follow the live Codex catalogue, user skills and MCP configuration remain available, and CatGo runs in its own desktop MCP namespace against the active backend port.
+- **Safe workflow cleanup** — workflow lists support single and bulk deletion with persistent feedback while protecting tasks that are executing or still have unresolved remote jobs.
+- **Complete slab-first surface workflows** — generated catalysis workflows relax the clean slab before adsorption branches, persist frozen atoms, and carry the exact slab constraints into downstream geometry and frequency inputs and previews.
+
+### Fixed
+
+- **Truthful workflow state reporting** — CHECK, PAUSED, FAILED, REMOTE_ERROR, and RUNNING are derived from task evidence instead of leaving failed or finished workflows displayed as running.
+- **CatBot structure and workflow handoff** — structures survive pop-out chat and viewer-window changes, runtime ports are discovered dynamically, and generated workflows are pushed into the visible CatGo workspace.
+- **Database access behind agent proxies** — Materials Project, OPTIMADE, and PubChem calls no longer inherit agent-only SOCKS proxy variables that the backend cannot satisfy.
+- **Large-system trajectory playback** — typed positions, synchronized bond snapshots, and bounded decoded-frame caches keep topology and coordinates aligned without unbounded memory growth.
+- **Terminal resizing and scrollbars** — the final text column stays clear of the scrollbar, and active Codex TUI sessions retain complete CJK text when the font size changes, including tabs created before hot reload.
+- **Published CatGo citation** — active citation metadata now points to the *Digital Discovery* article, DOI `10.1039/D6DD00273K`.
+
 ## [1.4.9] - 2026-08-01
 
 ### Added

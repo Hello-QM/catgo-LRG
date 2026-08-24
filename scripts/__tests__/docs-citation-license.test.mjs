@@ -48,11 +48,12 @@ test('CITATION.cff carries the exact non-binding citation request', () => {
   assert.equal(message, CITATION_REQUEST)
   assert.match(cff, new RegExp(
     `^cff-version: 1\\.2\\.0\\nmessage: ${escapeRegExp(CITATION_REQUEST)}\\n` +
-    'version: 1\\.4\\.9\\ntitle: CatGo\\nlicense: AGPL-3\\.0-or-later\\n' +
+    'version: 1\\.4\\.10\\ntitle: CatGo\\nlicense: AGPL-3\\.0-or-later\\n' +
     'license-url: https://github\\.com/Hello-QM/catgo-LRG/blob/main/license$',
     'm',
   ))
-  assert.match(cff, /^\s+doi: 10\.26434\/chemrxiv\.15002984\/v1$/m)
+  assert.match(cff, /^\s+journal: Digital Discovery$/m)
+  assert.match(cff, /^\s+doi: 10\.1039\/D6DD00273K$/m)
 })
 
 function escapeRegExp(value) {
