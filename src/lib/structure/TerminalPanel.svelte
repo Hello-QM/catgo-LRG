@@ -7,6 +7,7 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
+  import { guard_terminal_dimensions } from './terminal-fit'
   import { open_terminal_click } from './terminal-path-nav'
 
   let {
@@ -60,8 +61,8 @@
   let pty_ref = $state<PtySession | null>(null)
   /** Module-level xterm ref for reactive theme updates. */
   let term_ref: any = null
-  /** Module-level fit addon ref for reactive font updates. */
-  let fit_ref: any = null
+  /** Module-level guarded fit callback for reactive font updates. */
+  let fit_ref: (() => void) | null = null
   /** Current working directory tracked via OSC 7 — used to resolve relative file paths. */
   let current_cwd = $state(``)
   /** Monotonic sequence counter for CWD broadcasts — receivers discard stale messages. */
@@ -215,7 +216,7 @@
     if (!container_el) return
 
     let terminal: any = null
-    let fit_addon: any = null
+    let fit_terminal: (() => void) | null = null
     let observer: ResizeObserver | null = null
     let vis_observer: IntersectionObserver | null = null
     let pty_session: PtySession | null = null
@@ -295,6 +296,19 @@
 
         term.open(container_el!)
 
+        // FitAddon assumes a fixed 14px scrollbar. Native scrollbar widths vary
+        // across OS/display-scale/browser combinations, which can leave the last
+        // PTY column hidden underneath the scrollbar. Use its proposed geometry,
+        // then reserve two complete cells (one CJK/full-width glyph) at the edge.
+        fit_terminal = () => {
+          const proposed = fit.proposeDimensions?.()
+          if (!proposed || Number.isNaN(proposed.cols) || Number.isNaN(proposed.rows)) return
+          const guarded = guard_terminal_dimensions(proposed)
+          if (term.cols !== guarded.cols || term.rows !== guarded.rows) {
+            term.resize(guarded.cols, guarded.rows)
+          }
+        }
+
         // File path link provider — must be registered AFTER term.open() so xterm's
         // link detection infrastructure is initialized (xterm v6 requirement).
         if (on_open_file) {
@@ -345,7 +359,7 @@
 
         // Delay initial fit until the container is laid out (avoids wrong column count)
         await new Promise<void>((resolve) => requestAnimationFrame(() => {
-          if (!disposed) fit.fit()
+          if (!disposed) fit_terminal?.()
           resolve()
         }))
         if (disposed) { term.dispose(); return }
@@ -422,8 +436,7 @@
         terminal = term
         term_ref = term
         term.textarea?.addEventListener('focus', () => mark_terminal_active(panel_id))
-        fit_addon = fit
-        fit_ref = fit
+        fit_ref = fit_terminal
 
         // Register resize handler BEFORE spawning PTY to avoid missing resize
         // events that fire during the async spawnPty() call
@@ -650,8 +663,8 @@
         // Auto-resize on container size change
         observer = new ResizeObserver(() => {
           requestAnimationFrame(() => {
-            if (!disposed && fit_addon) {
-              try { fit_addon.fit() } catch { /* ignore */ }
+            if (!disposed && fit_terminal) {
+              try { fit_terminal() } catch { /* ignore */ }
             }
           })
         })
@@ -663,10 +676,10 @@
         vis_observer = new IntersectionObserver((entries) => {
           if (disposed) return
           for (const entry of entries) {
-            if (entry.isIntersecting && fit_addon) {
+            if (entry.isIntersecting && fit_terminal) {
               requestAnimationFrame(() => {
                 if (!disposed) {
-                  try { fit_addon.fit() } catch { /* ignore */ }
+                  try { fit_terminal?.() } catch { /* ignore */ }
                 }
               })
             }
@@ -699,7 +712,7 @@
         }
 
         // Final fit to guarantee PTY and terminal are in sync
-        try { fit.fit() } catch { /* ignore */ }
+        try { fit_terminal?.() } catch { /* ignore */ }
 
         // Robust re-fit: on Windows (especially new Tauri windows), the container
         // may not have valid dimensions yet. Retry fit() with increasing delays.
@@ -709,7 +722,7 @@
           try {
             const el = container_el
             if (el && el.clientWidth > 0 && el.clientHeight > 0) {
-              fit.fit()
+              fit_terminal?.()
               // Sync PTY if dimensions changed
               if (term.cols > 0 && term.rows > 0) {
                 session.resize(term.cols, term.rows).catch(() => {})
@@ -813,7 +826,7 @@
     term_ref.options.fontFamily = family
     // Re-fit after font change to recalculate column/row count
     requestAnimationFrame(() => {
-      try { fit_ref?.fit() } catch { /* ignore */ }
+      try { fit_ref?.() } catch { /* ignore */ }
     })
   })
 </script>
