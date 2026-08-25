@@ -929,6 +929,9 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
 
   async function handle_send(text?: string) {
     let msg = (text ?? input_text).trim()
+    if (!msg && pending_attachments.length > 0) {
+      msg = `Please inspect the attached file${pending_attachments.length === 1 ? `` : `s`}.`
+    }
     if (!msg) return
 
     // Prepend quote context if active
@@ -1548,6 +1551,13 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
                 <div class="bubble-sender sender-ai">{t('chat.catbot')}</div>
               {/if}
               <div class="chat-bubble chat-bubble-{msg.role}">
+                {#if msg.role === `user` && msg.attachments?.length}
+                  <div class="sent-attachments">
+                    {#each msg.attachments as att}
+                      <span class="attachment-chip" title={att.mimeType}>&#128206; {att.name}</span>
+                    {/each}
+                  </div>
+                {/if}
                 {#if msg.role === `assistant` && !get_display_text(msg.content) && slice.loading.value}
                   <span class="typing-indicator">
                     <span class="dot"></span>
@@ -1879,7 +1889,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
             <Icon icon="Disabled" style="width: 14px; height: 14px" />
           </button>
         {:else}
-          <button type="button" class="chat-send-btn" title={t('chat.send')} onclick={() => handle_send()} disabled={!input_text.trim()}>
+          <button type="button" class="chat-send-btn" title={t('chat.send')} onclick={() => handle_send()} disabled={!input_text.trim() && pending_attachments.length === 0}>
             <Icon icon="ArrowUp" style="width: 14px; height: 14px" />
           </button>
         {/if}
@@ -3380,6 +3390,12 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 4px;
+  }
+  .sent-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
   }
   .attachment-chip {
     display: flex;

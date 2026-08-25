@@ -4,6 +4,9 @@ uvicorn[standard]>=0.27.0
 pydantic>=2.0.0
 python-multipart>=0.0.6
 
+# Windows ConPTY backend for the browser/PyPI local terminal
+pywinpty>=3.0.0; platform_system == "Windows"
+
 # HTTP client for external API proxying
 httpx>=0.27.0
 

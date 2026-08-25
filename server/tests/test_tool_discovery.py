@@ -8,7 +8,7 @@ class TestLoadToolFromPath:
     """Test loading a single tool from a directory."""
 
     def test_load_minimal_tool(self, tmp_path):
-        from tools.discovery import load_tool_from_path
+        from catgo.tools.discovery import load_tool_from_path
         tool_dir = tmp_path / "my_tool"
         tool_dir.mkdir()
         (tool_dir / "tool.py").write_text('''
@@ -27,7 +27,7 @@ async def execute(context):
         assert entry.execute_fn is not None
 
     def test_load_with_manifest(self, tmp_path):
-        from tools.discovery import load_tool_from_path
+        from catgo.tools.discovery import load_tool_from_path
         tool_dir = tmp_path / "fancy"
         tool_dir.mkdir()
         (tool_dir / "tool.py").write_text('''
@@ -47,7 +47,7 @@ async def execute(context):
         assert entry.trust == "user"
 
     def test_load_calculator_tool(self, tmp_path):
-        from tools.discovery import load_tool_from_path
+        from catgo.tools.discovery import load_tool_from_path
         tool_dir = tmp_path / "calc"
         tool_dir.mkdir()
         (tool_dir / "tool.py").write_text('''
@@ -66,7 +66,7 @@ def get_calculator(**params):
         assert "get_calculator" in entry.extra_fns
 
     def test_missing_tool_py_raises(self, tmp_path):
-        from tools.discovery import load_tool_from_path, ToolLoadError
+        from catgo.tools.discovery import load_tool_from_path, ToolLoadError
         tool_dir = tmp_path / "empty"
         tool_dir.mkdir()
         with pytest.raises(ToolLoadError):
@@ -77,7 +77,7 @@ class TestDiscoverTools:
     """Test scanning directories for tools."""
 
     def test_discover_from_directory(self, tmp_path):
-        from tools.discovery import discover_tools
+        from catgo.tools.discovery import discover_tools
         # Create two tools
         for name in ("tool_a", "tool_b"):
             d = tmp_path / name
@@ -92,7 +92,7 @@ async def execute(context):
         assert len(errors) == 0
 
     def test_skips_pycache(self, tmp_path):
-        from tools.discovery import discover_tools
+        from catgo.tools.discovery import discover_tools
         (tmp_path / "__pycache__").mkdir()
         entries, errors = discover_tools([tmp_path])
         assert len(entries) == 0

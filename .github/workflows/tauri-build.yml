@@ -204,6 +204,14 @@ jobs:
           mkdir -p ../src-tauri/binaries
           cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}.exe
 
+      - name: Smoke-test frozen CatBot backend and MCP bridge
+        run: |
+          backend="server/dist/catgo-server"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            backend="${backend}.exe"
+          fi
+          python scripts/smoke-frozen-catbot.py "$backend"
+
       # Nightly (with rust-src) builds the THREADED ferrox WASM artifact —
       # std is rebuilt with atomics via -Z build-std. Installed before stable
       # so stable stays the default toolchain for the Tauri build itself.
@@ -266,6 +274,16 @@ jobs:
 
       - name: Build agent sidecar (Bun-compiled Node binary)
         run: pnpm build:agent
+
+      - name: Smoke-test packaged CatBot agent adapters
+        run: |
+          backend="server/dist/catgo-server"
+          agent="src-tauri/binaries/catgo-agent-${{ matrix.backend_target }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            backend="${backend}.exe"
+            agent="${agent}.exe"
+          fi
+          python scripts/smoke-agent-sidecar.py "$agent" "$backend"
 
       - name: Prepare Apple API key for notarization (macOS)
         if: runner.os == 'macOS'

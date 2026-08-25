@@ -7,6 +7,11 @@ import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '../types.js'
 import {
+  attachmentPathContext,
+  materializeAttachments,
+  type MaterializedAttachment,
+} from '../attachments.js'
+import {
   approvalId,
   approveCatgoOverride,
   isGuardedCatgoCall,
@@ -163,6 +168,52 @@ function ensureClaudeSettingsEnv(): void {
   if (applied.length > 0) {
     console.info(`[agent-bridge] loaded Claude settings env: ${applied.join(', ')}`)
   }
+}
+
+export function buildClaudePrompt(
+  prompt: string,
+  attachments: MaterializedAttachment[],
+): string | AsyncIterable<any> {
+  if (attachments.length === 0) return prompt
+
+  const fallback = attachments.filter((attachment) =>
+    !attachment.mimeType.startsWith('image/') &&
+    attachment.mimeType !== 'application/pdf'
+  )
+  const content: any[] = [{ type: 'text', text: prompt }]
+  for (const attachment of attachments) {
+    if (attachment.mimeType.startsWith('image/')) {
+      content.push({ type: 'text', text: `Attached image: ${attachment.name}` })
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: attachment.mimeType,
+          data: attachment.data,
+        },
+      })
+    } else if (attachment.mimeType === 'application/pdf') {
+      content.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: attachment.data,
+        },
+        title: attachment.name,
+      })
+    }
+  }
+  const pathContext = attachmentPathContext(fallback)
+  if (pathContext) content.push({ type: 'text', text: pathContext })
+
+  return (async function* () {
+    yield {
+      type: 'user',
+      message: { role: 'user', content },
+      parent_tool_use_id: null,
+    }
+  })()
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +380,7 @@ export function createClaudeAdapter(): AgentAdapter {
         abortSignal,
         tabId,
         skipPermissions,
+        attachments,
       } = params
 
       const effectiveController = new AbortController()
@@ -432,54 +484,59 @@ export function createClaudeAdapter(): AgentAdapter {
       ensureClaudeSettingsEnv()
       const claudeExe = resolveClaudeExecutable()
 
-      const q = query({
-        prompt,
-        options: {
-          abortController: effectiveController,
-          cwd: cwd ?? undefined,
-          model: model ?? undefined,
-          systemPrompt: systemPrompt ?? undefined,
-          resume: sessionId ?? undefined,
-          includePartialMessages: true,
-          mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
-          permissionMode: 'default',
-          canUseTool,
-          // Don't load global settings — prevents loading ~/.claude/mcp.json
-          // stdio catgo server (we provide HTTP-mode catgo MCP above) and
-          // disables sandbox (unnecessary — tools go through HTTP to backend).
-          settingSources: [],
-          // Point SDK at the user's Claude Code install — without this it
-          // throws "Claude Code native binary not found" because it only
-          // checks its own vendored path.
-          ...(claudeExe ? { pathToClaudeCodeExecutable: claudeExe } : {}),
-        },
-      })
+      const materialized = materializeAttachments(attachments, cwd ?? process.cwd())
+      try {
+        const q = query({
+          prompt: buildClaudePrompt(prompt, materialized.entries),
+          options: {
+            abortController: effectiveController,
+            cwd: cwd ?? undefined,
+            model: model ?? undefined,
+            systemPrompt: systemPrompt ?? undefined,
+            resume: sessionId ?? undefined,
+            includePartialMessages: true,
+            mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+            permissionMode: 'default',
+            canUseTool,
+            // Don't load global settings — prevents loading ~/.claude/mcp.json
+            // stdio catgo server (we provide HTTP-mode catgo MCP above) and
+            // disables sandbox (unnecessary — tools go through HTTP to backend).
+            settingSources: [],
+            // Point SDK at the user's Claude Code install — without this it
+            // throws "Claude Code native binary not found" because it only
+            // checks its own vendored path.
+            ...(claudeExe ? { pathToClaudeCodeExecutable: claudeExe } : {}),
+          },
+        })
 
-      // Track streamed text per turn so a turn that emits NO partial deltas
-      // (cold-start first turn) still surfaces its final text via the fallback
-      // — otherwise the reply is silently dropped (blank bubble, then cleaned
-      // up by chat-state, so the user sees "no reply" until a second send).
-      let streamedTextLen = 0
-      for await (const msg of q) {
-        if (
-          (msg as any).type === 'stream_event' &&
-          (msg as any).event?.type === 'content_block_delta' &&
-          (msg as any).event?.delta?.type === 'text_delta'
-        ) {
-          streamedTextLen += String((msg as any).event.delta.text ?? '').length
-        }
-        if ((msg as any).type === 'assistant') {
-          for (const event of assistant_text_fallback(msg, streamedTextLen)) {
+        // Track streamed text per turn so a turn that emits NO partial deltas
+        // (cold-start first turn) still surfaces its final text via the fallback
+        // — otherwise the reply is silently dropped (blank bubble, then cleaned
+        // up by chat-state, so the user sees "no reply" until a second send).
+        let streamedTextLen = 0
+        for await (const msg of q) {
+          if (
+            (msg as any).type === 'stream_event' &&
+            (msg as any).event?.type === 'content_block_delta' &&
+            (msg as any).event?.delta?.type === 'text_delta'
+          ) {
+            streamedTextLen += String((msg as any).event.delta.text ?? '').length
+          }
+          if ((msg as any).type === 'assistant') {
+            for (const event of assistant_text_fallback(msg, streamedTextLen)) {
+              yield event
+            }
+            streamedTextLen = 0 // turn boundary — reset for the next assistant turn
+          }
+          for (const event of translateMessage(msg)) {
             yield event
           }
-          streamedTextLen = 0 // turn boundary — reset for the next assistant turn
         }
-        for (const event of translateMessage(msg)) {
-          yield event
-        }
-      }
 
-      yield { type: 'done' }
+        yield { type: 'done' }
+      } finally {
+        materialized.cleanup()
+      }
     },
 
     async listSessions(): Promise<SessionInfo[]> {

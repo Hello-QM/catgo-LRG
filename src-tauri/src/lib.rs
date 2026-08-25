@@ -117,6 +117,128 @@ struct AgentState {
     spawned_by_us: bool,
 }
 
+/// Reconstruct the CLI search path for GUI-launched desktop apps.
+///
+/// Finder/Dock and Windows Start Menu launches commonly omit user package
+/// manager bins from PATH.  Use Rust's platform-aware path joining (``;`` on
+/// Windows, ``:`` on Unix) and add the locations used by npm, pnpm, Bun,
+/// Volta, asdf, Cargo, and nvm.  The same PATH is passed to both the Python
+/// backend (provider availability/model discovery) and the agent bridge
+/// (actual Claude/Codex/Gemini spawning), so the UI cannot disagree with the
+/// runtime.
+#[cfg(desktop)]
+fn build_agent_cli_path(
+    current: Option<std::ffi::OsString>,
+    home: Option<std::path::PathBuf>,
+    appdata: Option<std::path::PathBuf>,
+    local_appdata: Option<std::path::PathBuf>,
+) -> std::ffi::OsString {
+    use std::collections::HashSet;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    fn add_dir(paths: &mut Vec<PathBuf>, seen: &mut HashSet<OsString>, path: PathBuf) {
+        if !path.is_dir() {
+            return;
+        }
+        let key = path.as_os_str().to_os_string();
+        if seen.insert(key) {
+            paths.push(path);
+        }
+    }
+
+    fn add_nvm_bins(paths: &mut Vec<PathBuf>, seen: &mut HashSet<OsString>, root: &Path) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            add_dir(paths, seen, entry.path().join("bin"));
+        }
+    }
+
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(home) = home {
+        for rel in [
+            ".local/bin",
+            ".bun/bin",
+            ".cargo/bin",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".asdf/shims",
+            ".local/share/pnpm",
+            "Library/pnpm",
+        ] {
+            add_dir(&mut paths, &mut seen, home.join(rel));
+        }
+        add_nvm_bins(&mut paths, &mut seen, &home.join(".nvm/versions/node"));
+    }
+
+    if let Some(appdata) = appdata {
+        add_dir(&mut paths, &mut seen, appdata.join("npm"));
+        add_dir(&mut paths, &mut seen, appdata.join("pnpm"));
+    }
+    if let Some(local_appdata) = local_appdata {
+        add_dir(&mut paths, &mut seen, local_appdata.join("pnpm"));
+    }
+
+    for common in ["/usr/local/bin", "/opt/homebrew/bin"] {
+        add_dir(&mut paths, &mut seen, PathBuf::from(common));
+    }
+    if let Some(current) = current {
+        for path in std::env::split_paths(&current) {
+            add_dir(&mut paths, &mut seen, path);
+        }
+    }
+
+    std::env::join_paths(paths).unwrap_or_default()
+}
+
+#[cfg(desktop)]
+fn agent_cli_path_from_environment() -> std::ffi::OsString {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    build_agent_cli_path(
+        std::env::var_os("PATH"),
+        home,
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from),
+    )
+}
+
+#[cfg(all(test, desktop))]
+mod agent_cli_path_tests {
+    use super::build_agent_cli_path;
+    use std::ffi::OsString;
+
+    #[test]
+    fn includes_nvm_and_existing_path_entries_with_native_separator() {
+        let root = std::env::temp_dir().join(format!(
+            "catgo-agent-path-test-{}",
+            std::process::id(),
+        ));
+        let nvm_bin = root.join("home/.nvm/versions/node/v24/bin");
+        let existing = root.join("existing-bin");
+        std::fs::create_dir_all(&nvm_bin).unwrap();
+        std::fs::create_dir_all(&existing).unwrap();
+
+        let current = std::env::join_paths([existing.clone()]).unwrap();
+        let result = build_agent_cli_path(
+            Some(current),
+            Some(root.join("home")),
+            None,
+            None,
+        );
+        let paths: Vec<_> = std::env::split_paths(&OsString::from(result)).collect();
+
+        assert!(paths.contains(&nvm_bin));
+        assert!(paths.contains(&existing));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
 // State to buffer file paths from file association opens
 struct OpenedFiles {
     paths: Vec<String>,
@@ -433,6 +555,7 @@ pub fn run() {
             // remote backend over the network instead.
             #[cfg(desktop)]
             {
+            let augmented_path = agent_cli_path_from_environment();
             // Before spawning sidecar, check if backend is already running
             let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8000".to_string());
             let backend_already_running = {
@@ -454,6 +577,7 @@ pub fn run() {
                 let shell = app.shell();
                 match shell.sidecar("catgo-server") {
                     Ok(cmd) => {
+                        let cmd = cmd.env("PATH", &augmented_path);
                         match cmd.spawn() {
                             Ok((mut rx, child)) => {
                                 log::info!("[CatGo] Backend server started (sidecar)");
@@ -577,22 +701,6 @@ pub fn run() {
                     agent_port
                 );
             } else {
-                let augmented_path = {
-                    let current = std::env::var("PATH").unwrap_or_default();
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    let extras = [
-                        format!("{home}/.local/bin"),
-                        format!("{home}/.bun/bin"),
-                        format!("{home}/.cargo/bin"),
-                        format!("{home}/.npm-global/bin"),
-                        format!("{home}/.nvm/versions/node"),
-                        "/usr/local/bin".to_string(),
-                        "/opt/homebrew/bin".to_string(),
-                    ];
-                    let extra = extras.join(":");
-                    if current.is_empty() { extra } else { format!("{extra}:{current}") }
-                };
-
                 let shell = app.shell();
                 match shell.sidecar("catgo-agent") {
                     Ok(cmd) => {

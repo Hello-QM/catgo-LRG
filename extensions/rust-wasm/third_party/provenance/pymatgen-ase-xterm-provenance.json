@@ -29,7 +29,7 @@
   "releaseEvidence": {
     "algorithm": "sha256sum-manifest-v1",
     "fileCount": 20,
-    "manifestSha256": "7deb6b1bd0f590efcdc700331a339e6cd5864209c4f8eab0def4c3983db97de4"
+    "manifestSha256": "1b83d2a57d45edeaa40a3be0371323895af54582cc8e6c8f008d3f39f6c642aa"
   },
   "intermediaries": [
     {

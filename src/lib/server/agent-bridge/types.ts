@@ -68,8 +68,8 @@ export interface StreamParams {
   /**
    * Per-tab identifier. When set, the Claude adapter attaches an
    * `X-CatGo-Tab-Id` header to MCP HTTP requests so the backend routes
-   * structure/workflow pushes back to the originating tab. Codex and Gemini
-   * currently ignore this (their CLIs configure MCP elsewhere).
+   * structure/workflow pushes back to the originating tab. Codex injects the
+   * header through its MCP config and Gemini includes it in the ACP MCP entry.
    */
   tabId?: string
   /**

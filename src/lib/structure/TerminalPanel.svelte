@@ -3,6 +3,7 @@
   // This is intentional — the PTY session may be dead or disconnected, and these are
   // best-effort fire-and-forget operations where failure is expected and non-critical.
   import { spawnPty, type PtySession } from '$lib/api/pty'
+  import { osc7_setup_command } from './terminal-shell'
   import { Icon } from '$lib'
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
@@ -73,7 +74,7 @@
     host ? `${username || ``}@${host}` : `Terminal`
   )
 
-  // Always inject OSC 7 PROMPT_COMMAND once the PTY is up — local OR remote (needed for
+  // Always inject OSC 7 prompt integration once the PTY is up — local OR remote (needed for
   // Ctrl+click path resolution and Directory Sync even when sync_cwd is off). Local shells
   // need it just as much as remote: a plain bash emits no OSC 7 on its own, so without this
   // the local Files panel never follows the terminal's cwd. sync_cwd only controls whether
@@ -193,7 +194,11 @@
       let got_data = false
       const inject = () => {
         if (_osc7_data_listener) { _osc7_data_listener(); _osc7_data_listener = null }
-        const cmd = ` export __CATGO_OSC7=1; PROMPT_COMMAND='printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"'; clear\r`
+        const cmd = osc7_setup_command(
+          shell,
+          session_id,
+          typeof navigator !== `undefined` && /Windows/i.test(navigator.userAgent),
+        )
         pty.write(cmd).catch(() => {})
       }
       const reset_timer = () => {
@@ -417,7 +422,13 @@
             let path: string
             if (data.startsWith(`file://`)) {
               const url = new URL(data)
-              path = url.pathname
+              path = decodeURIComponent(url.pathname)
+              // file://host/D:/work is a valid Windows OSC 7 payload, but
+              // URL.pathname returns /D:/work. Convert it back before asking
+              // the local-files backend to resolve the directory.
+              if (/^\/[A-Za-z]:\//.test(path)) {
+                path = path.slice(1).replace(/\//g, `\\`)
+              }
             } else {
               path = data
             }

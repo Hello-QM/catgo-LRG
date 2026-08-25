@@ -26,9 +26,37 @@ import { GeminiCliNotFoundError, spawn_gemini_acp } from '../acp/client.js'
 import { mapPermissionRequest, translateUpdate } from '../acp/translate.js'
 import { decide_tool_permission } from './claude.js'
 import { GeminiProcessPool } from '../acp/process-pool.js'
+import {
+  attachmentPathContext,
+  materializeAttachments,
+  type MaterializedAttachment,
+} from '../attachments.js'
 
 // One pool per agent-bridge process. Shut down on SIGTERM by server.ts.
 let pool = new GeminiProcessPool()
+
+export function buildGeminiPromptBlocks(
+  prompt: string,
+  systemPrompt: string | undefined,
+  attachments: MaterializedAttachment[],
+): Array<Record<string, unknown>> {
+  const fallback = attachments.filter((attachment) => !attachment.mimeType.startsWith('image/'))
+  const pathContext = attachmentPathContext(fallback)
+  const userText = pathContext ? `${prompt}\n\n${pathContext}` : prompt
+  const fullText = systemPrompt
+    ? `[System Context]\n${systemPrompt}\n\n[User]\n${userText}`
+    : userText
+  return [
+    { type: 'text', text: fullText },
+    ...attachments
+      .filter((attachment) => attachment.mimeType.startsWith('image/'))
+      .map((attachment) => ({
+        type: 'image',
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+      })),
+  ]
+}
 
 export function shutdownGeminiPool(): Promise<void> {
   return pool.shutdown()
@@ -119,10 +147,18 @@ export function createGeminiAdapter(): AgentAdapter {
     agent: 'gemini',
 
     async *stream(params: StreamParams): AsyncGenerator<AgentEvent> {
-      if (params.chatId) {
-        yield* streamPersistent(params, params.chatId)
-      } else {
-        yield* streamOneShot(params)
+      const materialized = materializeAttachments(
+        params.attachments,
+        params.cwd ?? process.cwd(),
+      )
+      try {
+        if (params.chatId) {
+          yield* streamPersistent(params, params.chatId, materialized.entries)
+        } else {
+          yield* streamOneShot(params, materialized.entries)
+        }
+      } finally {
+        materialized.cleanup()
       }
     },
 
@@ -138,6 +174,7 @@ export function createGeminiAdapter(): AgentAdapter {
 async function* streamPersistent(
   params: StreamParams,
   chatId: string,
+  attachments: MaterializedAttachment[],
 ): AsyncGenerator<AgentEvent> {
   const { prompt, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt, skipPermissions } = params
 
@@ -184,19 +221,10 @@ async function* streamPersistent(
 
     yield { type: 'status', sessionId: handle.sessionId, model: model ?? undefined }
 
-    // ACP has no `setSystemInstruction`/`session/setInstructions` (those
-    // symbols exist inside gemini-cli's JS but aren't exposed over ACP), so
-    // we prepend systemPrompt as a context block in the user prompt. Without
-    // this the adapter silently dropped systemPrompt — Gemini never saw the
-    // loaded structure / chat context that Claude got via `query({systemPrompt})`.
-    const fullText = systemPrompt
-      ? `[System Context]\n${systemPrompt}\n\n[User]\n${prompt}`
-      : prompt
-
     const promptPromise = handle.client
       .request<{ stopReason?: string }>('session/prompt', {
         sessionId: handle.sessionId,
-        prompt: [{ type: 'text', text: fullText }],
+        prompt: buildGeminiPromptBlocks(prompt, systemPrompt, attachments),
       })
       .then((res) => { stop.reason = res?.stopReason })
       .catch((e: Error) => { stop.err = e })
@@ -214,7 +242,10 @@ async function* streamPersistent(
 
 // ── One-shot (legacy) path ──────────────────────────────────────────────────
 
-async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> {
+async function* streamOneShot(
+  params: StreamParams,
+  attachments: MaterializedAttachment[],
+): AsyncGenerator<AgentEvent> {
   const {
     prompt, sessionId, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt,
     skipPermissions,
@@ -267,15 +298,10 @@ async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> 
 
     yield { type: 'status', sessionId: effectiveSessionId, model: model ?? undefined }
 
-    // Same prompt-prepend as the persistent path — see comment above.
-    const fullText = systemPrompt
-      ? `[System Context]\n${systemPrompt}\n\n[User]\n${prompt}`
-      : prompt
-
     const promptPromise = client
       .request<{ stopReason?: string }>('session/prompt', {
         sessionId: effectiveSessionId,
-        prompt: [{ type: 'text', text: fullText }],
+        prompt: buildGeminiPromptBlocks(prompt, systemPrompt, attachments),
       })
       .then((res) => { stop.reason = res?.stopReason })
       .catch((e: Error) => { stop.err = e })

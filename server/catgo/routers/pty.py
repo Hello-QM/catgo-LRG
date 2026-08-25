@@ -24,10 +24,12 @@ import base64
 import logging
 import os
 import platform
+import shutil
 import struct
-from typing import Optional
+from typing import Optional, TypedDict
 
 _IS_WINDOWS = platform.system() == "Windows"
+PtyProcess = None
 
 # Unix-only modules for local PTY support
 if not _IS_WINDOWS:
@@ -35,6 +37,11 @@ if not _IS_WINDOWS:
     import pty
     import signal
     import termios
+else:
+    try:
+        from winpty import PtyProcess
+    except ImportError:  # pragma: no cover - handled by an actionable runtime error
+        pass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -43,6 +50,97 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pty", tags=["pty"])
 
 _next_id = 0
+
+
+class WindowsShellSpec(TypedDict):
+    id: str
+    label: str
+    argv: list[str]
+
+
+# xterm.js listens for OSC 7 to keep the Files panel in sync with the shell's
+# current working directory. PowerShell and cmd.exe do not emit OSC 7 by
+# default, so install a prompt hook when CatGo starts those shells. A raw
+# Windows path is intentional: TerminalPanel accepts both file:// URLs and raw
+# paths, and the latter avoids URL.pathname turning D:\work into /D:/work.
+_POWERSHELL_OSC7_PROMPT = (
+    "$global:__CATGO_OSC7=1;"
+    "function global:prompt {"
+    "$p=(Get-Location).Path;"
+    '[Console]::Write("$([char]27)]7;$p$([char]27)\\");'
+    '"PS $p> "'
+    "}"
+)
+
+
+def _windows_argv_with_cwd_reporting(spec: WindowsShellSpec) -> list[str]:
+    """Return shell argv with an OSC 7 prompt hook on Windows."""
+    argv = list(spec["argv"])
+    shell_id = spec["id"]
+    if shell_id in ("powershell", "pwsh"):
+        argv.extend(["-NoExit", "-Command", _POWERSHELL_OSC7_PROMPT])
+    elif shell_id == "cmd":
+        # cmd prompt substitutions: $E=ESC, $P=current path, $G=>, $S=space.
+        argv.extend(["/K", r"prompt $E]7;$P$E\$P$G$S"])
+    return argv
+
+
+def _windows_shell_specs() -> list[WindowsShellSpec]:
+    """Return installed Windows shells in preference order."""
+    if not _IS_WINDOWS:
+        return []
+
+    specs: list[WindowsShellSpec] = []
+    seen: set[str] = set()
+
+    def add(shell_id: str, label: str, executable: Optional[str], args: list[str]) -> None:
+        if not executable:
+            return
+        resolved = os.path.normcase(os.path.abspath(executable))
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        specs.append({"id": shell_id, "label": label, "argv": [executable, *args]})
+
+    add(
+        "powershell",
+        "Windows PowerShell",
+        shutil.which("powershell.exe"),
+        ["-NoLogo"],
+    )
+    add("pwsh", "PowerShell 7", shutil.which("pwsh.exe"), ["-NoLogo"])
+
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    git_bash_candidates = [
+        shutil.which("bash.exe"),
+        os.path.join(program_files, "Git", "bin", "bash.exe"),
+        os.path.join(program_files, "Git", "usr", "bin", "bash.exe"),
+    ]
+    git_bash = next(
+        (
+            path
+            for path in git_bash_candidates
+            if path and os.path.isfile(path) and "git" in os.path.normcase(path)
+        ),
+        None,
+    )
+    add("git-bash", "Git Bash", git_bash, ["--login", "-i"])
+
+    comspec = os.environ.get("COMSPEC") or shutil.which("cmd.exe")
+    add("cmd", "Command Prompt", comspec, [])
+    return specs
+
+
+@router.get("/shells")
+async def available_shells() -> list[dict[str, str]]:
+    """List local shells which can be opened by the WebSocket terminal."""
+    if _IS_WINDOWS:
+        return [
+            {"id": str(spec["id"]), "label": str(spec["label"])}
+            for spec in _windows_shell_specs()
+        ]
+    shell = os.environ.get("SHELL", "/bin/bash")
+    return [{"id": shell, "label": os.path.basename(shell) or shell}]
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
@@ -57,11 +155,15 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 
 
 async def _run_local_pty(
-    ws: WebSocket, pty_id: int, cols: int, rows: int
+    ws: WebSocket,
+    pty_id: int,
+    cols: int,
+    rows: int,
+    shell_id: Optional[str] = None,
 ) -> None:
-    """Run a local PTY session (fork + exec shell). Unix only."""
+    """Run a local PTY session using ConPTY on Windows or forkpty on Unix."""
     if _IS_WINDOWS:
-        await ws.send_json({"type": "error", "message": "Local PTY is not supported on Windows"})
+        await _run_windows_pty(ws, pty_id, cols, rows, shell_id)
         return
     shell = os.environ.get("SHELL", "/bin/bash")
     child_pid, master_fd = pty.fork()
@@ -144,6 +246,126 @@ async def _run_local_pty(
                 os.waitpid(child_pid, 0)
             except (OSError, ChildProcessError):
                 pass
+
+
+async def _run_windows_pty(
+    ws: WebSocket,
+    pty_id: int,
+    cols: int,
+    rows: int,
+    shell_id: Optional[str] = None,
+) -> None:
+    """Run a Windows local shell through ConPTY via pywinpty."""
+    if PtyProcess is None:
+        await ws.send_json(
+            {
+                "type": "error",
+                "message": "Windows Local Shell requires pywinpty. Install it with: pip install pywinpty",
+            }
+        )
+        return
+
+    specs = _windows_shell_specs()
+    if not specs:
+        await ws.send_json(
+            {"type": "error", "message": "No supported Windows shell was found"}
+        )
+        return
+
+    selected = next((spec for spec in specs if spec["id"] == shell_id), specs[0])
+    argv = _windows_argv_with_cwd_reporting(selected)
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+
+    try:
+        process = await asyncio.to_thread(
+            PtyProcess.spawn,
+            argv,
+            cwd=os.getcwd(),
+            env=env,
+            dimensions=(max(rows, 1), max(cols, 1)),
+        )
+    except Exception as exc:
+        await ws.send_json(
+            {"type": "error", "message": f"Failed to start {selected['label']}: {exc}"}
+        )
+        return
+
+    read_task: Optional[asyncio.Task] = None
+    monitor_task: Optional[asyncio.Task] = None
+    channel_closed = asyncio.Event()
+
+    try:
+        await ws.send_json({"type": "opened", "id": pty_id})
+        logger.info(
+            "[PTY %s] Windows session opened (shell=%s, %sx%s)",
+            pty_id,
+            selected["id"],
+            cols,
+            rows,
+        )
+
+        async def read_loop() -> None:
+            try:
+                while process.isalive():
+                    output = await asyncio.to_thread(process.read, 8192)
+                    if not output:
+                        continue
+                    raw = output.encode("utf-8", "surrogatepass")
+                    encoded = base64.b64encode(raw).decode("ascii")
+                    await ws.send_json({"type": "output", "data": encoded})
+            except (EOFError, OSError):
+                pass
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.debug("[PTY %s] Windows read error: %s", pty_id, exc)
+            finally:
+                channel_closed.set()
+
+        async def channel_monitor() -> None:
+            await channel_closed.wait()
+            try:
+                await ws.send_json({"type": "closed"})
+            except Exception:
+                pass
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        read_task = asyncio.create_task(read_loop())
+        monitor_task = asyncio.create_task(channel_monitor())
+
+        while True:
+            msg = await ws.receive_json()
+            action = msg.get("action")
+            if action == "input":
+                await asyncio.to_thread(process.write, str(msg.get("data", "")))
+            elif action == "resize":
+                new_cols = max(int(msg.get("cols", cols)), 1)
+                new_rows = max(int(msg.get("rows", rows)), 1)
+                await asyncio.to_thread(process.setwinsize, new_rows, new_cols)
+            elif action == "close":
+                break
+            elif action == "ping":
+                await ws.send_json({"type": "pong"})
+    finally:
+        if monitor_task and not monitor_task.done():
+            monitor_task.cancel()
+        try:
+            await asyncio.to_thread(process.close, True)
+        except Exception:
+            pass
+        if read_task and not read_task.done():
+            read_task.cancel()
+        for task in (read_task, monitor_task):
+            if task:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
 
 # ====== Remote SSH PTY Session ======
@@ -433,6 +655,7 @@ async def ws_pty(ws: WebSocket) -> None:
         cols = data.get("cols", 80)
         rows = data.get("rows", 24)
         hpc_session_id = data.get("session_id")  # None = local, string = remote
+        shell_id = data.get("shell")
 
         global _next_id
         _next_id += 1
@@ -441,7 +664,7 @@ async def ws_pty(ws: WebSocket) -> None:
         if hpc_session_id:
             await _run_remote_pty(ws, pty_id, cols, rows, hpc_session_id)
         else:
-            await _run_local_pty(ws, pty_id, cols, rows)
+            await _run_local_pty(ws, pty_id, cols, rows, shell_id)
 
     except WebSocketDisconnect:
         logger.info("[PTY] WebSocket client disconnected")

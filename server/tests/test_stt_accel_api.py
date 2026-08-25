@@ -27,6 +27,15 @@ def client(tmp_path, monkeypatch):
     es._reset_for_test()
 
 
+def test_stt_health_is_registered_before_deferred_startup():
+    """The first microphone click must not race a deferred-router 404."""
+    from main import _DEFERRED_ROUTER_ATTRS, app
+
+    paths = {route.path for route in app.router.routes}
+    assert "/api/stt/health" in paths
+    assert "stt_router" not in _DEFERRED_ROUTER_ATTRS
+
+
 def test_status_shape(client):
     r = client.get("/api/stt/accel/status")
     assert r.status_code == 200

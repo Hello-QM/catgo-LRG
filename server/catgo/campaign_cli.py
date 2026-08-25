@@ -24,7 +24,16 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def campaign_argv(action: str, extra: list[str]) -> list[str]:
-    """Build argv for `python -m catgo campaign <action> <extra...>` (pure)."""
+    """Build argv for the campaign subprocess (pure).
+
+    In a PyInstaller bundle, ``sys.executable`` is the ``catgo-server``
+    sidecar itself rather than a Python interpreter.  That executable exposes
+    the regular CatGo CLI as ``catgo-server campaign ...``; passing ``-m`` to
+    it would instead enter the backend argument parser and fail.  Source and
+    wheel installs continue to use ``python -m catgo``.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "campaign", action, *extra]
     return [sys.executable, "-m", "catgo", "campaign", action, *extra]
 
 

@@ -12,7 +12,7 @@ def tool_client():
     from fastapi import FastAPI
     from catgo.routers.tools import router
     from catgo.tools import registry
-    from tools.models import ToolEntry
+    from catgo.tools.models import ToolEntry
 
     app = FastAPI()
     app.include_router(router, prefix="/api")

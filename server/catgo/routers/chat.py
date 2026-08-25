@@ -1,13 +1,15 @@
 """AI Chat assistant proxy — streams LLM responses via SSE."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import shutil
 import socket
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter
@@ -21,7 +23,103 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Any
+
+
+def _split_data_uri(value: str) -> tuple[str, str] | None:
+    if not value.startswith("data:") or ";base64," not in value:
+        return None
+    header, data = value[5:].split(";base64,", 1)
+    return header or "application/octet-stream", data
+
+
+def _anthropic_content(content: Any) -> Any:
+    """Translate standard OpenAI multimodal parts to Anthropic blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            blocks.append({"type": "text", "text": str(part.get("text", ""))})
+        elif kind == "image_url":
+            image = part.get("image_url", {})
+            parsed = _split_data_uri(str(image.get("url", ""))) if isinstance(image, dict) else None
+            if parsed:
+                mime_type, data = parsed
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": data,
+                        },
+                    }
+                )
+        elif kind == "file":
+            file_info = part.get("file", {})
+            if not isinstance(file_info, dict):
+                continue
+            parsed = _split_data_uri(str(file_info.get("file_data", "")))
+            if not parsed:
+                continue
+            mime_type, data = parsed
+            name = str(file_info.get("filename", "attachment"))
+            if mime_type == "application/pdf":
+                blocks.append(
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": data,
+                        },
+                        "title": name,
+                    }
+                )
+            else:
+                try:
+                    decoded = base64.b64decode(data, validate=True).decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    decoded = f"[Attached binary file: {name} ({mime_type})]"
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"[Attached file: {name}]\n{decoded}\n[End attached file]",
+                    }
+                )
+    return blocks
+
+
+def _ollama_message(message: ChatMessage) -> dict[str, Any]:
+    """Translate multimodal content parts to Ollama's text + images shape."""
+    if isinstance(message.content, str):
+        return {"role": message.role, "content": message.content}
+    text: list[str] = []
+    images: list[str] = []
+    for part in message.content if isinstance(message.content, list) else []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            text.append(str(part.get("text", "")))
+        elif part.get("type") == "image_url":
+            image = part.get("image_url", {})
+            parsed = _split_data_uri(str(image.get("url", ""))) if isinstance(image, dict) else None
+            if parsed:
+                images.append(parsed[1])
+        elif part.get("type") == "file":
+            file_info = part.get("file", {})
+            if isinstance(file_info, dict):
+                text.append(f"[Attached file: {file_info.get('filename', 'attachment')}]")
+    result: dict[str, Any] = {"role": message.role, "content": "\n".join(text)}
+    if images:
+        result["images"] = images
+    return result
 
 
 class ChatStreamRequest(BaseModel):
@@ -51,7 +149,10 @@ async def stream_anthropic(req: ChatStreamRequest):
         "model": req.model,
         "max_tokens": req.max_tokens,
         "temperature": req.temperature,
-        "messages": [m.model_dump() for m in req.messages],
+        "messages": [
+            {"role": message.role, "content": _anthropic_content(message.content)}
+            for message in req.messages
+        ],
         "stream": True,
     }
     if req.system:
@@ -443,8 +544,8 @@ async def list_providers() -> dict:
     providers: list[dict] = []
 
     resolved_binaries = {
-        pid: shutil.which(binary)
-        for pid, (binary, _) in _CLI_BINARIES.items()
+        pid: _resolve_cli(pid)
+        for pid in _CLI_BINARIES
     }
     codex_models = await _get_codex_models(resolved_binaries.get("sdk-codex"))
 
@@ -528,20 +629,86 @@ class UniversalStreamRequest(BaseModel):
     api_format: Optional[str] = None
 
 
-def _resolve_cli(provider_id: str) -> Optional[str]:
-    """Resolve an SDK CLI binary for an honest availability signal."""
+def _resolve_cli(provider_id: str, home: Optional[Path] = None) -> Optional[str]:
+    """Resolve an SDK CLI binary for an honest desktop availability signal.
+
+    Packaged GUI apps frequently start with a reduced PATH.  Search the same
+    user package-manager locations as the Tauri sidecar launcher and prefer
+    native executables over Windows npm wrappers where the SDK requires one.
+    """
     binary, _ = _CLI_BINARIES[provider_id]
+    override_key = {
+        "sdk-claude": "CATGO_CLAUDE_PATH",
+        "sdk-codex": "CATGO_CODEX_PATH",
+        "sdk-gemini": "CATGO_GEMINI_PATH",
+    }.get(provider_id)
+    if override_key:
+        override = os.environ.get(override_key)
+        if override and os.path.isfile(override):
+            return override
+
     found = shutil.which(binary)
-    if found:
+    if found and provider_id not in _CLI_NPM_PKG:
         return found
+
+    def native_from_npm_prefix(prefix: Path) -> Optional[str]:
+        pkg = _CLI_NPM_PKG.get(provider_id)
+        if not pkg:
+            return None
+        package_root = prefix / "node_modules" / Path(*pkg.split("/"))
+        if provider_id == "sdk-claude":
+            candidate = package_root / "bin" / (
+                "claude.exe" if os.name == "nt" else "claude"
+            )
+            if candidate.is_file():
+                return str(candidate)
+        elif provider_id == "sdk-codex":
+            exe = "codex.exe" if os.name == "nt" else "codex"
+            scope = package_root / "node_modules" / "@openai"
+            for platform_package in sorted(scope.glob("codex-*")):
+                for triple in sorted((platform_package / "vendor").glob("*")):
+                    for subdir in ("bin", "codex", ""):
+                        candidate = triple / subdir / exe
+                        if candidate.is_file():
+                            return str(candidate)
+        return None
+
+    if found:
+        native = native_from_npm_prefix(Path(found).parent)
+        if native:
+            return native
+        # On Unix the wrapper/shebang is directly executable.  On Windows a
+        # .cmd launcher is still an honest availability signal; the agent
+        # adapter performs its own native-binary resolution before spawning.
+        return found
+
+    home = home or Path.home()
+    candidates = [
+        home / ".local" / "bin" / binary,
+        home / ".npm-global" / "bin" / binary,
+        home / ".bun" / "bin" / binary,
+        home / ".volta" / "bin" / binary,
+        home / ".asdf" / "shims" / binary,
+        Path("/usr/local/bin") / binary,
+        Path("/opt/homebrew/bin") / binary,
+    ]
+    nvm_root = home / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        candidates.extend(sorted(nvm_root.glob(f"*/bin/{binary}")))
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+
     appdata = os.environ.get("APPDATA")
-    pkg = _CLI_NPM_PKG.get(provider_id)
-    if appdata and pkg:
-        cand = os.path.join(
-            appdata, "npm", "node_modules", *pkg.split("/"), "bin", binary + ".exe"
-        )
-        if os.path.exists(cand):
-            return cand
+    if appdata:
+        npm_prefix = Path(appdata) / "npm"
+        native = native_from_npm_prefix(npm_prefix)
+        if native:
+            return native
+        for suffix in (".cmd", ".exe", ""):
+            candidate = npm_prefix / f"{binary}{suffix}"
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -795,7 +962,7 @@ async def _stream_ollama(req: UniversalStreamRequest, base_url: str):
     messages = []
     if req.system:
         messages.append({"role": "system", "content": req.system})
-    messages.extend([m.model_dump() for m in req.messages])
+    messages.extend([_ollama_message(m) for m in req.messages])
     body = {
         "model": req.model,
         "messages": messages,
@@ -886,7 +1053,10 @@ async def _stream_anthropic_universal(req: UniversalStreamRequest, api_key: str,
         "model": req.model,
         "max_tokens": req.max_tokens,
         "temperature": req.temperature,
-        "messages": [m.model_dump() for m in req.messages],
+        "messages": [
+            {"role": message.role, "content": _anthropic_content(message.content)}
+            for message in req.messages
+        ],
         "stream": True,
     }
     if req.system:

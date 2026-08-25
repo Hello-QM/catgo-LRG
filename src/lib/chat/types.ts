@@ -50,6 +50,7 @@ export interface ChatMessage {
   role: `user` | `assistant`
   content: string | ContentBlock[]
   timestamp: number
+  attachments?: Attachment[]
 }
 
 export interface ChatConfig {

@@ -74,18 +74,23 @@ export async function spawnPty(
     return spawnWebSocketPty(cols, rows, opts.session_id)
   }
   if (isTauri()) {
-    return spawnTauriPty(cols, rows, opts?.cwd)
+    return spawnTauriPty(cols, rows, opts?.cwd, opts?.shell)
   }
   return spawnWebSocketPty(cols, rows, undefined, opts?.shell)
 }
 
 // ====== Tauri IPC transport ======
 
-async function spawnTauriPty(cols: number, rows: number, cwd?: string): Promise<PtySession> {
+async function spawnTauriPty(
+  cols: number,
+  rows: number,
+  cwd?: string,
+  shell?: string,
+): Promise<PtySession> {
   const { invoke } = await import(`@tauri-apps/api/core`)
   const { listen } = await import(`@tauri-apps/api/event`)
 
-  const id = await invoke<number>(`pty_spawn`, { cols, rows, cwd })
+  const id = await invoke<number>(`pty_spawn`, { cols, rows, cwd, shell })
   const unlisteners: Array<() => void> = []
 
   return {
@@ -237,6 +242,13 @@ async function spawnWebSocketPty(
             break
           case `error`:
             console.warn(`[PTY WS]`, msg.message)
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout_id)
+              reject(new Error(msg.message || `Failed to open terminal session`))
+              new_ws.close()
+              break
+            }
             // Session gone — mark for recovery instead of disposing
             if (typeof msg.message === `string` && (msg.message.includes(`not found`) || msg.message.includes(`expired`))) {
               opened = false

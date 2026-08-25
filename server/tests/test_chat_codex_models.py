@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -44,6 +45,33 @@ class _FakeCodexAppServer:
     async def wait(self):
         self.returncode = 0
         return self.returncode
+
+
+def test_cli_override_is_used_when_gui_path_is_reduced(tmp_path, monkeypatch):
+    cli = tmp_path / "codex"
+    cli.write_text("fake", encoding="utf-8")
+    monkeypatch.setenv("CATGO_CODEX_PATH", str(cli))
+    monkeypatch.setattr(chat.shutil, "which", lambda _binary: None)
+
+    assert chat._resolve_cli("sdk-codex") == str(cli)
+
+
+def test_codex_native_binary_is_found_below_windows_npm_prefix(tmp_path, monkeypatch):
+    # Use the host executable suffix so this regression runs on every CI OS;
+    # the directory layout is the same npm layout used on Windows.
+    exe = "codex.exe" if os.name == "nt" else "codex"
+    native = (
+        tmp_path / "npm" / "node_modules" / "@openai" / "codex" /
+        "node_modules" / "@openai" / "codex-win32-x64" / "vendor" /
+        "x86_64-pc-windows-msvc" / "bin" / exe
+    )
+    native.parent.mkdir(parents=True)
+    native.write_text("fake", encoding="utf-8")
+    monkeypatch.delenv("CATGO_CODEX_PATH", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(chat.shutil, "which", lambda _binary: None)
+
+    assert chat._resolve_cli("sdk-codex", home=tmp_path / "empty-home") == str(native)
 
 
 @pytest.mark.asyncio
