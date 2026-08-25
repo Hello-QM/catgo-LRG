@@ -350,7 +350,7 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License and citation
-            CatGo 1.4.13 distributions use **AGPL-3.0-or-later**.
+            CatGo 1.4.14 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
@@ -380,8 +380,8 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.13
-            - **Windows Campaigns start without relaunching the packaged backend** — frozen actions execute inside the already-extracted server process, eliminating the reproducible one-file unpack timeout.
+            ### New in 1.4.14
+            - **Windows Campaigns start quickly and write Unicode reliably** — frozen actions execute inside the already-extracted server process, while Campaign Markdown uses UTF-8 instead of the Windows locale codec.
             - **Packaged backends start reliably on Linux and Windows** — Linux bundles one ABI-compatible conda C++ runtime, while Windows smoke cleanup terminates the complete process tree.
             - **Installed CatBot is complete across supported desktops** — Claude, Codex, and Gemini discovery, attachments, voice, Skills, MCP tools, structures, workflows, and Campaigns are covered by packaged-runtime smoke tests.
             - **Windows terminal and Campaign workflows are reliable** — native shell selection, working-directory synchronization, GUI PATH recovery, and frozen Campaign dispatch use the correct runtime.
@@ -565,7 +565,7 @@ jobs:
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
 
       - name: Finalize canonical release body
-        if: env.CATGO_RELEASE_TAG == 'v1.4.13'
+        if: env.CATGO_RELEASE_TAG == 'v1.4.14'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"

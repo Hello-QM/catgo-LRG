@@ -16,8 +16,10 @@ def _append_index(index_path: Path, line: str) -> None:
     if not index_path.is_file():
         index_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.write_text(
-            cl.tldr_header("literature/", "papers + repos + extracted-skills") + "\n")
-    with index_path.open("a") as fh:
+            cl.tldr_header("literature/", "papers + repos + extracted-skills") + "\n",
+            encoding="utf-8",
+        )
+    with index_path.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
 
 
@@ -28,7 +30,8 @@ def ingest_repo(project, url: str, purpose: str = "", commit: str = "") -> Path:
     d.mkdir(parents=True, exist_ok=True)
     (d / "POINTER.md").write_text(
         cl.tldr_header(f"repo: {slug}", purpose or url)
-        + f"\nurl: {url}\ncommit: {commit}\npurpose: {purpose}\n"
+        + f"\nurl: {url}\ncommit: {commit}\npurpose: {purpose}\n",
+        encoding="utf-8",
     )
     _append_index(proj / "literature" / "INDEX.md", f"- `repos/{slug}/` — {purpose or url}")
     return d / "POINTER.md"
@@ -39,9 +42,13 @@ def append_extracted_skill(project, title: str, body: str) -> Path:
     f = proj / "literature" / "extracted-skills.md"
     if not f.is_file():
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(cl.tldr_header(
-            "extracted skills", "reusable recipes mined from literature/repos") + "\n")
-    with f.open("a") as fh:
+        f.write_text(
+            cl.tldr_header(
+                "extracted skills", "reusable recipes mined from literature/repos"
+            ) + "\n",
+            encoding="utf-8",
+        )
+    with f.open("a", encoding="utf-8") as fh:
         fh.write(f"\n## {title}\n{body}\n")
     return f
 
@@ -70,9 +77,13 @@ def ingest_pdf(project, pdf_path, converter=mineru_convert) -> Path:
     pdir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         md = converter(pdf_path, tmp)
-        (pdir / "paper.md").write_text(Path(md).read_text())
+        (pdir / "paper.md").write_text(
+            Path(md).read_text(encoding="utf-8"), encoding="utf-8"
+        )
     (pdir / "notes.md").write_text(
-        cl.tldr_header(f"notes: {slug}", "key settings/method/findings (fill in)") + "\n")
+        cl.tldr_header(f"notes: {slug}", "key settings/method/findings (fill in)") + "\n",
+        encoding="utf-8",
+    )
     _append_index(proj / "literature" / "INDEX.md",
                   f"- `papers/{slug}/` — <relevance; fill in>")
     return pdir / "paper.md"

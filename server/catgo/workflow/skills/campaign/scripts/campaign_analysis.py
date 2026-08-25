@@ -19,7 +19,7 @@ def collect_results(project) -> list[dict]:
         rel = rf.relative_to(proj).parts            # calc/<stage>/<name>/result.md
         stage = rel[1] if len(rel) >= 3 else ""
         out.append({"name": rf.parent.name, "stage": stage,
-                    "values": cl.parse_result(rf.read_text())})
+                    "values": cl.parse_result(rf.read_text(encoding="utf-8"))})
     return out
 
 
@@ -72,11 +72,13 @@ def write_aggregates(project, eform_threshold: float = 0.0, top: int = 3) -> dic
     adir.mkdir(exist_ok=True)
     results = collect_results(project)
     rank_md, rank_csv = rank_formation_energy(results)
-    (adir / "formation_energy_ranking.md").write_text(rank_md)
-    (adir / "formation_energy_ranking.csv").write_text(rank_csv)
-    (adir / "volcano.csv").write_text(volcano_csv(results))
+    (adir / "formation_energy_ranking.md").write_text(rank_md, encoding="utf-8")
+    (adir / "formation_energy_ranking.csv").write_text(rank_csv, encoding="utf-8")
+    (adir / "volcano.csv").write_text(volcano_csv(results), encoding="utf-8")
     (adir / "funnel.md").write_text(
-        funnel_md(results, eform_threshold=eform_threshold, top=top))
+        funnel_md(results, eform_threshold=eform_threshold, top=top),
+        encoding="utf-8",
+    )
     return {"n_results": len(results)}
 
 

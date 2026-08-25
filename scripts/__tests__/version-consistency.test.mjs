@@ -6,7 +6,7 @@ import test from 'node:test'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const source = (path) => readFileSync(resolve(ROOT, path), 'utf8')
-const APP_VERSION = '1.4.13'
+const APP_VERSION = '1.4.14'
 const WORKFLOW_INVENTORY = {
   'android-build.yml': {
     classification: 'root-versioned-publisher',
@@ -134,7 +134,7 @@ function workflowStep(path, name) {
   return workflow.slice(start, next === -1 ? undefined : next)
 }
 
-test('all CatGo application version surfaces target v1.4.13', () => {
+test('all CatGo application version surfaces target v1.4.14', () => {
   const packageJson = JSON.parse(source('package.json'))
   const tauriConfig = JSON.parse(source('src-tauri/tauri.conf.json'))
   const cargoLockMatch =
@@ -156,7 +156,7 @@ test('all CatGo application version surfaces target v1.4.13', () => {
   )
 })
 
-test('VSIX and citation package metadata target v1.4.13', () => {
+test('VSIX and citation package metadata target v1.4.14', () => {
   const vscodePackage = JSON.parse(source('extensions/vscode/package.json'))
   assert.equal(vscodePackage.version, APP_VERSION)
 
@@ -177,10 +177,10 @@ test('the dependency lock remains a pnpm v9 root-importer lock', () => {
   assert.match(lock, /^importers:\n\n  \.:\n/m)
 })
 
-test('the desktop draft release notes describe v1.4.13', () => {
+test('the desktop draft release notes describe v1.4.14', () => {
   const workflow = source('.github/workflows/tauri-build.yml')
 
-  assert.match(workflow, /### New in 1\.4\.13/)
+  assert.match(workflow, /### New in 1\.4\.14/)
   assert.match(workflow, /Packaged backends start reliably on Linux and Windows/)
   assert.match(workflow, /Installed CatBot is complete across supported desktops/)
   assert.match(workflow, /Windows terminal and Campaign workflows are reliable/)

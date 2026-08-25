@@ -150,6 +150,21 @@ def test_scaffold_blank_tree(tmp_path):
     assert not cl.is_submittable(cl.parse_cluster((root / "cluster.md").read_text()))
 
 
+def test_scaffold_writes_utf8_explicitly(tmp_path, monkeypatch):
+    """Windows frozen builds must not fall back to the cp1252 locale codec."""
+    original_write_text = Path.write_text
+
+    def require_utf8(path, data, encoding=None, errors=None, newline=None):
+        assert encoding == "utf-8", f"missing UTF-8 encoding for {path}"
+        return original_write_text(
+            path, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    monkeypatch.setattr(Path, "write_text", require_utf8)
+    root = cl.scaffold_project(tmp_path / "unicode", "IrO₂ → OER", template="blank")
+    assert "IrO₂ → OER" in (root / "README.md").read_text(encoding="utf-8")
+
+
 def test_scaffold_saa_her_seeds_stages(tmp_path):
     root = cl.scaffold_project(tmp_path / "p", "SAA HER", template="saa_her")
     assert (root / "calc" / "01-stability-formation-energy" / "INDEX.md").is_file()

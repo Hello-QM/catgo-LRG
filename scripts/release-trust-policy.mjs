@@ -18,6 +18,7 @@ export const RELEASE_TRUST_POLICY = Object.freeze({
     '411285e85b193b3eb85dbdca7e428cbc97d28752bc89df8d67c572e4c1b4b8a8',
     '7b98d77d6abb48449dcb896a9d6edb3f8a5adee1597b5eddc146f143bea650c8',
     'eb9665abbb3d2debf3708c9e5a90e7d8b0bb434c5b468aefc6fb41a72d1b2140',
+    'e43319135c1169216d2b2be0f0a52d07c796238b9cfcc7697f63a76a689f1cb6',
   ]),
   tauriUpdaterPubkey:
     'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI5QUM5OTQwNjdENjIyMjYKUldRbUl0Wm5RSm1zS2N5L2xiM3VrU2VteUtZSzNySkp6VlZmNmk0UHFoVmNuR2NqZ0ZKNzQzMnoK',
