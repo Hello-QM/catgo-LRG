@@ -844,8 +844,11 @@
     request_trajectory_frame_source = null as
       | ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
       | null,
+    on_trajectory_frame_prepared,
     on_trajectory_frame_presented,
     on_trajectory_buffer_state,
+    external_renderer_owned = false,
+    external_packet_sync_evidence = null as PacketSyncEvidence | null,
     // Upstream base-frame packet. Non-null only while a trajectory owns the
     // visual atom/bond replica path (including 1×1×1).
     render_packet = null as RenderPacket | null,
@@ -1159,9 +1162,15 @@
     request_trajectory_frame_source?: ((
       frame_idx: number,
     ) => Promise<TrajectoryFrameSource | null>) | null
+    on_trajectory_frame_prepared?: (
+      frame_idx: number,
+      positions_version: number,
+      prepared_packet: RenderPacket,
+    ) => void
     on_trajectory_frame_presented?: (
       frame_idx: number,
       positions_version: number,
+      prepared_packet: RenderPacket | null,
     ) => void
     on_trajectory_buffer_state?: (state: {
       frame_idx: number
@@ -1178,6 +1187,11 @@
      *  reactively in the gated effect so toggle-OFF re-fires it and the scene
      *  resumes correctly. Default false ⇒ unchanged WebGL behavior. */
     webgl_suspended?: boolean
+    /** A sibling packet renderer is mounted and will acknowledge the exact
+     * prepared trajectory packet after its GPU upload + draw submission. */
+    external_renderer_owned?: boolean
+    /** Latest GPU-install evidence published by that sibling renderer. */
+    external_packet_sync_evidence?: PacketSyncEvidence | null
     // Cutting plane visualization for Miller slab cutter
     cutting_active?: boolean
     cutting_plane_normal?: Vec3
@@ -1327,7 +1341,11 @@
         bond_count,
       ),
       acknowledge: (frame_idx, positions_version) =>
-        on_trajectory_frame_presented?.(frame_idx, positions_version),
+        on_trajectory_frame_presented?.(
+          frame_idx,
+          positions_version,
+          prepared_render_packet,
+        ),
     })
 
   const prepared_pipeline = create_prepared_frame_pipeline({
@@ -3324,6 +3342,11 @@
           topology_version: raw_packet.topology.version,
           published_at_ms,
         }
+        on_trajectory_frame_prepared?.(
+          prepared.key.frame_idx,
+          prepared.key.positions_version,
+          prepared.packet,
+        )
       } else if (outcome.status === `failed`) {
         report_buffer_failure(outcome.error)
         return
@@ -6046,6 +6069,7 @@
         current_prepared_packet,
         latest_key,
         layer_owned,
+        external_renderer_owned,
         install_direct_prepared_presentation,
       )
     })
@@ -6065,6 +6089,25 @@
       )
     }
   }
+
+  $effect(() => {
+    const evidence = external_packet_sync_evidence
+    if (evidence === null) return
+    untrack(() => {
+      const pending = pending_prepared_presentation
+      const committed = trajectory_presentation_committer
+        .external_renderer_synced(
+          evidence,
+          prepared_render_packet,
+          latest_prepared_request_key,
+        )
+      if (committed && pending !== null) {
+        trajectory_render_diagnostics.record_prepared_to_renderer_sync(
+          performance.now() - pending.published_at_ms,
+        )
+      }
+    })
+  })
 
   // Visual T5 — while the managers consume a render packet, picking is the
   // WebGL2 replica integer-ID pass (gpu-picker-integration packet branch).

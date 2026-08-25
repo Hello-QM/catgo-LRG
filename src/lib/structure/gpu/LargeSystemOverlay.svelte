@@ -49,6 +49,7 @@
     RenderPacket,
     ReplicaSemantics,
   } from '$lib/structure/scene/render-packet'
+  import type { PacketSyncEvidence } from '$lib/structure/trajectory-presentation-commit'
   import { logical_site_for_pick } from '$lib/structure/scene/replica-layout'
   import {
     expand_ordinary_image_table,
@@ -58,6 +59,10 @@
     map_physical_periodic_decoration_to_base,
     type PhysicalPeriodicDecoration,
   } from '$lib/structure/scene/physical-supercell-render-source'
+  import {
+    EMPTY_TRAJECTORY_BOND_GRAPH,
+    matching_trajectory_bond_graph,
+  } from './trajectory-bond-snapshot'
 
   let {
     enabled = false,
@@ -83,12 +88,14 @@
     show_gizmo = DEFAULTS.structure.show_gizmo,
     frame_positions = undefined,
     frame_lattice = undefined,
+    prepared_trajectory_packet = null,
     realtime_position_overrides = null,
     trajectory_positions_version = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
     selected_sites = [],
     on_pick = undefined,
+    on_packet_synced = undefined,
     supercell = [1, 1, 1],
     replica_semantics = `visual-shared-base`,
     physical_site_map = undefined,
@@ -167,6 +174,9 @@
     /** CURRENT frame lattice for variable-cell trajectories (rows a,b,c).
      *  null/undefined falls back to the base structure lattice. */
     frame_lattice?: number[][] | null | undefined
+    /** Exact prepared trajectory snapshot paired with frame_positions. Its bond
+     *  graph is accepted only when both buffers belong to the same frame. */
+    prepared_trajectory_packet?: RenderPacket | null
     /** Transient base-site xyz replacements produced every animation frame
      *  while selected atoms are translated or rotated. These are visual-only
      *  until the interaction controller commits them to `structure`. */
@@ -191,6 +201,10 @@
      *  The parent updates its `selected_sites` from this; the overlay then mirrors
      *  the new selection into the highlight buffer via the `selected_sites` prop. */
     on_pick?: ((site_idx: number) => void) | undefined
+    /** Fired after the exact prepared trajectory packet has been uploaded and
+     * submitted by the WebGPU renderer. StructureScene uses this to advance
+     * playback without installing the same frame into legacy CPU managers. */
+    on_packet_synced?: ((evidence: PacketSyncEvidence) => void) | undefined
     /** GPU supercell factors [nx,ny,nz] (Phase 1). When the product > 1 AND the
      *  structure has a lattice, the parent keeps `structure` at the BASE cell and
      *  the overlay instances `base_count × nx·ny·nz` spheres on the GPU, each
@@ -250,6 +264,8 @@
   // set_supercell / set_show_images fan-out.
   const packet_builder = create_render_packet_builder()
   let last_pushed_packet: RenderPacket | null = null
+  let pending_prepared_packet_sync: RenderPacket | null = null
+  let last_reported_prepared_packet: RenderPacket | null = null
   let last_pushed_atom_images: ImageInstanceTable | null = null
   let last_pushed_decoration_images: ImageInstanceTable | null = null
   const EMPTY_IMAGE_TABLE: ImageInstanceTable = {
@@ -1077,6 +1093,7 @@
     // Only issue a GPU draw when something changed since the last drawn frame.
     let dirty = needs_render
     needs_render = false
+    pending_prepared_packet_sync = null
     // Resolve the publisher exactly once. This snapshot supplies background,
     // shading, colors, and the view transform to every adapter below.
     current_visual_snapshot = visual_state_source?.resolve() ?? null
@@ -1129,8 +1146,9 @@
     // IDENTICAL packet, so this is identity-check cheap on idle frames; a plain
     // frame advance re-uploads only 3N position floats (+ lattice when the cell
     // moved); a supercell/policy change touches only replica state (never the
-    // bond graph). Bond detection stays on the renderer's GPU path — the packet
-    // carries no bond_graph here (set_bond_data below provides the inputs).
+    // bond graph). Prepared trajectory frames are the exception: positions and
+    // the exact graph were produced as one immutable snapshot, so that graph is
+    // attached below instead of being recomputed after presentation.
     if (structure && atom_colors_ready) {
       const dims: [number, number, number] = [
         Math.max(1, Math.floor(supercell?.[0] ?? 1)),
@@ -1180,21 +1198,42 @@
         : null
       const source = direct_source ?? physical_source
       const source_is_preexpanded = physical_source !== null
-      const packet = source
-        ? attach_authoritative_graph(base_packet, source.graph)
+      const trajectory_graph = matching_trajectory_bond_graph(
+        prepared_trajectory_packet,
+        frame_positions,
+        trajectory_step_idx,
+        base_packet.topology.atom_count,
+      )
+      // A prepared packet claims trajectory-bond ownership even during a
+      // transient mismatch. Publishing a packet-owned empty graph clears the
+      // old graph and keeps legacy GPU detection disabled, so coordinates and
+      // bonds from different frames are never mixed.
+      const prepared_packet_present = prepared_trajectory_packet !== null
+      if (trajectory_graph !== null && prepared_trajectory_packet !== null) {
+        pending_prepared_packet_sync = prepared_trajectory_packet
+      }
+      const authoritative_graph = prepared_packet_present
+        ? trajectory_graph ?? EMPTY_TRAJECTORY_BOND_GRAPH
+        : source?.graph ?? null
+      const packet = authoritative_graph
+        ? attach_authoritative_graph(base_packet, authoritative_graph)
         : base_packet
-      const next_authoritative = source !== null
+      const next_authoritative = prepared_packet_present || source !== null
       if (next_authoritative !== authoritative_bonds_active) {
         authoritative_bonds_active = next_authoritative
         bonds_dirty = true
       }
+      // Static frames retain the ordinary boundary-decorator bridge. A
+      // trajectory packet without matching decorator identity uses its exact
+      // graph jimages and never borrows boundary rows from another frame.
+      const decoration_source = prepared_packet_present ? null : source
       const {
         atom_images: packet_atom_images,
         decoration_images: packet_decoration_images,
       } = resolve_periodic_image_tables(
-        source,
+        decoration_source,
         dims,
-        source_is_preexpanded,
+        prepared_packet_present ? false : source_is_preexpanded,
       )
       if (
         packet !== last_pushed_packet ||
@@ -1289,6 +1328,24 @@
 
     if (dirty) {
       renderer.render()
+      const synced = pending_prepared_packet_sync
+      if (synced !== null && synced !== last_reported_prepared_packet) {
+        const graph = synced.topology.bond_graph
+        if (graph) {
+          last_reported_prepared_packet = synced
+          on_packet_synced?.({
+            packet: synced,
+            owner: synced.frame.owner,
+            frame_idx: synced.frame.frame_idx,
+            positions_version: synced.frame.positions_version,
+            topology_version: synced.topology.version,
+            graph_version: graph.version,
+            bond_count: graph.pairs.length / 2,
+            atom_renderer_synced: true,
+            bond_renderer_synced: true,
+          })
+        }
+      }
       stable_frames = 0 // motion this frame ⇒ stay awake
     } else {
       stable_frames++
@@ -1342,6 +1399,8 @@
     // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
     // the (possibly memoized-identical) packet is re-pushed and fully uploads.
     last_pushed_packet = null
+    pending_prepared_packet_sync = null
+    last_reported_prepared_packet = null
     last_pushed_atom_images = null
     last_pushed_decoration_images = null
     authoritative_packet_source = null
@@ -1530,6 +1589,7 @@
     void [
       frame_positions,
       frame_lattice,
+      prepared_trajectory_packet,
       trajectory_positions_version?.v,
       trajectory_step_idx,
     ]

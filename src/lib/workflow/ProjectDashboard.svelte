@@ -687,8 +687,8 @@
                   <div class="wf-info">
                     <span
                       class="wf-status"
-                      style="color: {STATUS_COLORS[ewf.status] ?? `#475569`}"
-                      >{ewf.status.replace(/_/g, ` `)}</span
+                      style="color: {STATUS_COLORS[ewf.display_status] ?? `#475569`}"
+                      >{ewf.display_status.replace(/_/g, ` `)}</span
                     >
                     <span class="wf-progress">{t('workflow.pd_tasks', { n: ewf.task_count.toString() })}</span>
                   </div>

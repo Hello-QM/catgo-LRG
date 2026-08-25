@@ -2,7 +2,12 @@
   import { t } from '$lib/i18n/index.svelte'
   import { WorkflowEditor } from '$lib/workflow'
   import * as api from '$lib/api/workflow'
-  import { list_v2_workflows, type V2WorkflowSummary } from '$lib/api/workflow-v2'
+  import {
+    delete_v2_workflow,
+    delete_v2_workflows,
+    list_v2_workflows,
+    type V2WorkflowSummary,
+  } from '$lib/api/workflow-v2'
   import type { WorkflowSummary, WorkflowTemplate } from '$lib/workflow/workflow-types'
   import ProjectListView from '$lib/workflow/ProjectListView.svelte'
   import ProjectDashboard from '$lib/workflow/ProjectDashboard.svelte'
@@ -135,6 +140,11 @@
   let active_project_id = $state(``)
   let is_loading = $state(false)
   let error = $state(``)
+  let workflow_delete_error = $state(``)
+  let workflow_delete_success = $state(``)
+  let selected_workflow_ids = $state<Set<string>>(new Set())
+  let deleting_workflows = $state(false)
+  let selected_workflow_count = $derived(selected_workflow_ids.size)
 
   // Unified workflow list: merge GUI + engine workflows, sorted by created_at desc
   type UnifiedWorkflow = {
@@ -146,6 +156,11 @@
     created_at: string
     step_count?: number
     completed_steps?: number
+    has_gui: boolean
+    has_engine: boolean
+    engine_status?: string
+    delete_blocked: boolean
+    delete_block_reason?: string | null
   }
 
   const unified_workflows = $derived.by(() => {
@@ -158,14 +173,24 @@
       created_at: wf.created_at,
       step_count: wf.step_count,
       completed_steps: wf.completed_steps,
+      has_gui: true,
+      has_engine: false,
+      // A paused GUI workflow is inactive and may be removed.  A genuinely
+      // running legacy workflow still needs to be stopped first.
+      delete_blocked: [`running`, `resetting`].includes(String(wf.status).toLowerCase()),
     }))
     const engine: UnifiedWorkflow[] = engine_workflows.map((ewf) => ({
       id: ewf.id,
       name: ewf.name,
-      status: ewf.status,
+      status: ewf.display_status,
       source: `Engine` as const,
       task_count: ewf.task_count,
       created_at: ewf.created_at ?? ``,
+      has_gui: false,
+      has_engine: true,
+      engine_status: ewf.status,
+      delete_blocked: ewf.delete_blocked,
+      delete_block_reason: ewf.delete_block_reason,
     }))
     // A uuid present in BOTH DBs (V1 graph_json skin + V2 tasks) is the SAME
     // workflow — dedup by id so it appears once. GUI is listed first so it wins
@@ -173,8 +198,22 @@
     // the keyed {#each ... (wf.id)} below throws each_key_duplicate and crashes the
     // "All Workflows" view.
     const by_id = new Map<string, UnifiedWorkflow>()
-    for (const w of [...gui, ...engine]) {
-      if (!by_id.has(w.id)) by_id.set(w.id, w)
+    for (const w of gui) by_id.set(w.id, w)
+    for (const w of engine) {
+      const existing = by_id.get(w.id)
+      if (existing) {
+        by_id.set(w.id, {
+          ...existing,
+          status: w.status,
+          has_engine: true,
+          engine_status: w.status,
+          task_count: w.task_count,
+          delete_blocked: w.delete_blocked,
+          delete_block_reason: w.delete_block_reason,
+        })
+      } else {
+        by_id.set(w.id, w)
+      }
     }
     return [...by_id.values()].sort((a, b) => {
       if (!a.created_at && !b.created_at) return 0
@@ -183,6 +222,10 @@
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     })
   })
+
+  const deletable_workflows = $derived(
+    unified_workflows.filter(wf => !is_workflow_delete_blocked(wf)),
+  )
 
   // [2025-02] Open specific workflow from sidebar prop or URL hash (?id=xxx)
   $effect(() => {
@@ -234,6 +277,10 @@
     } catch {
       engine_workflows = []
     }
+    const live_ids = new Set(unified_workflows.map(wf => wf.id))
+    selected_workflow_ids = new Set(
+      [...selected_workflow_ids].filter(id => live_ids.has(id)),
+    )
   }
 
   // Wrapper: calls an async function but respects AbortSignal for timeout
@@ -270,22 +317,87 @@
     }
   }
 
-  async function delete_workflow(id: string, source: string) {
-    if (!confirm(t('app.confirm_delete_workflow'))) return
+  function is_workflow_delete_blocked(workflow: UnifiedWorkflow): boolean {
+    return workflow.delete_blocked
+  }
+
+  function set_workflow_selected(workflow_id: string, selected: boolean) {
+    const next = new Set(selected_workflow_ids)
+    if (selected) next.add(workflow_id)
+    else next.delete(workflow_id)
+    selected_workflow_ids = next
+  }
+
+  function toggle_all_deletable_workflows() {
+    const ids = deletable_workflows.map(wf => wf.id)
+    const select_all = ids.some(id => !selected_workflow_ids.has(id))
+    selected_workflow_ids = select_all ? new Set(ids) : new Set()
+  }
+
+  async function delete_backing_workflow(workflow: UnifiedWorkflow) {
+    // A workflow may have both a GUI graph row and an Engine execution row.
+    // Delete both stores so a deduplicated card cannot reappear after refresh.
+    if (workflow.has_engine) await delete_v2_workflow(workflow.id)
+    if (workflow.has_gui) await api.delete_workflow(workflow.id)
+  }
+
+  async function delete_workflow(workflow: UnifiedWorkflow) {
+    if (is_workflow_delete_blocked(workflow)) {
+      workflow_delete_error = t('app.stop_workflow_before_delete')
+      return
+    }
+    if (!confirm(`${t('app.confirm_delete_workflow')}\n${workflow.name}`)) return
+    workflow_delete_error = ``
+    workflow_delete_success = ``
     try {
-      if (source === `Engine`) {
-        // Engine (workflow-v2) workflows have no delete endpoint, and the
-        // delete button is only rendered for GUI workflows, so this branch
-        // is currently unreachable. Guard explicitly rather than call a
-        // non-existent API.
-        throw new Error(t('app.delete_engine_unsupported'))
-      } else {
-        await api.delete_workflow(id)
-      }
-      load_list()
+      await delete_backing_workflow(workflow)
+      set_workflow_selected(workflow.id, false)
+      await load_list()
+      workflow_delete_success = t('app.workflow_deleted', { name: workflow.name })
       ondbchange?.()
     } catch (err) {
-      error = String(err)
+      workflow_delete_error = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function delete_selected_workflows() {
+    if (deleting_workflows) return
+    const selected = unified_workflows.filter(wf => selected_workflow_ids.has(wf.id))
+    if (selected.length === 0) return
+    if (selected.some(is_workflow_delete_blocked)) {
+      workflow_delete_error = t('app.stop_workflow_before_delete')
+      return
+    }
+
+    const preview_limit = 8
+    const preview = selected.slice(0, preview_limit).map(wf => `• ${wf.name}`).join(`\n`)
+    const remainder = selected.length > preview_limit
+      ? `\n${t('app.and_more_workflows', { count: String(selected.length - preview_limit) })}`
+      : ``
+    const message = `${t('app.confirm_delete_workflows', { count: String(selected.length) })}\n\n${preview}${remainder}`
+    if (!confirm(message)) return
+
+    deleting_workflows = true
+    workflow_delete_error = ``
+    workflow_delete_success = ``
+    let deleted = false
+    try {
+      const engine_ids = selected.filter(wf => wf.has_engine).map(wf => wf.id)
+      if (engine_ids.length > 0) await delete_v2_workflows(engine_ids)
+      for (const workflow of selected) {
+        if (workflow.has_gui) await api.delete_workflow(workflow.id)
+      }
+      selected_workflow_ids = new Set()
+      deleted = true
+      ondbchange?.()
+    } catch (err) {
+      workflow_delete_error = err instanceof Error ? err.message : String(err)
+    } finally {
+      await load_list()
+      deleting_workflows = false
+    }
+    if (deleted) {
+      workflow_delete_success = t('app.workflows_deleted', { count: String(selected.length) })
     }
   }
 
@@ -448,8 +560,50 @@
             <p>{t('app.no_workflows_yet')}</p>
           </div>
         {:else}
+          <div class="workflow-bulk-bar">
+            <label class="workflow-select-all">
+              <input
+                type="checkbox"
+                checked={deletable_workflows.length > 0 && deletable_workflows.every(wf => selected_workflow_ids.has(wf.id))}
+                disabled={deleting_workflows || deletable_workflows.length === 0}
+                onchange={toggle_all_deletable_workflows}
+              />
+              <span>{t('app.select_all_deletable_workflows')}</span>
+            </label>
+            <span class="workflow-selected-count">
+              {t('app.workflows_selected', { count: String(selected_workflow_count) })}
+            </span>
+            {#if selected_workflow_count > 0}
+              <button
+                class="workflow-clear-selection"
+                disabled={deleting_workflows}
+                onclick={() => { selected_workflow_ids = new Set() }}
+              >{t('app.clear_selection')}</button>
+              <button
+                class="workflow-delete-selected"
+                disabled={deleting_workflows}
+                onclick={delete_selected_workflows}
+              >{deleting_workflows ? t('app.deleting_workflows') : t('app.delete_selected_workflows')}</button>
+            {/if}
+          </div>
+          {#if workflow_delete_error}
+            <div class="workflow-delete-feedback error" role="alert">{workflow_delete_error}</div>
+          {:else if workflow_delete_success}
+            <div class="workflow-delete-feedback success" role="status">{workflow_delete_success}</div>
+          {/if}
           <div class="workflow-list">
-            {#each unified_workflows as wf (wf.id)}              <div class="workflow-card">
+            {#each unified_workflows as wf (wf.id)}
+              <div class="workflow-card" class:selected={selected_workflow_ids.has(wf.id)}>
+                <input
+                  class="workflow-card-checkbox"
+                  type="checkbox"
+                  checked={selected_workflow_ids.has(wf.id)}
+                  disabled={deleting_workflows || is_workflow_delete_blocked(wf)}
+                  aria-label={t('app.select_workflow', { name: wf.name })}
+                  title={is_workflow_delete_blocked(wf) ? t('app.stop_workflow_before_delete') : t('app.select_workflow', { name: wf.name })}
+                  onclick={(e) => e.stopPropagation()}
+                  onchange={(e) => set_workflow_selected(wf.id, (e.currentTarget as HTMLInputElement).checked)}
+                />
                 <button class="workflow-card-main" onclick={() => {
                   if (wf.source === `Engine`) {
                     v2_workflow_id = wf.id; v2_selected_task = null; view = `v2_dag`
@@ -477,16 +631,16 @@
                     {/if}
                   </div>
                 </button>
-                {#if wf.source === `GUI`}
-                  <button class="wf-delete" onclick={() => {
-                    const orig = workflows.find(w => w.id === wf.id)
-                    if (orig) delete_workflow(orig.id, `GUI`)
-                  }} title={t('common.delete')}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                    </svg>
-                  </button>
-                {/if}
+                <button
+                  class="wf-delete"
+                  disabled={deleting_workflows || is_workflow_delete_blocked(wf)}
+                  onclick={() => delete_workflow(wf)}
+                  title={is_workflow_delete_blocked(wf) ? t('app.stop_workflow_before_delete') : t('common.delete')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                  </svg>
+                </button>
               </div>
             {/each}
           </div>
@@ -847,6 +1001,89 @@
     gap: 8px;
   }
 
+  .workflow-bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--surface-bg);
+    font-size: 11px;
+    color: var(--text-color-muted, #94a3b8);
+  }
+
+  .workflow-delete-feedback {
+    padding: 7px 10px;
+    margin: -4px 0 10px;
+    border-radius: 6px;
+    font-size: 11px;
+  }
+
+  .workflow-delete-feedback.error {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .workflow-delete-feedback.success {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+
+  .workflow-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+  .workflow-select-all input,
+  .workflow-card-checkbox {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent-color, #3b82f6);
+    cursor: pointer;
+  }
+
+  .workflow-select-all input:disabled,
+  .workflow-card-checkbox:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .workflow-selected-count {
+    flex: 1;
+  }
+
+  .workflow-clear-selection,
+  .workflow-delete-selected {
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .workflow-delete-selected {
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+  }
+
+  .workflow-clear-selection:hover:not(:disabled) {
+    background: var(--surface-bg-hover);
+  }
+
+  .workflow-delete-selected:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.1);
+  }
+
   .workflow-card {
     display: flex;
     align-items: center;
@@ -859,6 +1096,16 @@
 
   .workflow-card:hover {
     border-color: var(--surface-bg-hover);
+  }
+
+  .workflow-card.selected {
+    border-color: var(--accent-color, #3b82f6);
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 8%, var(--surface-bg));
+  }
+
+  .workflow-card-checkbox {
+    flex: 0 0 14px;
+    margin-left: 14px;
   }
 
   .workflow-card-main {
@@ -931,6 +1178,10 @@
     background: rgba(59, 130, 246, 0.2);
     color: #60a5fa;
   }
+  .wf-status.check {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+  }
   .wf-status.completed {
     background: rgba(34, 197, 94, 0.2);
     color: #4ade80;
@@ -960,6 +1211,16 @@
   .wf-delete:hover {
     color: #ef4444;
     background: rgba(239, 68, 68, 0.1);
+  }
+
+  .wf-delete:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .wf-delete:disabled:hover {
+    color: var(--text-color-muted);
+    background: none;
   }
 
   /* Content area wrapper (left column when right panel active) */

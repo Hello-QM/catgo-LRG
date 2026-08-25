@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { apply_freeze_to_structure } from '../freeze'
+import {
+  apply_freeze_to_structure,
+  apply_manual_frozen_indices,
+  frozen_layer_count,
+  frozen_indices_from_structure,
+  normalize_freeze_params,
+} from '../freeze'
 
 /**
  * Behavior-lock tests for apply_freeze_to_structure (issue #222).
@@ -81,6 +87,56 @@ describe(`apply_freeze_to_structure`, () => {
     expect(flags[3]).toEqual([true, true, true])
   })
 
+  it(`uses a positive legacy layer count over an injected canonical zero`, () => {
+    const params = { frozen_layers: 0, freeze_mode: `bottom`, freeze_n_layers: 2 }
+    expect(frozen_layer_count(params)).toBe(2)
+    expect(sd(apply_freeze_to_structure(make_slab(), params)!)).toEqual([
+      [false, false, false],
+      [false, false, false],
+      [true, true, true],
+      [true, true, true],
+    ])
+  })
+
+  it(`normalizes legacy geo_opt aliases to the canonical field`, () => {
+    expect(normalize_freeze_params(`geo_opt`, {
+      frozen_layers: 0,
+      freeze_mode: `bottom`,
+      freeze_n_layers: 2,
+    })).toEqual({ frozen_layers: 2, freeze_mode: `bottom` })
+  })
+
+  it(`preserves an upstream manual constraint set for geo_opt`, () => {
+    const slab = JSON.parse(make_slab())
+    slab.sites.forEach((site: any, index: number) => {
+      const free = index >= 2
+      site.properties.selective_dynamics = [free, free, free]
+    })
+    const input = JSON.stringify(slab)
+
+    const inherited = apply_freeze_to_structure(input, {
+      freeze_mode: `bottom`,
+      frozen_layers: 1,
+    })
+    expect(inherited).toBe(input)
+    expect(frozen_indices_from_structure(inherited)).toEqual([0, 1])
+  })
+
+  it(`replaces upstream constraints after an explicit geo_opt override`, () => {
+    const slab = JSON.parse(make_slab())
+    slab.sites.forEach((site: any, index: number) => {
+      const free = index >= 2
+      site.properties.selective_dynamics = [free, free, free]
+    })
+
+    const overridden = apply_freeze_to_structure(JSON.stringify(slab), {
+      freeze_mode: `bottom`,
+      frozen_layers: 1,
+      override_structure_constraints: true,
+    })
+    expect(frozen_indices_from_structure(overridden)).toEqual([0])
+  })
+
   it(`returns the input unchanged when no freeze params are given`, () => {
     const input = make_slab()
     const out = apply_freeze_to_structure(input, {})
@@ -127,5 +183,17 @@ describe(`apply_freeze_to_structure`, () => {
     expect(flags[1]).toEqual([false, false, false])
     expect(flags[2]).toEqual([false, false, false])
     expect(flags[3]).toEqual([false, false, false])
+  })
+
+  it(`round-trips a manual frozen selection for the editor preview`, () => {
+    const out = apply_manual_frozen_indices(make_slab(), [0, 2])
+    expect(out).not.toBeNull()
+    expect(frozen_indices_from_structure(out)).toEqual([0, 2])
+    expect(sd(out!)).toEqual([
+      [false, false, false],
+      [true, true, true],
+      [false, false, false],
+      [true, true, true],
+    ])
   })
 })

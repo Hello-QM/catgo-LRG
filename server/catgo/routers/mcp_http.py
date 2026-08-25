@@ -269,7 +269,11 @@ async def _dispatch(name: str, arguments: dict) -> list[TextContent]:
         _push_structure_direct,
     )
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Every request made by this client targets CatGo's own loopback API.
+        # Inheriting a user's HTTP(S)/SOCKS proxy is both unnecessary and can
+        # make even local-only tools (for example catgo_skills) fail before
+        # dispatch when the optional SOCKS transport is not installed.
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
             if name == "catgo_structure":
                 return await _handle_structure(client, arguments)
             elif name == "catgo_pane":

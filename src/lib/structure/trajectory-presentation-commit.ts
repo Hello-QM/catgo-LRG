@@ -49,11 +49,17 @@ export type TrajectoryPresentationCommitter = {
     current_prepared_packet: RenderPacket | null,
     latest_key: PreparedFrameKey | null,
     layer_owned: boolean,
+    external_renderer_owned: boolean,
     install_direct: (presentation: PreparedPresentationIdentity) => void,
   ): PresentationReconcileResult
   renderer_synced(
     evidence: PacketSyncEvidence,
     current_display_packet: RenderPacket | null,
+    current_prepared_packet: RenderPacket | null,
+    latest_key: PreparedFrameKey | null,
+  ): boolean
+  external_renderer_synced(
+    evidence: PacketSyncEvidence,
     current_prepared_packet: RenderPacket | null,
     latest_key: PreparedFrameKey | null,
   ): boolean
@@ -135,6 +141,7 @@ export function create_trajectory_presentation_committer(
       current_prepared_packet,
       latest_key,
       layer_owned,
+      external_renderer_owned,
       install_direct,
     ) {
       if (!is_current(
@@ -149,6 +156,13 @@ export function create_trajectory_presentation_committer(
         current_display_packet.topology.bond_graph ===
           presentation.prepared_packet.topology.bond_graph
       ) return `renderer`
+
+      // The WebGPU overlay is a sibling of StructureScene. It consumes the
+      // exact prepared packet through the parent bridge and reports its own
+      // installation evidence asynchronously. While that renderer is alive,
+      // wait for its acknowledgement instead of copying 3N coordinates and a
+      // JS bond-object graph into the legacy managers on every frame.
+      if (external_renderer_owned) return `renderer`
 
       if (
         last_direct_install === null ||
@@ -185,6 +199,34 @@ export function create_trajectory_presentation_committer(
         evidence.frame_idx !== frame.frame_idx ||
         evidence.positions_version !== frame.positions_version ||
         evidence.topology_version !== current_display_packet.topology.version ||
+        evidence.graph_version !== graph.version ||
+        evidence.bond_count !== graph.bond_count ||
+        evidence.bond_count !== presentation.bond_count
+      ) return false
+
+      return acknowledge(presentation, true)
+    },
+    external_renderer_synced(
+      evidence,
+      current_prepared_packet,
+      latest_key,
+    ) {
+      const presentation = latest
+      if (
+        presentation === null ||
+        !is_current(presentation, current_prepared_packet, latest_key) ||
+        evidence.packet !== presentation.prepared_packet ||
+        (!evidence.atom_renderer_synced && !evidence.bond_renderer_synced)
+      ) return false
+
+      const packet = presentation.prepared_packet
+      const frame = packet.frame
+      const graph = packet_graph_identity(packet)
+      if (
+        evidence.owner !== frame.owner ||
+        evidence.frame_idx !== frame.frame_idx ||
+        evidence.positions_version !== frame.positions_version ||
+        evidence.topology_version !== packet.topology.version ||
         evidence.graph_version !== graph.version ||
         evidence.bond_count !== graph.bond_count ||
         evidence.bond_count !== presentation.bond_count

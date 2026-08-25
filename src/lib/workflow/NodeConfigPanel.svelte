@@ -242,6 +242,12 @@
 
   function update_param(key: string, value: unknown) {
     const next = { ...node.params, [key]: value }
+    // Structure-level Selective Dynamics is inherited by default. Changing
+    // this geo_opt field is the explicit signal that this node should replace
+    // the upstream constraint set instead of merely displaying it.
+    if (node.type === `geo_opt` && key === `frozen_layers`) {
+      next.override_structure_constraints = true
+    }
     emit(next)
   }
 
@@ -458,6 +464,14 @@
         {:else}
           <div class="freeze-count freeze-count-empty">{t('workflow.config_no_atoms_frozen')}</div>
         {/if}
+      </div>
+    {:else if node.params.freeze_mode && node.params.freeze_mode !== `none`}
+      <!-- Allow recipe-generated modes (and legacy mixed-state nodes) to be
+           materialized and refined in 3D without clearing their constraints. -->
+      <div class="freeze-edit-section">
+        <button class="freeze-edit-btn" onclick={() => onfreeze_edit?.()}>
+          {t('workflow.config_select_frozen_atoms')}
+        </button>
       </div>
     {/if}
     {#if node.params.freeze_mode && node.params.freeze_mode !== `none`}

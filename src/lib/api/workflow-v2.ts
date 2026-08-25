@@ -3,8 +3,19 @@ import { API_BASE } from './config'
 import { isMobile } from './transport'
 
 async function handle<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`)
+  if (!r.ok) throw new Error(await response_error_message(r))
   return r.json()
+}
+
+async function response_error_message(response: Response): Promise<string> {
+  const text = await response.text()
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown }
+    if (typeof parsed.detail === 'string') return parsed.detail
+  } catch {
+    // Plain-text response; use it below.
+  }
+  return text || `Request failed (${response.status})`
 }
 
 // --- Workflows ---
@@ -13,6 +24,9 @@ export interface V2WorkflowSummary {
   id: string
   name: string
   status: string
+  display_status: string
+  delete_blocked: boolean
+  delete_block_reason: string | null
   created_at: string | null
   updated_at: string | null
   task_count: number
@@ -55,6 +69,24 @@ export interface V2DAG {
 
 export async function list_v2_workflows(): Promise<V2WorkflowSummary[]> {
   return handle(await fetch(`${API_BASE}/engine/workflows`))
+}
+
+export async function delete_v2_workflow(workflow_id: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/engine/workflows/${encodeURIComponent(workflow_id)}`,
+    { method: 'DELETE' },
+  )
+  if (!response.ok) throw new Error(await response_error_message(response))
+}
+
+export async function delete_v2_workflows(
+  workflow_ids: string[],
+): Promise<{ deleted_ids: string[]; deleted_count: number }> {
+  return handle(await fetch(`${API_BASE}/engine/workflows/batch-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workflow_ids }),
+  }))
 }
 
 export async function list_v2_workflows_for_project(project_id: string): Promise<V2WorkflowSummary[]> {

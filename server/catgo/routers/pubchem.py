@@ -44,7 +44,10 @@ class CompoundSearchResponse(BaseModel):
 
 async def fetch_json(url: str) -> dict:
     """Fetch JSON from URL with error handling."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    # Agent-provider proxy variables belong to CatBot, not public chemistry
+    # database traffic. In particular, inheriting ALL_PROXY can make client
+    # construction require the optional socksio package.
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         response = await client.get(url, follow_redirects=True)
         response.raise_for_status()
         return response.json()
@@ -52,7 +55,7 @@ async def fetch_json(url: str) -> dict:
 
 async def fetch_text(url: str) -> str:
     """Fetch text from URL with error handling."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         response = await client.get(url, follow_redirects=True)
         response.raise_for_status()
         return response.text

@@ -7,6 +7,7 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
+  import { apply_terminal_font_options, guard_terminal_dimensions, TERMINAL_REFLOW_CURSOR_LINE } from './terminal-fit'
   import { open_terminal_click } from './terminal-path-nav'
 
   let {
@@ -60,8 +61,8 @@
   let pty_ref = $state<PtySession | null>(null)
   /** Module-level xterm ref for reactive theme updates. */
   let term_ref: any = null
-  /** Module-level fit addon ref for reactive font updates. */
-  let fit_ref: any = null
+  /** Module-level guarded fit callback for reactive font updates. */
+  let fit_ref: (() => void) | null = null
   /** Current working directory tracked via OSC 7 — used to resolve relative file paths. */
   let current_cwd = $state(``)
   /** Monotonic sequence counter for CWD broadcasts — receivers discard stale messages. */
@@ -215,7 +216,7 @@
     if (!container_el) return
 
     let terminal: any = null
-    let fit_addon: any = null
+    let fit_terminal: (() => void) | null = null
     let observer: ResizeObserver | null = null
     let vis_observer: IntersectionObserver | null = null
     let pty_session: PtySession | null = null
@@ -246,6 +247,11 @@
           cursorBlink: true,
           fontSize: terminal_font_state.font_size,
           fontFamily: terminal_font_state.font_family,
+          // Codex and similar inline TUIs keep their visible transcript in the
+          // cursor's wrapped-line group. xterm excludes that group from resize
+          // reflow by default, so increasing the font size permanently trims
+          // the right-hand cells. Preserve and reflow it like normal scrollback.
+          reflowCursorLine: TERMINAL_REFLOW_CURSOR_LINE,
           theme: {
             background: term_bg,
             foreground: term_fg,
@@ -294,6 +300,19 @@
         if (disposed) { term.dispose(); return }
 
         term.open(container_el!)
+
+        // FitAddon assumes a fixed 14px scrollbar. Native scrollbar widths vary
+        // across OS/display-scale/browser combinations, which can leave the last
+        // PTY column hidden underneath the scrollbar. Use its proposed geometry,
+        // then reserve two complete cells (one CJK/full-width glyph) at the edge.
+        fit_terminal = () => {
+          const proposed = fit.proposeDimensions?.()
+          if (!proposed || Number.isNaN(proposed.cols) || Number.isNaN(proposed.rows)) return
+          const guarded = guard_terminal_dimensions(proposed)
+          if (term.cols !== guarded.cols || term.rows !== guarded.rows) {
+            term.resize(guarded.cols, guarded.rows)
+          }
+        }
 
         // File path link provider — must be registered AFTER term.open() so xterm's
         // link detection infrastructure is initialized (xterm v6 requirement).
@@ -345,7 +364,7 @@
 
         // Delay initial fit until the container is laid out (avoids wrong column count)
         await new Promise<void>((resolve) => requestAnimationFrame(() => {
-          if (!disposed) fit.fit()
+          if (!disposed) fit_terminal?.()
           resolve()
         }))
         if (disposed) { term.dispose(); return }
@@ -422,8 +441,7 @@
         terminal = term
         term_ref = term
         term.textarea?.addEventListener('focus', () => mark_terminal_active(panel_id))
-        fit_addon = fit
-        fit_ref = fit
+        fit_ref = fit_terminal
 
         // Register resize handler BEFORE spawning PTY to avoid missing resize
         // events that fire during the async spawnPty() call
@@ -650,8 +668,8 @@
         // Auto-resize on container size change
         observer = new ResizeObserver(() => {
           requestAnimationFrame(() => {
-            if (!disposed && fit_addon) {
-              try { fit_addon.fit() } catch { /* ignore */ }
+            if (!disposed && fit_terminal) {
+              try { fit_terminal() } catch { /* ignore */ }
             }
           })
         })
@@ -663,10 +681,10 @@
         vis_observer = new IntersectionObserver((entries) => {
           if (disposed) return
           for (const entry of entries) {
-            if (entry.isIntersecting && fit_addon) {
+            if (entry.isIntersecting && fit_terminal) {
               requestAnimationFrame(() => {
                 if (!disposed) {
-                  try { fit_addon.fit() } catch { /* ignore */ }
+                  try { fit_terminal?.() } catch { /* ignore */ }
                 }
               })
             }
@@ -699,7 +717,7 @@
         }
 
         // Final fit to guarantee PTY and terminal are in sync
-        try { fit.fit() } catch { /* ignore */ }
+        try { fit_terminal?.() } catch { /* ignore */ }
 
         // Robust re-fit: on Windows (especially new Tauri windows), the container
         // may not have valid dimensions yet. Retry fit() with increasing delays.
@@ -709,7 +727,7 @@
           try {
             const el = container_el
             if (el && el.clientWidth > 0 && el.clientHeight > 0) {
-              fit.fit()
+              fit_terminal?.()
               // Sync PTY if dimensions changed
               if (term.cols > 0 && term.rows > 0) {
                 session.resize(term.cols, term.rows).catch(() => {})
@@ -809,11 +827,13 @@
     const size = terminal_font_state.font_size
     const family = terminal_font_state.font_family
     if (!term_ref) return
-    term_ref.options.fontSize = size
-    term_ref.options.fontFamily = family
+    // Re-assert reflowCursorLine here as well as in the constructor. Dev HMR
+    // preserves existing xterm instances, so an older open tab would otherwise
+    // keep the former default and still trim CJK cells at a wrap boundary.
+    apply_terminal_font_options(term_ref.options, size, family)
     // Re-fit after font change to recalculate column/row count
     requestAnimationFrame(() => {
-      try { fit_ref?.fit() } catch { /* ignore */ }
+      try { fit_ref?.() } catch { /* ignore */ }
     })
   })
 </script>
@@ -1102,20 +1122,24 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    /* Terminal is always dark (#0e1117); match it so the left inset/padding
-       below doesn't show as a light strip in light mode. */
+    /* Terminal is always dark (#0e1117); match it so the left inset below
+       doesn't show as a light strip in light mode. */
     background: #0e1117;
-    /* Small left inset so the xterm content isn't flush against the pane edge
-       / the side-by-side divider (the first column read as clipped). FitAddon
-       measures the content box, so this shifts the grid right without overflow. */
-    padding-left: 8px;
   }
-  /* Ensure xterm fills the container */
-  .terminal-container :global(.xterm),
+  /* Keep the small horizontal inset on xterm itself. FitAddon subtracts padding from
+     the xterm element, but not padding from its parent. Keeping the inset on
+     the parent made FitAddon overestimate the usable width by 8px and placed
+     the final column underneath the vertical scrollbar. The right inset also
+     keeps glyph antialiasing clear of the scrollbar's edge. */
+  .terminal-container :global(.xterm) {
+    height: 100%;
+    width: 100%;
+    padding-inline: 8px;
+  }
+  /* xterm owns the screen width; only force the vertical fill here. */
   .terminal-container :global(.xterm-viewport),
   .terminal-container :global(.xterm-screen) {
     height: 100%;
-    width: 100%;
   }
   .terminal-error {
     color: #ff6b6b;

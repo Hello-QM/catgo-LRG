@@ -343,6 +343,44 @@ function handle_validate_workflow(tab_id: string): string {
     }
   }
 
+  // Surface free-energy workflows need one shared relaxed clean slab before
+  // adsorbate placement.  Mirror the backend guard here so CatBot can explain
+  // and repair the graph before the user reaches Run.
+  const graph_types = new Set(nodes.map(node => node.type))
+  if ([`slab_gen`, `adsorbate_place`, `free_energy`].every(type => graph_types.has(type))) {
+    const node_by_id = new Map(nodes.map(node => [node.id, node]))
+    const parents = new Map(nodes.map(node => [node.id, [] as string[]]))
+    for (const edge of edges) parents.get(edge.to)?.push(edge.from)
+    const ancestors = (node_id: string): Set<string> => {
+      const seen = new Set<string>()
+      const stack = [...(parents.get(node_id) ?? [])]
+      while (stack.length > 0) {
+        const current = stack.pop()!
+        if (seen.has(current)) continue
+        seen.add(current)
+        stack.push(...(parents.get(current) ?? []))
+      }
+      return seen
+    }
+    const slab_ids = new Set(nodes.filter(node => node.type === `slab_gen`).map(node => node.id))
+    for (const adsorbate of nodes.filter(node => node.type === `adsorbate_place`)) {
+      const upstream = ancestors(adsorbate.id)
+      const has_clean_slab_opt = [...upstream].some(candidate_id => {
+        const candidate = node_by_id.get(candidate_id)
+        if (!candidate || ![`geo_opt`, `vasp_relax`, `slab_relax`, `mlp_relax`].includes(candidate.type)) return false
+        const candidate_upstream = ancestors(candidate_id)
+        return [...candidate_upstream].some(id => slab_ids.has(id))
+          && [...candidate_upstream].every(id => node_by_id.get(id)?.type !== `adsorbate_place`)
+      })
+      if (!has_clean_slab_opt) {
+        errors.push(
+          `Adsorbate node "${adsorbate.label}" (${adsorbate.id}) does not consume a relaxed clean slab. `
+          + `Add slab_gen → geo_opt → adsorbate_place.`,
+        )
+      }
+    }
+  }
+
   // Check: orphaned nodes (no edges at all)
   const nodes_with_edges = new Set([
     ...edges.map(e => e.from),

@@ -42,5 +42,14 @@ const sidebar: Record<string, string> = {
   new_project_folder: `New project folder`,
   no_project_folders: `No project folders yet. Click + to create one.`,
   unassigned: `Unassigned`,
+  select_workflow: `Select workflow {name}`,
+  workflows_selected: `{count} selected`,
+  clear_selection: `Clear`,
+  delete_selected_workflows: `Delete selected`,
+  delete_selected_workflows_count: `Delete selected ({count})`,
+  deleting_workflows: `Deleting...`,
+  confirm_delete_workflows: `Delete {count} selected workflows? This cannot be undone.`,
+  and_more_workflows: `...and {count} more`,
+  failed_delete_workflows: `Could not delete {failed} of {total} selected workflows. The failed items remain selected.`,
 }
 export default sidebar

@@ -89,7 +89,10 @@ class SearchRequest(BaseModel):
 
 async def fetch_json(url: str) -> dict:
     """Fetch JSON from URL with error handling."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    # CatGo may be launched from a shell that carries Codex/Claude proxy
+    # variables, including an optional SOCKS proxy. Public database access is
+    # independent of that agent configuration, so do not inherit it here.
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False) as client:
         response = await client.get(
             url,
             headers={"Accept": "application/vnd.api+json"},

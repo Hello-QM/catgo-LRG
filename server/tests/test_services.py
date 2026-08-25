@@ -384,6 +384,61 @@ class TestValidateGraph:
         alias_errors = [e for e in errors if "vasp_relax" in e]
         assert alias_errors == []
 
+    def test_surface_free_energy_rejects_unrelaxed_clean_slab(self):
+        graph = {
+            "nodes": [
+                {"id": "si", "type": "structure_input"},
+                {"id": "slab", "type": "slab_gen"},
+                {"id": "ads", "type": "adsorbate_place"},
+                {"id": "ads_opt", "type": "geo_opt"},
+                {"id": "freq", "type": "freq"},
+                {"id": "fe", "type": "free_energy"},
+            ],
+            "edges": [
+                {"id": "e1", "from": "si", "to": "slab"},
+                {"id": "e2", "from": "slab", "to": "ads"},
+                {"id": "e3", "from": "ads", "to": "ads_opt"},
+                {"id": "e4", "from": "ads_opt", "to": "freq"},
+                {"id": "e5", "from": "freq", "to": "fe"},
+            ],
+        }
+
+        errors, _ = _validate_graph(graph)
+
+        assert any("does not consume a relaxed clean slab" in error for error in errors)
+
+    def test_surface_free_energy_accepts_shared_relaxed_clean_slab(self):
+        graph = {
+            "nodes": [
+                {"id": "si", "type": "structure_input"},
+                {"id": "slab", "type": "slab_gen"},
+                {"id": "slab_opt", "type": "geo_opt"},
+                {"id": "ads_oh", "type": "adsorbate_place"},
+                {"id": "ads_o", "type": "adsorbate_place"},
+                {"id": "opt_oh", "type": "geo_opt"},
+                {"id": "opt_o", "type": "geo_opt"},
+                {"id": "freq_oh", "type": "freq"},
+                {"id": "freq_o", "type": "freq"},
+                {"id": "fe", "type": "free_energy"},
+            ],
+            "edges": [
+                {"id": "e1", "from": "si", "to": "slab"},
+                {"id": "e2", "from": "slab", "to": "slab_opt"},
+                {"id": "e3", "from": "slab_opt", "to": "ads_oh"},
+                {"id": "e4", "from": "slab_opt", "to": "ads_o"},
+                {"id": "e5", "from": "ads_oh", "to": "opt_oh"},
+                {"id": "e6", "from": "ads_o", "to": "opt_o"},
+                {"id": "e7", "from": "opt_oh", "to": "freq_oh"},
+                {"id": "e8", "from": "opt_o", "to": "freq_o"},
+                {"id": "e9", "from": "freq_oh", "to": "fe"},
+                {"id": "e10", "from": "freq_o", "to": "fe"},
+            ],
+        }
+
+        errors, _ = _validate_graph(graph)
+
+        assert not any("relaxed clean slab" in error for error in errors)
+
 
 # ====== _graph_snapshot ======
 

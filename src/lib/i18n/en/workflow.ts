@@ -608,6 +608,7 @@ const workflow: Record<string, string> = {
   generated_count: `Generated ({n})`,
   save_all_and_close: `Save All & Close`,
   frozen_free_count: `<strong>{frozen}</strong> frozen / <strong>{free}</strong> free`,
+  freeze_visual_hint: `Colored rings = fixed (F); no ring = free (T)`,
   freeze_selected_count: `Freeze Selected ({n})`,
   unfreeze_selected: `Unfreeze Selected`,
   recommend_adsorbate_place_edit: `Recommend to edit this structure in Adsorbate Place panel below`,

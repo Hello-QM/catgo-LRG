@@ -34,4 +34,12 @@ describe(`build_sdk_system_prompt unicode_math`, () => {
     expect(prompt).toMatch(/UNICODE characters/)
     expect(prompt).not.toMatch(/Use LaTeX/)
   })
+
+  it(`distinguishes in-app MCP transport from the external reverse tunnel`, () => {
+    const prompt = build_sdk_system_prompt(`sdk-codex`)
+    expect(prompt).toMatch(/IN-APP SDK session/)
+    expect(prompt).toMatch(/derive the base from CATGO_API/)
+    expect(prompt).toMatch(/closed or empty structure pane is not evidence/i)
+    expect(prompt).toMatch(/Never export an arbitrary active pane/)
+  })
 })

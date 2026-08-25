@@ -18,7 +18,12 @@
   import NodeConfigPanel from './NodeConfigPanel.svelte'
   import NodeStatusPanel from './NodeStatusPanel.svelte'
   import SlabGenPreview from './SlabGenPreview.svelte'
-  import { apply_freeze_to_structure } from './freeze'
+  import {
+    apply_freeze_to_structure,
+    apply_manual_frozen_indices,
+    frozen_indices_from_structure,
+    normalize_freeze_params,
+  } from './freeze'
   import CalcStructurePreview from './CalcStructurePreview.svelte'
   import BatchPanel from './BatchPanel.svelte'
   import GestureProvider from '$lib/gesture/GestureProvider.svelte'
@@ -587,22 +592,32 @@
   let freeze_edit_node_id = $state<string | null>(null)
   let freeze_edit_frozen = $state<Set<number>>(new Set())
 
-  function open_freeze_dialog(node_id: string) {
+  async function open_freeze_dialog(node_id: string) {
     const nd = nodes.find(n => n.id === node_id)
     if (!nd) return
 
-    // Parse existing frozen indices
-    const existing = String(nd.params.freeze_indices ?? ``)
-    const frozen = new Set<number>()
-    for (const part of existing.split(`,`)) {
-      const trimmed = part.trim()
-      if (!trimmed) continue
-      if (trimmed.includes(`-`)) {
-        const [a, b] = trimmed.split(`-`).map(Number)
-        for (let i = a; i <= b; i++) frozen.add(i)
-      } else {
-        const n = parseInt(trimmed)
-        if (!isNaN(n)) frozen.add(n)
+    // Materialize the active freeze mode onto the upstream structure.  Reading
+    // freeze_indices alone is wrong for the normal adsorbate/layer modes and
+    // made the toolbar disagree with what VASP would actually receive.
+    const input_json = resolve_input_structure(node_id)
+    const effective_json = apply_freeze_to_structure(input_json, nd.params)
+    const frozen = new Set(frozen_indices_from_structure(effective_json))
+
+    // Backward compatibility for old nodes that stored indices without also
+    // switching freeze_mode to manual.
+    if (frozen.size === 0 && nd.params.freeze_indices) {
+      for (const part of String(nd.params.freeze_indices).split(`,`)) {
+        const trimmed = part.trim()
+        if (!trimmed) continue
+        if (trimmed.includes(`-`)) {
+          const [a, b] = trimmed.split(`-`).map(Number)
+          if (Number.isFinite(a) && Number.isFinite(b)) {
+            for (let i = a; i <= b; i++) frozen.add(i)
+          }
+        } else {
+          const index = parseInt(trimmed)
+          if (!isNaN(index)) frozen.add(index)
+        }
       }
     }
     freeze_edit_node_id = node_id
@@ -610,14 +625,43 @@
     freeze_edit_active = true
 
     // Open the 3D editor with the upstream structure
-    open_structure_edit_3d(node_id, `input`)
+    await open_structure_edit_3d(node_id, `input`)
+    // The input is read-only geometrically, but its constraint overlay is an
+    // editable preview.  Show exactly the flags represented by the toolbar.
+    const preview_json = apply_manual_frozen_indices(input_json, frozen)
+    if (preview_json && show_structure_edit_3d) {
+      edit_3d_structure = JSON.parse(preview_json)
+    }
   }
 
   function handle_freeze_update(indices: number[]) {
     if (!freeze_edit_node_id) return
     freeze_edit_frozen = new Set(indices)
     const indices_str = indices.join(`,`)
-    update_node_param(freeze_edit_node_id, `freeze_indices`, indices_str)
+    nodes = nodes.map(n => {
+      if (n.id !== freeze_edit_node_id) return n
+      return {
+        ...n,
+        params: {
+          ...n.params,
+          // Manual selection must take precedence over the recipe's default
+          // adsorbate/layer mode; the backend only reads freeze_indices in
+          // indices/manual mode.
+          freeze_mode: `manual`,
+          freeze_indices: indices_str,
+          freeze_invert: false,
+        },
+      }
+    })
+
+    if (edit_3d_structure) {
+      const preview_json = apply_manual_frozen_indices(
+        JSON.stringify(edit_3d_structure),
+        indices,
+      )
+      if (preview_json) edit_3d_structure = JSON.parse(preview_json)
+    }
+    push_history()
     schedule_save()
   }
 
@@ -1831,9 +1875,10 @@
       nodes = (graph.nodes || []).map((n: WfNode) => {
         // Apply default_params from node definition
         const def = NODE_DEFINITIONS[n.type]
-        const params = def?.default_params
+        const params_with_defaults = def?.default_params
           ? { ...def.default_params, ...n.params }
           : n.params
+        const params = normalize_freeze_params(n.type, params_with_defaults)
 
         return {
           ...n,
@@ -1893,6 +1938,7 @@
         if (def?.default_params) {
           params = { ...def.default_params, ...params }
         }
+        params = normalize_freeze_params(node_type, params)
 
         return {
           ...n,

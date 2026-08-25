@@ -67,6 +67,14 @@ def _freeze_n_bottom_layers(params: dict) -> int:
     return 0
 
 
+def _has_structure_constraints(struct: Any) -> bool:
+    """Whether the input structure already carries at least one fixed axis."""
+    if not struct:
+        return False
+    sd = struct.site_properties.get("selective_dynamics")
+    return bool(sd and any(row is not None and not all(row) for row in sd))
+
+
 def _structure_to_pymatgen_dict(struct: Any) -> dict[str, Any]:
     """Convert a pymatgen Structure or Molecule to the PymatgenStructure model format."""
     sites = []
@@ -276,7 +284,20 @@ def generate_vasp_input_files(
         # slab_relax, so the unified geo_opt/vasp_relax path silently ignored
         # frozen_layers and the slab was never actually constrained.
         n_frozen_layers = _freeze_n_bottom_layers(params)
-        if n_frozen_layers > 0 and struct:
+        preserve_structure_constraints = (
+            _has_structure_constraints(struct)
+            and not params.get("override_structure_constraints", False)
+        )
+        if n_frozen_layers > 0 and struct and preserve_structure_constraints:
+            n_frozen = sum(
+                1 for row in struct.site_properties["selective_dynamics"]
+                if row is not None and not all(row)
+            )
+            logger.info(
+                "[FREEZE] %s: inherited %d/%d constrained atoms from structure",
+                node_type, n_frozen, len(struct),
+            )
+        elif n_frozen_layers > 0 and struct:
             z_threshold = _get_layer_z_threshold(struct, n_frozen_layers)
             request_data["fixed_z_below"] = z_threshold
             sd = [[False, False, False] if site.coords[2] < z_threshold else [True, True, True]
