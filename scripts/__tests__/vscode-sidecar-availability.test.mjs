@@ -25,13 +25,13 @@ test('accepts all three version-coupled sidecars and exact checksums', async () 
   }
 
   const result = await verifyVscodeSidecars({
-    version: '1.4.12',
+    version: '1.4.13',
     fetchImpl,
   })
 
   assert.deepEqual(result.map(({ asset }) => asset), VSCODE_SIDECAR_ASSETS)
   assert.equal(requests.length, 6)
-  assert.ok(requests.every(([url]) => url.includes('/v1.4.12/')))
+  assert.ok(requests.every(([url]) => url.includes('/v1.4.13/')))
 })
 
 test('fails closed before marketplace publication when a checksum is absent', async () => {
@@ -55,7 +55,7 @@ test('checksum metadata must name the exact platform asset', () => {
 test('rejects insecure sidecar origins', async () => {
   await assert.rejects(
     verifyVscodeSidecars({
-      version: '1.4.12',
+      version: '1.4.13',
       baseUrl: 'http://dl.catgo-ucsd.org',
       fetchImpl: async () => new Response(null, { status: 200 }),
     }),
