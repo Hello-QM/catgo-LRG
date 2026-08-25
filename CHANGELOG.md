@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.12] - 2026-08-25
+
+### Fixed
+
+- **Linux packaged backend startup** — PyInstaller now bundles the coherent conda `libstdc++`/`libgcc` pair and verifies its CXXABI/GLIBCXX coverage, preventing conda ICU from loading against Ubuntu 22.04's older C++ runtime.
+- **Windows frozen Campaign verification** — packaged Campaign creation receives a realistic cold-start timeout, and smoke-test cleanup terminates the complete PyInstaller process tree without masking the original failure behind a locked log file.
+
 ## [1.4.11] - 2026-08-25
 
 ### Added
