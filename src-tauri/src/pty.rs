@@ -94,6 +94,7 @@ pub async fn pty_spawn(
     cols: u16,
     rows: u16,
     cwd: Option<String>,
+    shell: Option<String>,
 ) -> Result<u32, String> {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -114,16 +115,47 @@ pub async fn pty_spawn(
     // Detect user's shell with platform-specific defaults
     let mut cmd = if cfg!(target_os = "windows") {
         // On Windows, $SHELL is typically unset.  Try PowerShell first, then cmd.
-        let shell = std::env::var("SHELL").ok();
-        match shell.as_deref() {
-            Some(s) if s.contains("bash") => {
+        let env_shell = std::env::var("SHELL").ok();
+        let shell_was_requested = shell.is_some();
+        let selected_shell = shell.as_deref().or(env_shell.as_deref());
+        match selected_shell {
+            Some("powershell") => {
+                let mut c = CommandBuilder::new("powershell.exe");
+                c.arg("-NoLogo");
+                c
+            }
+            Some("pwsh") => {
+                let mut c = CommandBuilder::new("pwsh.exe");
+                c.arg("-NoLogo");
+                c
+            }
+            Some("git-bash") => {
+                let git_bash = [
+                    r"C:\Program Files\Git\bin\bash.exe",
+                    r"C:\Program Files\Git\usr\bin\bash.exe",
+                    r"C:\Program Files (x86)\Git\bin\bash.exe",
+                ]
+                .into_iter()
+                .find(|path| std::path::Path::new(path).is_file())
+                .unwrap_or("bash.exe");
+                let mut c = CommandBuilder::new(git_bash);
+                c.arg("--login");
+                c.arg("-i");
+                c
+            }
+            Some("cmd") => {
+                let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+                CommandBuilder::new(&comspec)
+            }
+            Some(s) if !shell_was_requested && s.contains("bash") => {
                 // Git Bash: must use --login so /etc/profile sets PATH
                 // (otherwise /usr/bin tools like ls, basename are missing)
                 let mut c = CommandBuilder::new(s);
                 c.arg("--login");
                 c
             }
-            Some(s) => CommandBuilder::new(s),
+            Some(s) if !shell_was_requested => CommandBuilder::new(s),
+            Some(s) => return Err(format!("Unsupported local shell: {s}")),
             None => {
                 // Prefer PowerShell (widely available on modern Windows)
                 if which_exists("powershell.exe") {

@@ -3,6 +3,7 @@
   // This is intentional — the PTY session may be dead or disconnected, and these are
   // best-effort fire-and-forget operations where failure is expected and non-critical.
   import { spawnPty, type PtySession } from '$lib/api/pty'
+  import { osc7_setup_command } from './terminal-shell'
   import { Icon } from '$lib'
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
@@ -81,17 +82,6 @@
   const panel_id = `term-panel-${Math.random().toString(36).slice(2, 10)}`
   let _run_busy = false
   let _registered = false
-
-  function osc7_setup_command(): string {
-    const windows_default = !shell && typeof navigator !== `undefined` && /Windows/i.test(navigator.userAgent)
-    if (shell === `powershell` || shell === `pwsh` || windows_default) {
-      return `$global:__CATGO_OSC7=1; function global:prompt { $p=(Get-Location).Path; [Console]::Write("$([char]27)]7;$p$([char]27)\\"); "PS $p> " }; Clear-Host\r`
-    }
-    if (shell === `cmd`) {
-      return `prompt $E]7;$P$E\\$P$G$S\r`
-    }
-    return ` export __CATGO_OSC7=1; PROMPT_COMMAND='printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"'; clear\r`
-  }
 
   async function panel_run_command(
     cmd: string,
@@ -204,7 +194,11 @@
       let got_data = false
       const inject = () => {
         if (_osc7_data_listener) { _osc7_data_listener(); _osc7_data_listener = null }
-        const cmd = osc7_setup_command()
+        const cmd = osc7_setup_command(
+          shell,
+          session_id,
+          typeof navigator !== `undefined` && /Windows/i.test(navigator.userAgent),
+        )
         pty.write(cmd).catch(() => {})
       }
       const reset_timer = () => {

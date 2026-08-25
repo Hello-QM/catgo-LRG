@@ -74,18 +74,23 @@ export async function spawnPty(
     return spawnWebSocketPty(cols, rows, opts.session_id)
   }
   if (isTauri()) {
-    return spawnTauriPty(cols, rows, opts?.cwd)
+    return spawnTauriPty(cols, rows, opts?.cwd, opts?.shell)
   }
   return spawnWebSocketPty(cols, rows, undefined, opts?.shell)
 }
 
 // ====== Tauri IPC transport ======
 
-async function spawnTauriPty(cols: number, rows: number, cwd?: string): Promise<PtySession> {
+async function spawnTauriPty(
+  cols: number,
+  rows: number,
+  cwd?: string,
+  shell?: string,
+): Promise<PtySession> {
   const { invoke } = await import(`@tauri-apps/api/core`)
   const { listen } = await import(`@tauri-apps/api/event`)
 
-  const id = await invoke<number>(`pty_spawn`, { cols, rows, cwd })
+  const id = await invoke<number>(`pty_spawn`, { cols, rows, cwd, shell })
   const unlisteners: Array<() => void> = []
 
   return {
