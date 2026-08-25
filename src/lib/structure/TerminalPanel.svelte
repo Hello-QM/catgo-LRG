@@ -73,7 +73,7 @@
     host ? `${username || ``}@${host}` : `Terminal`
   )
 
-  // Always inject OSC 7 PROMPT_COMMAND once the PTY is up — local OR remote (needed for
+  // Always inject OSC 7 prompt integration once the PTY is up — local OR remote (needed for
   // Ctrl+click path resolution and Directory Sync even when sync_cwd is off). Local shells
   // need it just as much as remote: a plain bash emits no OSC 7 on its own, so without this
   // the local Files panel never follows the terminal's cwd. sync_cwd only controls whether
@@ -81,6 +81,17 @@
   const panel_id = `term-panel-${Math.random().toString(36).slice(2, 10)}`
   let _run_busy = false
   let _registered = false
+
+  function osc7_setup_command(): string {
+    const windows_default = !shell && typeof navigator !== `undefined` && /Windows/i.test(navigator.userAgent)
+    if (shell === `powershell` || shell === `pwsh` || windows_default) {
+      return `$global:__CATGO_OSC7=1; function global:prompt { $p=(Get-Location).Path; [Console]::Write("$([char]27)]7;$p$([char]27)\\"); "PS $p> " }; Clear-Host\r`
+    }
+    if (shell === `cmd`) {
+      return `prompt $E]7;$P$E\\$P$G$S\r`
+    }
+    return ` export __CATGO_OSC7=1; PROMPT_COMMAND='printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"'; clear\r`
+  }
 
   async function panel_run_command(
     cmd: string,
@@ -193,7 +204,7 @@
       let got_data = false
       const inject = () => {
         if (_osc7_data_listener) { _osc7_data_listener(); _osc7_data_listener = null }
-        const cmd = ` export __CATGO_OSC7=1; PROMPT_COMMAND='printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"'; clear\r`
+        const cmd = osc7_setup_command()
         pty.write(cmd).catch(() => {})
       }
       const reset_timer = () => {
@@ -417,7 +428,13 @@
             let path: string
             if (data.startsWith(`file://`)) {
               const url = new URL(data)
-              path = url.pathname
+              path = decodeURIComponent(url.pathname)
+              // file://host/D:/work is a valid Windows OSC 7 payload, but
+              // URL.pathname returns /D:/work. Convert it back before asking
+              // the local-files backend to resolve the directory.
+              if (/^\/[A-Za-z]:\//.test(path)) {
+                path = path.slice(1).replace(/\//g, `\\`)
+              }
             } else {
               path = data
             }

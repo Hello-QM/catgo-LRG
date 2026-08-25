@@ -237,6 +237,13 @@ async function spawnWebSocketPty(
             break
           case `error`:
             console.warn(`[PTY WS]`, msg.message)
+            if (!resolved) {
+              resolved = true
+              clearTimeout(timeout_id)
+              reject(new Error(msg.message || `Failed to open terminal session`))
+              new_ws.close()
+              break
+            }
             // Session gone — mark for recovery instead of disposing
             if (typeof msg.message === `string` && (msg.message.includes(`not found`) || msg.message.includes(`expired`))) {
               opened = false
