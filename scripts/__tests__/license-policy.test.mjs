@@ -159,6 +159,7 @@ const licenseClaimInventory = {
     '.github/release-notes/v1.4.10.md',
     '.github/release-notes/v1.4.11.md',
     '.github/release-notes/v1.4.12.md',
+    '.github/release-notes/v1.4.13.md',
     '.github/workflows/tauri-build.yml',
   ],
   historicalOnly: [
@@ -297,7 +298,7 @@ test('canonical citation file requests citation without adding an AGPL condition
   assert.equal(existsSync(resolve(ROOT, 'citation.cff')), false)
   const text = read('CITATION.cff')
   assert.match(text, /^cff-version: 1\.2\.0$/m)
-  assert.match(text, /^version: 1\.4\.12$/m)
+  assert.match(text, /^version: 1\.4\.13$/m)
   assert.match(text, /^license: AGPL-3\.0-or-later$/m)
   assert.match(text, /^license-url: https:\/\/github\.com\/Hello-QM\/catgo-LRG\/blob\/main\/license$/m)
   assert.match(text, /CatGo: Bridging CLI Coding Agents/)

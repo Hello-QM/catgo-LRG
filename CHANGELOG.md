@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.13] - 2026-08-25
+
+### Fixed
+
+- **Windows packaged Campaign dispatch** — frozen backends now run Campaign actions inside the already-extracted server process instead of launching and unpacking the complete PyInstaller one-file executable again. This removes the reproducible 60-second `/api/campaign/run` timeout while preserving CLI output, exit codes, validation, and asynchronous request handling.
+
 ## [1.4.12] - 2026-08-25
 
 ### Fixed

@@ -2625,7 +2625,8 @@ async def _handle_skills(args: dict) -> list[TextContent]:
 
 # Pure argv builder kept as a thin alias over the shared helper so the SDK-agent
 # path and the client-direct HTTP route stay in lock-step (DRY). The PYTHONPATH
-# fix + subprocess live in catgo.campaign_cli.run_campaign_cli.
+# source subprocess and frozen in-process dispatch live in
+# catgo.campaign_cli.run_campaign_cli.
 from catgo.campaign_cli import campaign_argv as _campaign_argv  # noqa: E402
 from catgo.campaign_cli import run_campaign_cli as _run_campaign_cli  # noqa: E402
 
