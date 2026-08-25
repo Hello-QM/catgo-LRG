@@ -74,3 +74,29 @@ test('VSIX publishing gates packaging on extension tests and typecheck', () => {
   )
   assert.ok(packageIndex < firstPublicationIndex, 'packaging must precede publish')
 })
+
+test('VSIX marketplace publication waits for exact public sidecars', () => {
+  const current = workflow('vsix-publish.yml')
+  const steps = current.jobs.publish.steps
+  const packageIndex = activeStepIndex(
+    steps,
+    'pnpm dlx @vscode/vsce package --no-dependencies',
+  )
+  const attachIndex = activeStepIndex(steps, 'gh release upload')
+  const sidecarIndex = activeStepIndex(
+    steps,
+    'node scripts/verify-vscode-sidecar-availability.mjs',
+  )
+  const marketplaceIndex = activeStepIndex(
+    steps,
+    'pnpm dlx @vscode/vsce publish',
+    'extensions/vscode',
+  )
+
+  assert.deepEqual(current.on.release.types, ['published'])
+  assert.ok(packageIndex < attachIndex, 'tag packaging must attach the VSIX first')
+  assert.ok(attachIndex < sidecarIndex, 'the draft asset must exist before the public-sidecar gate')
+  assert.ok(sidecarIndex < marketplaceIndex, 'sidecar proof must precede Marketplace publication')
+  assert.doesNotMatch(steps[marketplaceIndex].if, /event_name == 'push'/)
+  assert.match(steps[marketplaceIndex].if, /event_name == 'release'/)
+})
