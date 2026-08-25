@@ -516,7 +516,8 @@ export async function send_message(
   tab_id: string = `default`,
 ): Promise<void> {
   const slice = get_chat_slice(tab_id)
-  if (!content.trim()) return
+  content = content.trim() || (attachments?.length ? `Please inspect the attached files.` : ``)
+  if (!content) return
   // A round is already streaming: don't drop this message — queue it and
   // let the finally block fire it as soon as the current response ends.
   // Last write wins (latest compose replaces an earlier un-sent queue entry).
@@ -530,6 +531,7 @@ export async function send_message(
     role: `user`,
     content: content.trim(),
     timestamp: Date.now(),
+    attachments,
   }
   slice.messages.list = [...slice.messages.list, user_msg]
 
@@ -1005,7 +1007,8 @@ function persist_session_list(): void {
 // note in ChatPane.handle_resume_session). So we persist the message list
 // client-side, keyed by session_id, exactly like session_list metadata:
 // localStorage, agent-agnostic, survives reload/tab-switch. Capped per
-// session so a long conversation can't blow the ~5 MB localStorage quota.
+// session, and attachment bytes are stripped (metadata is retained), so a
+// single image cannot blow the ~5 MB localStorage quota.
 const STORAGE_KEY_SESSION_MESSAGES = `catgo-session-messages`
 const MAX_PERSISTED_MESSAGES = 400
 
@@ -1029,7 +1032,13 @@ export function persist_session_messages(
     STORAGE_KEY_SESSION_MESSAGES,
     {},
   )
-  map[session_id] = messages.slice(-MAX_PERSISTED_MESSAGES)
+  map[session_id] = messages.slice(-MAX_PERSISTED_MESSAGES).map((message) => ({
+    ...message,
+    attachments: message.attachments?.map((attachment) => ({
+      ...attachment,
+      data: ``,
+    })),
+  }))
   save_to_storage(STORAGE_KEY_SESSION_MESSAGES, map)
 }
 

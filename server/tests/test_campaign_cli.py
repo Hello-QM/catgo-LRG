@@ -14,6 +14,14 @@ def test_campaign_argv():
     ]
 
 
+def test_campaign_argv_in_frozen_backend(monkeypatch):
+    """The bundled sidecar is the CLI host; it is not a Python interpreter."""
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    assert campaign_argv('new', ['p', '--template', 'blank']) == [
+        sys.executable, 'campaign', 'new', 'p', '--template', 'blank',
+    ]
+
+
 def test_bad_action_raises():
     with pytest.raises(ValueError):
         asyncio.run(run_campaign_cli('frobnicate', []))

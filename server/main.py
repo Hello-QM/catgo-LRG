@@ -134,6 +134,7 @@ from catgo.routers import (
     tool_bridge_router,
     plugins_router,
     terminal_bridge_router,
+    stt_router,
 )
 
 # THIN-SKIP routers — heavy domain builders/analysis (pymatgen/ase/etc).
@@ -188,7 +189,6 @@ _DEFERRED_ROUTER_ATTRS: list[str] = ["hpc_router"] if CATGO_THIN else [
     "quacc_router",
     "atomate2_router",
     "forcefield_router",        # ~76 ms (openbabel)
-    "stt_router",               # faster-whisper (CTranslate2) — heavy import
 ]
 
 # Light-weight import; plugin_manager.initialize() is the slow part and is
@@ -591,6 +591,7 @@ app.include_router(hub_router, prefix="/api")
 app.include_router(file_sandbox_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(campaign_router, prefix="/api")
+app.include_router(stt_router, prefix="/api")
 
 # THIN-SKIP includes — registered only outside thin mode (heavy deps).
 if not CATGO_THIN:

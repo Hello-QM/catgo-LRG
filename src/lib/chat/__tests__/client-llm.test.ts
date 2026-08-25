@@ -3,6 +3,7 @@ import {
   type LlmEvent,
   parse_openai_stream,
   stream_client_llm,
+  to_openai_content,
   to_openai_message,
 } from '../client-llm'
 import type { ChatConfig, ChatMessage, ClientTool } from '../types'
@@ -132,6 +133,35 @@ describe(`to_openai_message`, () => {
   it(`maps a string-content message unchanged`, () => {
     const m: ChatMessage = { role: `user`, content: `hi`, timestamp: 0 }
     expect(to_openai_message(m)).toEqual({ role: `user`, content: `hi` })
+  })
+
+  it(`serializes image and text attachments instead of dropping them`, () => {
+    const m: ChatMessage = {
+      role: `user`,
+      content: `inspect`,
+      timestamp: 0,
+      attachments: [
+        {
+          type: `image`,
+          name: `surface.png`,
+          mimeType: `image/png`,
+          data: `cG5n`,
+        },
+        {
+          type: `file`,
+          name: `input.txt`,
+          mimeType: `text/plain`,
+          data: `aGVsbG8=`,
+        },
+      ],
+    }
+    const content = to_openai_content(m) as Array<Record<string, any>>
+    expect(content[0]).toEqual({ type: `text`, text: `inspect` })
+    expect(content[1]).toEqual({
+      type: `image_url`,
+      image_url: { url: `data:image/png;base64,cG5n`, detail: `auto` },
+    })
+    expect(content[2].text).toContain(`hello`)
   })
 
   it(`maps a tool_use block to an assistant tool_calls message`, () => {

@@ -6,6 +6,7 @@ import type {
   LLMProvider,
   ProviderInfoResponse,
 } from './types'
+import { to_openai_message } from './client-llm'
 
 const SYSTEM_PROMPT =
   `You are CatBot, an AI helper for CatGO — an interactive visualization toolkit for materials science. You help users with crystal structure visualization, MD trajectories, band structures, phase diagrams, and more.
@@ -240,7 +241,7 @@ async function* stream_universal(
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify({
       provider_id: config.provider,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map(to_openai_message),
       model: config.model,
       temperature: config.temperature,
       max_tokens: config.max_tokens,

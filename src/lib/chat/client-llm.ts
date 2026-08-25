@@ -10,6 +10,69 @@ import type {
 import { llm_fetch, normalize_provider_base_url } from './provider-routing'
 import { redact } from './message-utils'
 
+function decode_text_attachment(data: string): string | null {
+  try {
+    const binary = atob(data)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return new TextDecoder(`utf-8`, { fatal: true }).decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+function is_text_attachment(mime: string, name: string): boolean {
+  return mime.startsWith(`text/`) ||
+    mime === `application/json` ||
+    /\.(?:txt|md|json|csv|py|js|ts|yaml|yml|toml|xml)$/i.test(name)
+}
+
+/** Build standard multimodal Chat Completions content parts. */
+export function to_openai_content(m: ChatMessage): string | Array<Record<string, unknown>> {
+  const text = typeof m.content === `string`
+    ? m.content
+    : m.content
+      .filter((block): block is import('./types').TextBlock => block.type === `text`)
+      .map((block) => block.text)
+      .join(``)
+  const attachments = m.attachments?.filter((attachment) => attachment.data) ?? []
+  if (attachments.length === 0) return text
+
+  const parts: Array<Record<string, unknown>> = [{ type: `text`, text }]
+  for (const attachment of attachments) {
+    if (attachment.mimeType.startsWith(`image/`)) {
+      parts.push({
+        type: `image_url`,
+        image_url: {
+          url: `data:${attachment.mimeType};base64,${attachment.data}`,
+          detail: `auto`,
+        },
+      })
+      continue
+    }
+    if (is_text_attachment(attachment.mimeType, attachment.name)) {
+      const decoded = decode_text_attachment(attachment.data)
+      if (decoded !== null) {
+        parts.push({
+          type: `text`,
+          text: `\n[Attached file: ${attachment.name}]\n${decoded}\n[End attached file]`,
+        })
+        continue
+      }
+    }
+    // OpenAI-compatible multimodal APIs that support files accept this shape.
+    // Providers without file support return an explicit API error instead of
+    // CatBot silently discarding the attachment.
+    parts.push({
+      type: `file`,
+      file: {
+        filename: attachment.name,
+        file_data: `data:${attachment.mimeType};base64,${attachment.data}`,
+      },
+    })
+  }
+  return parts
+}
+
 /** Default OpenAI-compatible base URLs for known API providers, mirrored from
  *  the backend (server/catgo/routers/chat.py). Used in client-direct mode where
  *  the backend /chat/providers list (which normally supplies base_url) is absent. */
@@ -573,7 +636,7 @@ function prepend_reader(
  *  assistant-tool_calls / tool-result pairing OpenAI requires. */
 export function to_openai_message(m: ChatMessage): Record<string, unknown> {
   if (typeof m.content === `string`) {
-    return { role: m.role, content: m.content }
+    return { role: m.role, content: to_openai_content(m) }
   }
 
   // tool_result → role:'tool' (highest priority; a single result block per msg).
@@ -611,5 +674,5 @@ export function to_openai_message(m: ChatMessage): Record<string, unknown> {
     .filter((b): b is import('./types').TextBlock => b.type === `text`)
     .map((b) => b.text)
     .join(``)
-  return { role: m.role, content: text }
+  return { role: m.role, content: m.attachments?.length ? to_openai_content(m) : text }
 }

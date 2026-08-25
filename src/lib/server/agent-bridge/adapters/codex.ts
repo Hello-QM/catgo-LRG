@@ -3,6 +3,11 @@ import { dirname, join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
+import {
+  attachmentPathContext,
+  materializeAttachments,
+  type MaterializedAttachment,
+} from '../attachments.js'
 
 // ---------------------------------------------------------------------------
 // Codex binary resolution.
@@ -169,6 +174,24 @@ export function buildCodexEnvironment(
   return env
 }
 
+export function buildCodexInput(
+  prompt: string,
+  attachments: MaterializedAttachment[],
+): string | Array<{ type: 'text'; text: string } | { type: 'local_image'; path: string }> {
+  if (attachments.length === 0) return prompt
+  const images = attachments.filter((attachment) => attachment.mimeType.startsWith('image/'))
+  const files = attachments.filter((attachment) => !attachment.mimeType.startsWith('image/'))
+  const pathContext = attachmentPathContext(files)
+  const text = pathContext ? `${prompt}\n\n${pathContext}` : prompt
+  return [
+    { type: 'text', text },
+    ...images.map((attachment) => ({
+      type: 'local_image' as const,
+      path: attachment.path,
+    })),
+  ]
+}
+
 function emit_text_delta(itemId: string, fullText: string): string | null {
   const prev = _item_text_seen.get(itemId) ?? ''
   if (!fullText || fullText === prev) return null
@@ -308,8 +331,17 @@ export function createCodexAdapter(): AgentAdapter {
     agent: 'codex',
 
     async *stream(params: StreamParams): AsyncGenerator<AgentEvent> {
-      const { prompt, sessionId, model, cwd, abortSignal, mcpServerUrl, tabId, systemPrompt } =
-        params
+      const {
+        prompt,
+        sessionId,
+        model,
+        cwd,
+        abortSignal,
+        mcpServerUrl,
+        tabId,
+        systemPrompt,
+        attachments,
+      } = params
 
       // Dynamic import — the package may not be installed everywhere.
       const { Codex } = (await import('@openai/codex-sdk')) as any
@@ -393,27 +425,35 @@ export function createCodexAdapter(): AgentAdapter {
       // 'never' is the codex equivalent (run tools without prompting) and is
       // the only way Codex tool-calling works until a real approval↔
       // PermissionCard bridge exists for this adapter.
-      const streamedTurn = await thread.runStreamed(prompt, {
-        abortController,
-        cwd: cwd ?? undefined,
-        approvalPolicy: 'never',
-      })
-      const streamIterable = streamedTurn.events as AsyncIterable<any>
+      const materialized = materializeAttachments(attachments, cwd ?? process.cwd())
+      try {
+        const streamedTurn = await thread.runStreamed(
+          buildCodexInput(prompt, materialized.entries),
+          {
+            abortController,
+            cwd: cwd ?? undefined,
+            approvalPolicy: 'never',
+          },
+        )
+        const streamIterable = streamedTurn.events as AsyncIterable<any>
 
-      let resultEmitted = false
+        let resultEmitted = false
 
-      for await (const evt of streamIterable) {
-        for (const agentEvent of translateEvent(evt)) {
-          yield agentEvent
-          if (agentEvent.type === 'done') resultEmitted = true
+        for await (const evt of streamIterable) {
+          for (const agentEvent of translateEvent(evt)) {
+            yield agentEvent
+            if (agentEvent.type === 'done') resultEmitted = true
+          }
         }
-      }
 
-      // Ensure we always close the stream with a result + done pair even if
-      // the SDK didn't emit a terminal event.
-      if (!resultEmitted) {
-        yield { type: 'result', isError: false }
-        yield { type: 'done' }
+        // Ensure we always close the stream with a result + done pair even if
+        // the SDK didn't emit a terminal event.
+        if (!resultEmitted) {
+          yield { type: 'result', isError: false }
+          yield { type: 'done' }
+        }
+      } finally {
+        materialized.cleanup()
       }
     },
 
