@@ -145,9 +145,9 @@ def detect_is_gas(calc_dir) -> bool:
     p = Path(calc_dir)
     elements: list[str] = []
     if (p / "POSCAR").is_file():
-        elements = poscar_elements((p / "POSCAR").read_text())
+        elements = poscar_elements((p / "POSCAR").read_text(encoding="utf-8"))
     elif (p / "POTCAR").is_file():
-        elements = potcar_elements((p / "POTCAR").read_text())
+        elements = potcar_elements((p / "POTCAR").read_text(encoding="utf-8"))
     return bool(elements) and all(el in NONMETALS for el in elements)
 
 
@@ -245,12 +245,13 @@ def validate_calc_dir(calc_dir, *, is_gas: bool = False,
     incar_f = p / "INCAR"
     if not incar_f.is_file():
         return []
-    incar = parse_incar(incar_f.read_text())
+    incar = parse_incar(incar_f.read_text(encoding="utf-8"))
 
-    potcar_txt = (p / "POTCAR").read_text() if (p / "POTCAR").is_file() else ""
+    potcar_txt = ((p / "POTCAR").read_text(encoding="utf-8")
+                  if (p / "POTCAR").is_file() else "")
 
     if (p / "POSCAR").is_file():
-        elements = poscar_elements((p / "POSCAR").read_text())
+        elements = poscar_elements((p / "POSCAR").read_text(encoding="utf-8"))
     elif potcar_txt:
         elements = potcar_elements(potcar_txt)
     else:
@@ -262,7 +263,7 @@ def validate_calc_dir(calc_dir, *, is_gas: bool = False,
     if max_enmax is None:
         max_enmax = default_enmax(elements)
 
-    gamma_only = (kpoints_is_gamma_only((p / "KPOINTS").read_text())
+    gamma_only = (kpoints_is_gamma_only((p / "KPOINTS").read_text(encoding="utf-8"))
                   if (p / "KPOINTS").is_file() else False)
 
     checks = check_config(incar, max_enmax, gamma_only=gamma_only,

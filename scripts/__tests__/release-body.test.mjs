@@ -14,7 +14,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const TAG = 'v1.4.13'
+const TAG = 'v1.4.14'
 const NOTES = resolve(ROOT, `.github/release-notes/${TAG}.md`)
 const WORKFLOW = readFileSync(
   resolve(ROOT, '.github/workflows/tauri-build.yml'),
@@ -79,11 +79,11 @@ test('canonical current release body contains every mandatory disclosure', () =>
 test('existing release is always edited to the canonical body', () => {
   const { result, calls } = runEnsure({ existing: true })
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^release view v1\.4\.13$/m)
+  assert.match(calls, /^release view v1\.4\.14$/m)
   assert.doesNotMatch(calls, /^release create /m)
   assert.match(
     calls,
-    /^release edit v1\.4\.13 --title CatGo v1\.4\.13 --notes-file \.github\/release-notes\/v1\.4\.13\.md$/m,
+    /^release edit v1\.4\.14 --title CatGo v1\.4\.14 --notes-file \.github\/release-notes\/v1\.4\.14\.md$/m,
   )
 })
 
@@ -93,9 +93,9 @@ test('concurrent draft creation still converges through an explicit edit', () =>
     createStatus: 1,
   })
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^release create v1\.4\.13 --draft /m)
-  assert.match(calls, /^release view v1\.4\.13$/m)
-  assert.match(calls, /^release edit v1\.4\.13 /m)
+  assert.match(calls, /^release create v1\.4\.14 --draft /m)
+  assert.match(calls, /^release view v1\.4\.14$/m)
+  assert.match(calls, /^release edit v1\.4\.14 /m)
 })
 
 test('Tauri workflow finalizes the canonical body after tauri-action', () => {
@@ -104,7 +104,7 @@ test('Tauri workflow finalizes the canonical body after tauri-action', () => {
   assert.ok(action >= 0)
   assert.ok(finalize > action)
   const block = WORKFLOW.slice(finalize)
-  assert.match(block, /if: env\.CATGO_RELEASE_TAG == 'v1\.4\.13'/)
+  assert.match(block, /if: env\.CATGO_RELEASE_TAG == 'v1\.4\.14'/)
   assert.match(block, /scripts\/ensure-release-body\.sh "\$CATGO_RELEASE_TAG"/)
 })
 

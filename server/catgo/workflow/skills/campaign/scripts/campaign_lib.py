@@ -371,17 +371,19 @@ def scaffold_project(base, name: str, template: str = "blank") -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "README.md").write_text(
         tldr_header(name, f"Campaign project: {name}. Goal: <fill in>.")
-        + "\n## Goal\n<what this answers>\n\n## Current stage\n<stage>\n"
+        + "\n## Goal\n<what this answers>\n\n## Current stage\n<stage>\n",
+        encoding="utf-8",
     )
     index = [tldr_header(f"{name} — index", "navigation: role of each subfolder"), ""]
     index.append("- `plan.md` — campaign playbook (stages / funnel / decision points)")
     index.append("- `cluster.md` — CONFIRMED compute env (never guessed)")
     index += [f"- `{d}/` — {_SUBDIR_DESC[d]}" for d in SUBDIRS]
-    (root / "INDEX.md").write_text("\n".join(index) + "\n")
+    (root / "INDEX.md").write_text("\n".join(index) + "\n", encoding="utf-8")
     (root / "cluster.md").write_text(
         render_cluster(ClusterConfig())
         + "\n<!-- Fill via the setup gate; NEVER guess. "
-        "Run catgo_validate_config before the first submit. -->\n"
+        "Run catgo_validate_config before the first submit. -->\n",
+        encoding="utf-8",
     )
     # Thin agent bootstrap: an agent launched in this folder reads it and knows to
     # drive/resume the campaign. Defers the project description to README (no overlap).
@@ -402,22 +404,25 @@ def scaffold_project(base, name: str, template: str = "blank") -> Path:
         "gate before submit (review-gated unless the user says YOLO); `submit` refuses an\n"
         "already-RUNNING calc (`--force` to override); log every cancel/rebuild/gotcha to\n"
         "the calc's `LESSONS.md`; keep `INDEX.md`/`README.md` current. Full conventions: the\n"
-        "`catgo-campaign` skill.\n"
+        "`catgo-campaign` skill.\n",
+        encoding="utf-8",
     )
     for d in SUBDIRS:
         (root / d).mkdir(exist_ok=True)
-        (root / d / "INDEX.md").write_text(tldr_header(f"{d}/", _SUBDIR_DESC[d]))
+        (root / d / "INDEX.md").write_text(
+            tldr_header(f"{d}/", _SUBDIR_DESC[d]), encoding="utf-8"
+        )
 
     if template == "saa_her":
-        (root / "plan.md").write_text(_plan_saa_her(name))
+        (root / "plan.md").write_text(_plan_saa_her(name), encoding="utf-8")
         for stage in ("01-stability-formation-energy", "02-activity-dGH"):
             sdir = root / "calc" / stage
             sdir.mkdir(parents=True, exist_ok=True)
             (sdir / "INDEX.md").write_text(
-                tldr_header(f"{stage}/", "one folder per candidate")
+                tldr_header(f"{stage}/", "one folder per candidate"), encoding="utf-8"
             )
     else:
-        (root / "plan.md").write_text(_plan_blank(name))
+        (root / "plan.md").write_text(_plan_blank(name), encoding="utf-8")
     return root
 
 
@@ -469,14 +474,14 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
 
     status_file = local / "STATUS.md"
     if status_file.is_file() and not force:
-        prev = parse_status(status_file.read_text())
+        prev = parse_status(status_file.read_text(encoding="utf-8"))
         if prev.state in ("RUNNING", "PENDING"):
             raise CampaignError(
                 f"{calc_rel} already {prev.state} (job {prev.jobid}). Refusing to "
                 "double-submit; poll first, or pass force=True (--force) to resubmit."
             )
 
-    cfg = (parse_cluster((proj / "cluster.md").read_text())
+    cfg = (parse_cluster((proj / "cluster.md").read_text(encoding="utf-8"))
            if (proj / "cluster.md").is_file() else ClusterConfig())
     miss = missing_fields(cfg)
     if miss:
@@ -501,11 +506,11 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
     # remote dir is identical to the local one (a true mirror, not the --name).
     remote_dir = remote_mirror_path(cfg.remote_base, proj.name, calc_rel)
     job_sb = adapt_job_script(
-        ref.read_text(), job_name=job_name, work_dir=remote_dir,
+        ref.read_text(encoding="utf-8"), job_name=job_name, work_dir=remote_dir,
         account=cfg.account, partition=cfg.partition, walltime=cfg.walltime,
         ntasks=cfg.ntasks, run_command=cfg.run_command,
     )
-    (local / "job.sb").write_text(job_sb)
+    (local / "job.sb").write_text(job_sb, encoding="utf-8")
 
     ssh_run(use_alias, f"mkdir -p {shlex.quote(remote_dir)}")
     for f in sorted(local.iterdir()):
@@ -514,10 +519,13 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
     jobid = sbatch(use_alias, remote_dir, "job.sb")
 
     ts = now or _utc_now()
-    (local / "STATUS.md").write_text(render_status(Status(
-        title=job_name, state="RUNNING", cluster=cfg.cluster, job_type=job_type,
-        remote_dir=remote_dir, jobid=jobid, submitted_at=ts, updated_at=ts,
-    )))
+    (local / "STATUS.md").write_text(
+        render_status(Status(
+            title=job_name, state="RUNNING", cluster=cfg.cluster, job_type=job_type,
+            remote_dir=remote_dir, jobid=jobid, submitted_at=ts, updated_at=ts,
+        )),
+        encoding="utf-8",
+    )
     return {"jobid": jobid, "remote_dir": remote_dir, "job_name": job_name,
             "warnings": warnings}
 
@@ -526,7 +534,7 @@ def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
     proj = Path(project).expanduser()
     updated: list[str] = []
     for sf in sorted(proj.glob("calc/**/STATUS.md")):
-        st = parse_status(sf.read_text())
+        st = parse_status(sf.read_text(encoding="utf-8"))
         if st.state not in ("PENDING", "RUNNING") or not st.jobid:
             continue
         sq_state = parse_squeue(squeue(alias, st.jobid))
@@ -542,9 +550,15 @@ def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
             if exitcode:
                 extra["exit_code"] = exitcode
         if new_state != st.state:
-            sf.write_text(update_status(
-                sf.read_text(), state=new_state, updated_at=now or _utc_now(), **extra
-            ))
+            sf.write_text(
+                update_status(
+                    sf.read_text(encoding="utf-8"),
+                    state=new_state,
+                    updated_at=now or _utc_now(),
+                    **extra,
+                ),
+                encoding="utf-8",
+            )
             updated.append(f"{sf.parent.name}: {st.state}->{new_state}")
     return updated
 
@@ -582,7 +596,9 @@ def archive_calc(project, calc_rel: str, reason: str = "",
     src.mkdir(parents=True, exist_ok=True)
     (src / "ARCHIVED.md").write_text(
         tldr_header(f"ARCHIVED: {src.name}", f"moved to {dest} on {ts}")
-        + f"\nmoved_to: {dest}\nwhen: {ts}\nreason: {reason}\n")
+        + f"\nmoved_to: {dest}\nwhen: {ts}\nreason: {reason}\n",
+        encoding="utf-8",
+    )
     return dest
 
 
@@ -595,7 +611,7 @@ def archive_candidates(project) -> list[dict]:
     proj = Path(project).expanduser()
     out: list[dict] = []
     for sf in sorted(proj.glob("calc/**/STATUS.md")):
-        st = parse_status(sf.read_text())
+        st = parse_status(sf.read_text(encoding="utf-8"))
         if st.state == "FAILED":
             out.append({"calc": sf.parent.relative_to(proj).as_posix(),
                         "reason": f"STATUS=FAILED (exit {st.exit_code or '?'})"})

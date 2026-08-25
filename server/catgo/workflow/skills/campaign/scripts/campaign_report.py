@@ -12,7 +12,7 @@ import campaign_lib as cl
 
 
 def _read(p: Path, fallback: str) -> str:
-    return p.read_text() if p.is_file() else fallback
+    return p.read_text(encoding="utf-8") if p.is_file() else fallback
 
 
 def make_report(project, occasion: str, date: str) -> Path:
@@ -41,7 +41,7 @@ def make_report(project, occasion: str, date: str) -> Path:
         lit,
     ]
     dest = rdir / "report.md"
-    dest.write_text("\n".join(body) + "\n")
+    dest.write_text("\n".join(body) + "\n", encoding="utf-8")
 
     volcano = proj / "analysis" / "volcano.png"
     if volcano.is_file():
