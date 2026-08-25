@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -35,7 +36,12 @@ def _free_port() -> int:
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _request_json(url: str, payload: dict | None = None) -> dict:
+def _request_json(
+    url: str,
+    payload: dict | None = None,
+    *,
+    timeout: float = 5,
+) -> dict:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -43,8 +49,46 @@ def _request_json(url: str, payload: dict | None = None) -> dict:
         headers={"Content-Type": "application/json"} if data else {},
         method="POST" if data else "GET",
     )
-    with _OPENER.open(request, timeout=5) as response:
+    with _OPENER.open(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def _process_group_options() -> dict[str, int | bool]:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """Stop a one-file PyInstaller launcher and the extracted child process."""
+
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    elif process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    try:
+        process.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.kill()
+    process.wait(timeout=10)
 
 
 def _direct_httpx_client(
@@ -158,6 +202,7 @@ def main() -> int:
                     "CATGO_CODEX_PATH": sys.executable,
                     "CATGO_GEMINI_PATH": sys.executable,
                 },
+                **_process_group_options(),
             )
             try:
                 base = f"http://127.0.0.1:{port}"
@@ -227,6 +272,10 @@ def main() -> int:
                             "blank",
                         ],
                     },
+                    # The first frozen Campaign invocation imports its CLI and
+                    # stages bundled skills. Windows CI can legitimately need
+                    # more than the generic five-second API smoke budget.
+                    timeout=60,
                 )
                 if not result.get("ok"):
                     raise RuntimeError(f"campaign bridge failed: {result}")
@@ -235,12 +284,7 @@ def main() -> int:
 
                 asyncio.run(_smoke_mcp(base, mcp_campaign))
             finally:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
+                _terminate_process_tree(process)
 
     print(f"Frozen CatBot smoke test passed: {backend}")
     return 0

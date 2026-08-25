@@ -15,9 +15,13 @@ This creates a standalone executable that bundles:
 MACE and other ML potentials are excluded to keep the bundle size reasonable.
 """
 
+import os
 import sys
 from pathlib import Path
+from PyInstaller.building.datastruct import TOC
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
+
+from pyinstaller_runtime import replace_linux_conda_cxx_runtime
 
 block_cipher = None
 
@@ -280,6 +284,19 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# A conda build can otherwise mix Ubuntu 22.04's old libstdc++ with conda's
+# newer ICU, producing a frozen executable that fails at import time with a
+# missing CXXABI symbol.  Replace both C++ runtime libraries as one pair and
+# verify that the selected libstdc++ satisfies every collected native library.
+if sys.platform.startswith('linux'):
+    _conda_prefix = os.environ.get('CONDA_PREFIX')
+    if not _conda_prefix and (Path(sys.prefix) / 'conda-meta').is_dir():
+        _conda_prefix = sys.prefix
+    if _conda_prefix:
+        a.binaries = TOC(
+            replace_linux_conda_cxx_runtime(a.binaries, Path(_conda_prefix))
+        )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
