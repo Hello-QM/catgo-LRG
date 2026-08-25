@@ -55,11 +55,11 @@ const RELEASE_WORKFLOWS = [
     file: 'vsix-publish.yml',
     job: 'publish',
     checkoutRef:
-      "${{ github.event_name == 'push' && github.ref_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}",
+      "${{ github.event_name == 'push' && github.ref_name || github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag != '' && inputs.release_tag || github.ref }}",
     tag:
-      "${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}",
+      "${{ github.event_name == 'push' && github.ref_name || github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}",
     requireTag:
-      "${{ github.event_name == 'push' || !inputs.dry_run }}",
+      "${{ github.event_name == 'push' || github.event_name == 'release' || !inputs.dry_run }}",
   },
   {
     file: 'pypi-publish.yml',

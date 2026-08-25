@@ -350,7 +350,7 @@ jobs:
             One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### License and citation
-            CatGo 1.4.10 distributions use **AGPL-3.0-or-later**.
+            CatGo 1.4.11 distributions use **AGPL-3.0-or-later**.
 
             If CatGo contributes to your work, please include this acknowledgement and the preferred citation:
 
@@ -380,10 +380,11 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### New in 1.4.10
-            - **CatBot uses the installed Codex environment safely** — live model discovery, preserved user skills and MCP servers, and an isolated CatGo namespace connect to the active backend.
+            ### New in 1.4.11
+            - **Installed CatBot is complete across supported desktops** — Claude, Codex, and Gemini discovery, attachments, voice, Skills, MCP tools, structures, workflows, and Campaigns are covered by packaged-runtime smoke tests.
+            - **Windows terminal and Campaign workflows are reliable** — native shell selection, working-directory synchronization, GUI PATH recovery, and frozen Campaign dispatch use the correct runtime.
             - **Surface workflows relax slabs and preserve constraints** — clean-slab optimization precedes adsorption branches, with exact frozen atoms inherited by geometry and frequency steps.
-            - **Workflow, trajectory, and terminal state stays truthful** — safe bulk deletion, task-derived statuses, synchronized bounded large-system playback, and lossless CJK terminal reflow.
+            - **VS Code cannot publish ahead of its server sidecars** — Marketplace publication waits for the exact Linux, macOS, and Windows binaries and SHA256 metadata on the public mirror.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
@@ -562,7 +563,7 @@ jobs:
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"
 
       - name: Finalize canonical release body
-        if: env.CATGO_RELEASE_TAG == 'v1.4.10'
+        if: env.CATGO_RELEASE_TAG == 'v1.4.11'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ensure-release-body.sh "$CATGO_RELEASE_TAG"

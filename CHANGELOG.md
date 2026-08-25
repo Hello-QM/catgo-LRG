@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.11] - 2026-08-25
+
+### Added
+
+- **Packaged CatBot regression gates** — Windows, Apple Silicon macOS, and Linux builds now exercise the frozen backend, Provider catalogue, native voice route, bundled Skills, all 21 CatGo MCP tools, real REST/MCP Campaign creation, and compiled Claude/Codex/Gemini Agent Bridge streams before an installer can be released.
+- **End-to-end CatBot attachments** — images, PDFs, text, and general files reach SDK agents, direct API providers, and backend-relay providers instead of being silently discarded.
+- **Version-coupled VS Code sidecar gate** — Marketplace and Open VSX publication now waits until the matching Linux, Apple Silicon macOS, and Windows server binaries and SHA256 metadata are verifiably available on the public mirror.
+
+### Fixed
+
+- **Cross-platform desktop CLI discovery** — GUI-launched CatGo reconstructs native user package-manager paths for Claude, Codex, and Gemini, and shares the same path with both the backend and Agent Bridge.
+- **Installed Windows terminals** — local shell selection and working-directory synchronization survive packaged-runtime transitions.
+- **Frozen Campaign execution** — the bundled backend invokes the CatGo Campaign CLI directly instead of recursively treating itself as a Python interpreter.
+- **Voice input cold start** — the speech health route is registered before the backend reports healthy, preventing the first microphone action from caching a false unavailable state.
+- **Packaged tool coverage** — migrated registry tests use the current `catgo.tools` package path again.
+
 ## [1.4.10] - 2026-08-24
 
 ### Added
