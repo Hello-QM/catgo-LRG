@@ -554,6 +554,35 @@ describe(`LargeSystemOverlay authoritative packet bridge`, () => {
     expect(mocks.renderer.set_bond_data).toHaveBeenCalled()
   })
 
+  it(`preserves a slab's per-axis PBC mask in the fallback bond input`, async () => {
+    const structure = make_structure()
+    ;(structure as { lattice: { pbc: [boolean, boolean, boolean] } }).lattice.pbc =
+      [true, true, false]
+    const props = $state({
+      enabled: true,
+      structure,
+      packet_owner_id: 14,
+      visual_state_source: make_visual_source(
+        1,
+        new Float32Array([1, 0, 0, 0, 0, 1]),
+      ).source,
+      periodic_decoration_source: null,
+      show_bonds: `always` as const,
+    })
+    const component = mount(LargeSystemOverlay, {
+      target: document.body,
+      props,
+    })
+    mounted.push(component)
+    await settle()
+
+    run_overlay_frame()
+
+    const call = mocks.renderer.set_bond_data.mock.calls.at(-1)
+    expect(call).toBeDefined()
+    expect(call?.[3]).toEqual([true, true, false])
+  })
+
   it(`expands ordinary 1x images onto the visual-supercell outer surface`, async () => {
     const structure = make_structure()
     const graph: BaseBondGraph = {
