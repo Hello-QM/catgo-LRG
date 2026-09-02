@@ -69,6 +69,6 @@ CatBot reads provider API keys from environment variables or the *Settings* dial
 
 ## Troubleshooting
 
-- **"native binary not found"** — the Claude SDK couldn't find the `claude` CLI. Install it (`npm i -g @anthropic-ai/claude-cli`) or switch to Gemini / Codex. Fixed in v1.0.1 — `resolveClaudeExecutable()` now falls back to `PATH` lookups.
+- **"native binary not found"** — the Claude SDK couldn't find the `claude` CLI. Install it (`npm i -g @anthropic-ai/claude-code`) or switch to Gemini / Codex. Fixed in v1.0.1 — `resolveClaudeExecutable()` now falls back to `PATH` lookups.
 - **Stream stalls mid-response** — the sidecar dropped the SSE connection. Restart CatBot from the chat pane; transcript is preserved on disk under `~/.catgo/agents/<provider>/`.
 - **Tool call returns wrong panel** — CatBot defaults to `panel_id=default`. Pass `panel_id=structure-1` (or whichever pane is active) in the tool call, or specify the panel in your prompt.

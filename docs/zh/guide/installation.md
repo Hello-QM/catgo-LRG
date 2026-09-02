@@ -142,7 +142,7 @@ python main.py
 ### Windows
 
 - **HPC 连接因 `pywintypes` 或 `pythoncom` 的 `ImportError` 失败** - v1.0.1 已修复。如果你使用更早版本，请升级。内置后端现在会包含所需的 `pywin32` DLL。
-- **CatBot 聊天立即退出** - Claude provider 的 agent-bridge sidecar 需要 `claude` CLI。可通过 `npm i -g @anthropic-ai/claude-cli` 安装，或在 *Settings* 中把 CatBot 切换到 Gemini / Codex provider。
+- **CatBot 聊天立即退出** - Claude provider 的 agent-bridge sidecar 需要 `claude` CLI。可通过 `npm i -g @anthropic-ai/claude-code` 安装，或在 *Settings* 中把 CatBot 切换到 Gemini / Codex provider。
 
 ### Linux (`.AppImage`)
 
