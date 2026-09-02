@@ -204,6 +204,25 @@ test('VSIX publishing fails on duplicate marketplace versions', () => {
   }
 })
 
+test('manual VSIX publishing can retry only Open VSX after a transient outage', () => {
+  const workflow = source('.github/workflows/vsix-publish.yml')
+  const marketplaceStep = workflowStep(
+    '.github/workflows/vsix-publish.yml',
+    'Publish to VS Code Marketplace',
+  )
+  const openVsxStep = workflowStep(
+    '.github/workflows/vsix-publish.yml',
+    'Publish to Open VSX (Cursor / VSCodium / Theia)',
+  )
+
+  assert.match(workflow, /publish_target:[\s\S]*?- all[\s\S]*?- vscode[\s\S]*?- open-vsx/)
+  assert.match(marketplaceStep, /inputs\.publish_target != 'open-vsx'/)
+  assert.match(openVsxStep, /inputs\.publish_target != 'vscode'/)
+  assert.match(openVsxStep, /for attempt in 1 2 3 4 5/)
+  assert.match(openVsxStep, /Service Unavailable/)
+  assert.match(openVsxStep, /sleep "\$delay"/)
+})
+
 test('PyPI publishing does not skip an already-used Python version', () => {
   const publishStep = workflowStep(
     '.github/workflows/pypi-publish.yml',
