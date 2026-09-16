@@ -7,6 +7,7 @@
 //! 4. Support for dual (±) isosurfaces
 
 use crate::cube::CubeFile;
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -49,10 +50,20 @@ impl Mesh {
 /// - Parallel processing of grid slabs
 pub fn extract_isosurface(cube: &CubeFile, isovalue: f32) -> Mesh {
     let [nx, ny, nz] = cube.header.dims;
+    if [nx, ny, nz].iter().any(|&dim| dim < 2) {
+        return Mesh {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+        };
+    }
 
-    // Process slabs in parallel (each slab = one x-layer of cubes)
-    let slab_meshes: Vec<Mesh> = (0..nx - 1)
-        .into_par_iter()
+    // Each slab = one x-layer of cubes. Scalar WASM does not initialize Rayon.
+    #[cfg(feature = "parallel")]
+    let slabs = (0..nx - 1).into_par_iter();
+    #[cfg(not(feature = "parallel"))]
+    let slabs = 0..nx - 1;
+    let slab_meshes: Vec<Mesh> = slabs
         .map(|ix| {
             let mut positions = Vec::new();
             let mut normals = Vec::new();
@@ -97,6 +108,7 @@ pub fn extract_isosurface(cube: &CubeFile, isovalue: f32) -> Mesh {
         merged.merge(slab);
     }
 
+    #[cfg(feature = "cli")]
     eprintln!(
         "Isosurface at {:.6e}: {} vertices, {} triangles",
         isovalue,
@@ -112,6 +124,50 @@ pub fn extract_dual_isosurface(cube: &CubeFile, isovalue: f32) -> (Mesh, Mesh) {
     let pos = extract_isosurface(cube, isovalue);
     let neg = extract_isosurface(cube, -isovalue);
     (pos, neg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thin_axes_produce_empty_meshes() {
+        for dims in [
+            [1, 2, 2], [2, 1, 2], [2, 2, 1], [0, 2, 2], [2, 0, 2], [2, 2, 0],
+        ] {
+            let mut cube =
+                CubeFile::from_grid([1, 1, 1], [0.0; 3], [[0.0; 3]; 3], vec![0.0]).unwrap();
+            cube.header.dims = dims;
+            let mesh = extract_isosurface(&cube, 0.5);
+            assert!(mesh.positions.is_empty());
+            assert!(mesh.normals.is_empty());
+            assert!(mesh.indices.is_empty());
+        }
+    }
+
+    #[test]
+    fn planar_field_produces_finite_mesh_in_grid_coordinates() {
+        let cube = CubeFile::from_grid(
+            [2, 2, 2],
+            [10.0, 20.0, 30.0],
+            [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let mut mesh = extract_isosurface(&cube, 0.5);
+        normalize_normals(&mut mesh);
+        assert_eq!(mesh.vertex_count(), 4);
+        assert_eq!(mesh.triangle_count(), 2);
+        for position in mesh.positions.chunks_exact(3) {
+            assert_eq!(position[0], 11.0);
+            assert!((20.0..=23.0).contains(&position[1]));
+            assert!((30.0..=34.0).contains(&position[2]));
+        }
+        for normal in mesh.normals.chunks_exact(3) {
+            assert_eq!(normal, [-1.0, 0.0, 0.0]);
+        }
+        assert!(mesh.indices.iter().all(|&i| (i as usize) < mesh.vertex_count()));
+    }
 }
 
 /// Quantize a float to a grid for vertex welding (micron precision)

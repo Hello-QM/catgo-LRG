@@ -9,37 +9,43 @@ publish = false
 [[bin]]
 name = "cube-processor"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [lib]
 name = "cube_processor"
 path = "src/lib.rs"
 
+[features]
+default = ["cli", "parallel"]
+cli = ["dep:clap", "dep:serde_json", "dep:image", "dep:gltf-json", "dep:indicatif", "dep:memmap2", "dep:thiserror"]
+parallel = ["dep:rayon"]
+
 [dependencies]
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 
 # Parallelism
-rayon = "1.10"
+rayon = { version = "1.10", optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", optional = true }
 
 # Image generation for slices
-image = "0.25"
+image = { version = "0.25", optional = true }
 
 # GLB/glTF export
-gltf-json = "1.4"
+gltf-json = { version = "1.4", optional = true }
 
 # Error handling
 anyhow = "1.0"
-thiserror = "2.0"
+thiserror = { version = "2.0", optional = true }
 
 # Progress
-indicatif = "0.17"
+indicatif = { version = "0.17", optional = true }
 
 # Memory-mapped I/O for large files
-memmap2 = "0.9"
+memmap2 = { version = "0.9", optional = true }
 
 [profile.release]
 opt-level = 3

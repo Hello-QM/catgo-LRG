@@ -109,6 +109,9 @@ use pyo3::prelude::*;
 pub mod wasm;
 
 #[cfg(feature = "wasm")]
+pub mod wasm_cube;
+
+#[cfg(feature = "wasm")]
 pub mod wasm_hetero;
 
 #[cfg(feature = "wasm")]

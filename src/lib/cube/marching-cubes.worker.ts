@@ -1,54 +1,27 @@
-/**
- * Web Worker for off-main-thread isosurface extraction.
- * Receives volumetric grid data + isovalue, returns mesh data.
- * Uses transferable buffers for zero-copy message passing.
- */
-
+/** TypeScript fallback for Cube parsing and isosurface extraction. */
 import { extract_isosurface } from './marching-cubes'
-import type { VolumetricGrid } from './parse-cube'
+import { parse_cube_full } from './parse-cube'
+import { mesh_buffers, type CubeWorkerRequest } from './worker-protocol'
 
-export interface WorkerInput {
-  type: `extract`
-  grid: VolumetricGrid
-  isovalue: number
-  dual: boolean
-}
-
-export interface WorkerMeshData {
-  positions: Float32Array
-  normals: Float32Array
-  indices: Uint32Array
-}
-
-export interface WorkerOutput {
-  type: `result`
-  positive: WorkerMeshData
-  negative: WorkerMeshData | null
-  elapsed_ms: number
-}
-
-self.onmessage = (event: MessageEvent<WorkerInput>) => {
-  const { grid, isovalue, dual } = event.data
-  const start = performance.now()
-
-  const positive = extract_isosurface(grid, isovalue)
-  const negative = dual ? extract_isosurface(grid, -isovalue) : null
-
-  const elapsed_ms = performance.now() - start
-
-  const transferable: Transferable[] = [
-    positive.positions.buffer as ArrayBuffer,
-    positive.normals.buffer as ArrayBuffer,
-    positive.indices.buffer as ArrayBuffer,
-  ]
-  if (negative) {
-    transferable.push(
-      negative.positions.buffer as ArrayBuffer,
-      negative.normals.buffer as ArrayBuffer,
-      negative.indices.buffer as ArrayBuffer,
-    )
+self.onmessage = (event: MessageEvent<CubeWorkerRequest>) => {
+  const { id } = event.data
+  try {
+    const request = event.data
+    if (request.type === `parse`) {
+      const result = parse_cube_full(request.text)
+      self.postMessage({ id, type: `parsed`, result }, { transfer: [result.grid.data.buffer as ArrayBuffer] })
+    } else if (request.type === `extract` && request.grid) {
+      if (!Number.isFinite(request.isovalue)) throw new Error(`Cube isovalue must be finite`)
+      const start = performance.now()
+      const positive = extract_isosurface(request.grid, request.isovalue)
+      const negative = request.dual ? extract_isosurface(request.grid, -request.isovalue) : null
+      self.postMessage({ id, type: `mesh`, positive, negative, elapsed_ms: performance.now() - start }, {
+        transfer: [...mesh_buffers(positive), ...(negative ? mesh_buffers(negative) : [])],
+      })
+    } else {
+      throw new Error(`Invalid TypeScript Cube worker request`)
+    }
+  } catch (error) {
+    self.postMessage({ id, type: `error`, kind: `input`, message: error instanceof Error ? error.message : String(error) })
   }
-
-  const result: WorkerOutput = { type: `result`, positive, negative, elapsed_ms }
-  ;(self as unknown as Worker).postMessage(result, transferable)
 }

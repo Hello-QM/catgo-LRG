@@ -85,6 +85,7 @@ vasp-poscar = "0.3"
 extxyz = "0.2"
 
 # Local workspace crates
+cube-processor = { path = "../../tools/cube-processor", default-features = false, optional = true }
 uff-relax = { path = "../uff-relax", default-features = false }
 vsepr-rs = { path = "../vsepr-rs" }
 
@@ -101,6 +102,7 @@ pyo3-build-config = { version = "0.27.2", optional = true }
 default = ["rayon"]
 python = ["dep:pyo3", "dep:pyo3-build-config", "dep:pyo3-stub-gen", "rayon"]
 wasm = [
+  "dep:cube-processor",
   "dep:console_error_panic_hook",
   "dep:js-sys",
   "dep:web-sys",
@@ -108,7 +110,7 @@ wasm = [
   "dep:tsify-next",
   "dep:wasm-bindgen",
 ]
-rayon = ["dep:rayon"]
+rayon = ["dep:rayon", "cube-processor?/parallel"]
 # Dual WASM artifacts (design §8.3). Scalar = portable SIMD, single thread.
 # Threaded = WASM threads + SIMD + Rayon; MUST be built with
 # `-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128` and

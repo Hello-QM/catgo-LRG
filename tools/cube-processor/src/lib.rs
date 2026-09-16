@@ -1,6 +1,9 @@
 pub mod chgcar;
 pub mod cube;
+#[cfg(feature = "cli")]
 pub mod export_glb;
+#[cfg(feature = "cli")]
 pub mod export_obj;
 pub mod marching_cubes;
+#[cfg(feature = "cli")]
 pub mod slice;
