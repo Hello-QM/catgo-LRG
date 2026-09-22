@@ -63,69 +63,77 @@ export interface ParsedCubeData {
   grid: VolumetricGrid
 }
 
-/**
- * Parse the header of a Gaussian cube file to extract atom data.
- * Only parses the header (comments + atoms), not the volumetric data.
- */
-export function parse_cube_header(text: string): ParsedCubeHeader {
-  const lines = text.split(`\n`)
+function cube_number(token: string | undefined, label: string): number {
+  const normalized = token?.replace(/[dD]/u, `e`) ?? ``
+  const value = Number(normalized)
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/u.test(normalized)
+    || !Number.isFinite(value)) {
+    throw new Error(`Invalid Cube ${label}: ${token ?? `missing value`}`)
+  }
+  return value
+}
+
+function cube_integer(token: string | undefined, label: string): number {
+  if (!/^[+-]?\d+$/u.test(token ?? ``)) throw new Error(`Invalid Cube ${label}`)
+  const value = Number(token)
+  if (!Number.isSafeInteger(value)) throw new Error(`Invalid Cube ${label}`)
+  return value
+}
+
+function cube_fields(lines: string[], index: number, count: number): string[] {
+  const fields = lines[index]?.trim().split(/\s+/u) ?? []
+  if (fields.length < count) throw new Error(`Incomplete Cube record on line ${index + 1}`)
+  return fields
+}
+
+function read_cube_header(lines: string[]): { header: CubeHeader; orbital: boolean } {
   if (lines.length < 6) throw new Error(`Invalid cube file: too few lines`)
-
-  // Lines 0-1: comments
-  // Line 2: n_atoms, origin_x, origin_y, origin_z
-  const line2 = lines[2].trim().split(/\s+/)
-  const raw_n_atoms = parseInt(line2[0])
-  const is_angstrom = raw_n_atoms < 0
+  const fields = cube_fields(lines, 2, 4)
+  const raw_n_atoms = cube_integer(fields[0], `atom count`)
   const n_atoms = Math.abs(raw_n_atoms)
+  const nval = fields[4] === undefined ? 1 : cube_integer(fields[4], `NVAL`)
+  if (nval !== 1) throw new Error(`Multiple Cube datasets (NVAL=${nval}) are not supported`)
+  if (n_atoms > lines.length - 6) throw new Error(`Incomplete Cube atom records`)
 
-  const scale = is_angstrom ? 1.0 : BOHR_TO_ANGSTROM
-
-  const origin: [number, number, number] = [
-    parseFloat(line2[1]) * scale,
-    parseFloat(line2[2]) * scale,
-    parseFloat(line2[3]) * scale,
+  // The sign of NATOMS denotes orbital metadata, never coordinate units.
+  // Gaussian Cube coordinates and axes are in Bohr for either sign.
+  const vector = (parts: string[], offset: number): [number, number, number] => [
+    cube_number(parts[offset], `coordinate`) * BOHR_TO_ANGSTROM,
+    cube_number(parts[offset + 1], `coordinate`) * BOHR_TO_ANGSTROM,
+    cube_number(parts[offset + 2], `coordinate`) * BOHR_TO_ANGSTROM,
   ]
-
-  // Lines 3-5: voxel axes (N, dx, dy, dz)
+  const origin = vector(fields, 1)
   const dims: [number, number, number] = [0, 0, 0]
-  const voxel_axes: [
-    [number, number, number],
-    [number, number, number],
-    [number, number, number],
-  ] = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ]
+  const voxel_axes: VolumetricGrid['voxel_axes'] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
   for (let i = 0; i < 3; i++) {
-    const parts = lines[3 + i].trim().split(/\s+/)
-    dims[i] = parseInt(parts[0])
-    voxel_axes[i] = [
-      parseFloat(parts[1]) * scale,
-      parseFloat(parts[2]) * scale,
-      parseFloat(parts[3]) * scale,
-    ]
+    const axis = cube_fields(lines, 3 + i, 4)
+    dims[i] = cube_integer(axis[0], `grid dimension`)
+    if (dims[i] <= 0) throw new Error(`Cube grid dimensions must be positive`)
+    voxel_axes[i] = vector(axis, 1)
+  }
+  if (!Number.isSafeInteger(dims[0] * dims[1] * dims[2])) {
+    throw new Error(`Cube grid dimensions overflow`)
   }
 
-  // Lines 6 to 6+n_atoms-1: atoms
   const atoms: CubeAtomRaw[] = []
   for (let i = 0; i < n_atoms; i++) {
-    const line_idx = 6 + i
-    if (line_idx >= lines.length) break
-    const parts = lines[line_idx].trim().split(/\s+/)
-    if (parts.length < 5) continue
+    const atom = cube_fields(lines, 6 + i, 5)
     atoms.push({
-      atomic_number: parseInt(parts[0]),
-      charge: parseFloat(parts[1]),
-      position: [
-        parseFloat(parts[2]) * scale,
-        parseFloat(parts[3]) * scale,
-        parseFloat(parts[4]) * scale,
-      ],
+      atomic_number: cube_integer(atom[0], `atomic number`),
+      charge: cube_number(atom[1], `charge`),
+      position: vector(atom, 2),
     })
   }
+  return {
+    header: { comment1: lines[0].trim(), comment2: lines[1].trim(), n_atoms, origin, dims, voxel_axes, atoms },
+    orbital: raw_n_atoms < 0,
+  }
+}
 
-  return { atoms, n_atoms, origin, dims, voxel_axes, is_angstrom }
+/** Parse atom and grid geometry without reading the volumetric payload. */
+export function parse_cube_header(text: string): ParsedCubeHeader {
+  const { atoms, n_atoms, origin, dims, voxel_axes } = read_cube_header(text.split(`\n`)).header
+  return { atoms, n_atoms, origin, dims, voxel_axes, is_angstrom: false }
 }
 
 /**
@@ -156,104 +164,41 @@ export function grid_to_cart(
  */
 export function parse_cube_full(text: string): ParsedCubeData {
   const lines = text.split(`\n`)
-  if (lines.length < 6) throw new Error(`Invalid cube file: too few lines`)
-
-  // Lines 0-1: comments
-  const comment1 = lines[0].trim()
-  const comment2 = lines[1].trim()
-
-  // Line 2: n_atoms, origin
-  const line2 = lines[2].trim().split(/\s+/)
-  const raw_n_atoms = parseInt(line2[0])
-  const is_angstrom = raw_n_atoms < 0
-  const n_atoms = Math.abs(raw_n_atoms)
-  const scale = is_angstrom ? 1.0 : BOHR_TO_ANGSTROM
-
-  const origin: [number, number, number] = [
-    parseFloat(line2[1]) * scale,
-    parseFloat(line2[2]) * scale,
-    parseFloat(line2[3]) * scale,
-  ]
-
-  // Lines 3-5: dims + voxel_axes
-  const dims: [number, number, number] = [0, 0, 0]
-  const voxel_axes: [
-    [number, number, number],
-    [number, number, number],
-    [number, number, number],
-  ] = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ]
-  for (let i = 0; i < 3; i++) {
-    const parts = lines[3 + i].trim().split(/\s+/)
-    dims[i] = parseInt(parts[0])
-    voxel_axes[i] = [
-      parseFloat(parts[1]) * scale,
-      parseFloat(parts[2]) * scale,
-      parseFloat(parts[3]) * scale,
-    ]
-  }
-
-  // Lines 6..6+n_atoms: atoms
-  const atoms: { atomic_number: number; charge: number; position: [number, number, number] }[] =
-    []
-  for (let i = 0; i < n_atoms; i++) {
-    const line_idx = 6 + i
-    if (line_idx >= lines.length) break
-    const parts = lines[line_idx].trim().split(/\s+/)
-    if (parts.length < 5) continue
-    atoms.push({
-      atomic_number: parseInt(parts[0]),
-      charge: parseFloat(parts[1]),
-      position: [
-        parseFloat(parts[2]) * scale,
-        parseFloat(parts[3]) * scale,
-        parseFloat(parts[4]) * scale,
-      ],
-    })
-  }
-
-  // Volumetric data: remaining lines after header + atoms
-  const data_start_line = 6 + n_atoms
+  const { header, orbital } = read_cube_header(lines)
+  const { dims, origin, voxel_axes } = header
   const total_voxels = dims[0] * dims[1] * dims[2]
+  // Even one character per voxel would exceed the available input. Check
+  // before allocation so a corrupt header cannot reserve an enormous array.
+  if (total_voxels > text.length) throw new Error(`Insufficient Cube voxel data`)
   const data = new Float32Array(total_voxels)
   let data_idx = 0
   let data_min = Infinity
   let data_max = -Infinity
+  let orbital_fields = orbital ? 2 : 0
 
-  for (let li = data_start_line; li < lines.length && data_idx < total_voxels; li++) {
-    const line = lines[li]
-    if (!line.trim()) continue
-    const tokens = line.trim().split(/\s+/)
-    for (let ti = 0; ti < tokens.length && data_idx < total_voxels; ti++) {
-      const val = parseFloat(tokens[ti])
-      if (isNaN(val)) continue
-      data[data_idx++] = val
-      if (val < data_min) data_min = val
-      if (val > data_max) data_max = val
+  for (let li = 6 + header.n_atoms; li < lines.length; li++) {
+    if (!lines[li].trim()) continue
+    for (const token of lines[li].trim().split(/\s+/u)) {
+      if (orbital_fields > 0) {
+        const value = cube_integer(token, `orbital record`)
+        if (orbital_fields === 2 && value !== 1) {
+          throw new Error(`Multiple Cube orbital datasets are not supported`)
+        }
+        orbital_fields--
+        continue
+      }
+      if (data_idx === total_voxels) throw new Error(`Too many Cube voxel values`)
+      const value = Math.fround(cube_number(token, `voxel value`))
+      if (!Number.isFinite(value)) throw new Error(`Cube voxel value exceeds Float32 range`)
+      data[data_idx++] = value
+      data_min = Math.min(data_min, value)
+      data_max = Math.max(data_max, value)
     }
   }
-
-  if (data_idx !== total_voxels) {
+  if (orbital_fields || data_idx !== total_voxels) {
     throw new Error(`Expected ${total_voxels} voxels but got ${data_idx}`)
   }
-
-  const header: CubeHeader = {
-    comment1,
-    comment2,
-    n_atoms,
-    origin,
-    dims,
-    voxel_axes,
-    atoms,
-  }
-
-  return {
-    header,
-    grid: { data, dims, origin, voxel_axes, data_min, data_max },
-  }
+  return { header, grid: { data, dims, origin, voxel_axes, data_min, data_max } }
 }
 
 /**
@@ -261,7 +206,7 @@ export function parse_cube_full(text: string): ParsedCubeData {
  *
  * The cube grid spans one full period of the cell: lattice vector i is the
  * per-voxel axis vector i times the grid count along axis i. `voxel_axes` is
- * already in Angstrom (the parser applies the bohr→Å scale via `is_angstrom`),
+ * already in Angstrom (the parser applies the Bohr→Å conversion),
  * so the returned matrix is in Angstrom. Rows are the a, b, c lattice vectors.
  *
  * NOTE: this is only physically meaningful for files whose grid encodes a real

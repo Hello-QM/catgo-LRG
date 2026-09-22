@@ -402,7 +402,9 @@
   // StructureScene, not directly on Structure as a top-level prop).
   let trajectory_scene_props = $state<
     ComponentProps<typeof Structure>['scene_props']
-  >(undefined as any)
+  >(untrack(() => structure_props.scene_props
+    ? { ...structure_props.scene_props }
+    : undefined))
   // When the user (or test harness) changes show_hydrogen_bonds at the
   // Trajectory boundary, propagate into scene_props. When scene_props itself
   // shifts (e.g. settings restore), reflect back to the bindable prop so

@@ -1,13 +1,22 @@
-import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { beforeAll, describe, expect, test } from 'vitest'
 import {
   cube_atoms_to_molecule,
   derive_cube_lattice,
   parse_cube_header,
 } from '$lib/cube/parse-cube'
 import { find_pbc_images_fast } from '$lib/structure'
+import { ensure_ferrox_wasm_ready } from '$lib/structure/ferrox-wasm'
 
-// Build a minimal periodic cube (CHGCAR→cube shape): negative n_atoms ⇒ the
-// header is already in Ångström (no bohr scaling). `origin` is the grid anchor;
+// Use real scalar WASM without depending on a Vite HTTP server in happy-dom.
+beforeAll(async () => {
+  const bytes = readFileSync(resolve('extensions/rust-wasm/pkg/ferrox_bg.wasm'))
+  await ensure_ferrox_wasm_ready(new Uint8Array(bytes))
+})
+
+// Build a minimal periodic cube (CHGCAR→cube shape). Input geometry here is
+// in Angstrom; the file is written in Bohr. `origin` is the grid anchor;
 // the grid spans `voxel_axes[i] * dims[i]` along each axis.
 function make_cube(opts: {
   cell: number
@@ -16,15 +25,15 @@ function make_cube(opts: {
   atoms: [number, [number, number, number]][]
 }): string {
   const { cell, grid, origin, atoms } = opts
-  const dv = cell / grid
+  const bohr = 0.529177210903
+  const dv = cell / grid / bohr
   const lines: string[] = [`periodic cube`, `regression fixture`]
-  // negative count ⇒ Ångström units
-  lines.push(`${-atoms.length}  ${origin[0]}  ${origin[1]}  ${origin[2]}`)
+  lines.push(`${atoms.length}  ${origin[0] / bohr}  ${origin[1] / bohr}  ${origin[2] / bohr}`)
   lines.push(`${grid}  ${dv}  0  0`)
   lines.push(`${grid}  0  ${dv}  0`)
   lines.push(`${grid}  0  0  ${dv}`)
   for (const [z, p] of atoms) {
-    lines.push(`${z}  ${z}.0  ${p[0]}  ${p[1]}  ${p[2]}`)
+    lines.push(`${z}  ${z}.0  ${p[0] / bohr}  ${p[1] / bohr}  ${p[2] / bohr}`)
   }
   // voxel payload (values are irrelevant to header parsing)
   const total = grid * grid * grid

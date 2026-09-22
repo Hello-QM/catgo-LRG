@@ -6,7 +6,7 @@
     extractIsosurface,
     downloadIsosurface,
   } from '$lib/cube'
-  import { parse_cube_full, type ParsedCubeData } from '$lib/cube/parse-cube'
+  import type { ParsedCubeData } from '$lib/cube/parse-cube'
   import {
     sample_plane_slice,
     project_atoms_to_plane,
@@ -20,7 +20,7 @@
     type ColormapName,
     type Vec3,
   } from '$lib/cube/slice'
-  import { extract_isosurface_client, dispose_worker } from '$lib/cube/client'
+  import { CubeClient } from '$lib/cube/client'
   import { download } from '$lib/io/fetch'
   import { atomic_radii } from '$lib/structure'
   import { element_data } from '$lib/element'
@@ -94,7 +94,8 @@
 
   let auto_uploaded = $state(false)
   let file_input: HTMLInputElement = $state(undefined as any)
-  let parsed_cube: ParsedCubeData | null = $state(null)
+  // Keep the immutable grid identity so isovalue changes reuse the Worker's volume.
+  let parsed_cube: ParsedCubeData | null = $state.raw(null)
 
   /** Upload current cube file to server if not yet uploaded (needed for export). */
   async function ensure_server_file(): Promise<boolean> {
@@ -111,7 +112,8 @@
     }
   }
 
-  onDestroy(() => dispose_worker())
+  const cube_client = new CubeClient()
+  onDestroy(() => cube_client.dispose())
 
   // Auto-load when cube_file is provided
   $effect(() => {
@@ -130,7 +132,7 @@
     cube_state.error = null
     try {
       const text = await file.text()
-      parsed_cube = parse_cube_full(text)
+      parsed_cube = await cube_client.parse(text)
       cube_state.header = parsed_cube.header
       cube_atoms = parsed_cube.header.atoms
 
@@ -198,7 +200,7 @@
     cube_state.loading = true
     cube_state.error = null
     try {
-      const result = await extract_isosurface_client(
+      const result = await cube_client.extract(
         parsed_cube.grid,
         cube_state.isovalue,
         cube_state.dual,
