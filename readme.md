@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> **[Download the latest CatGo →](https://dl.catgo-ucsd.org/)**
+>
+> **Open-source releases stop at 1.4.x.** CatGo **1.5.0 and later** are available as installation packages from the official download center; their source code is not published in this repository. This repository's GitHub “Latest release” is **not** the latest CatGo application version.
+>
+> **中文：开源版本仅更新至 1.4.x；1.5.0 及后续版本请前往[官方下载中心](https://dl.catgo-ucsd.org/)下载安装包。**
+
 <p align="center">
   <img src="image/64f79bb3-7077-4e7b-a006-30632f0c3849.png" alt="CatGo — AI workbench for computational materials science, with crystal structures and analysis plots" width="100%">
 </p>
@@ -285,7 +292,7 @@ Feature availability depends on the CatGo edition, installed optional dependenci
 
 ### Download
 
-Every link points at the **latest release** on the dedicated [CatGo download hub](https://dl.catgo-ucsd.org/), so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://dl.catgo-ucsd.org/). For older versions and release history, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
+For **CatGo 1.5.0 and later**, download installation packages from the [official CatGo download center](https://dl.catgo-ucsd.org/). Available versions and platform packages are listed there. This repository's [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases) cover **1.4.x and earlier open-source releases only** and do not indicate the latest CatGo application version.
 
 > **Direct delivery / 中国大陆直连：** [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) serves the full installers directly through Cloudflare without requiring a GitHub login. As a fallback, a browser-based subset (no CatBot chat or desktop integration) installs via a PyPI mirror: `pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`, then run `catgo`.
 
@@ -299,9 +306,9 @@ Every link points at the **latest release** on the dedicated [CatGo download hub
 | **VS Code**               | Search **CatGo** in Extensions                                      | or `catgo-<ver>.vsix` on the release page                  |
 | **Web** (no install)      | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)                    | —                                                          |
 
-### Recommended: build from source with an AI coding agent
+### Build the open-source 1.4.x version with an AI coding agent
 
-For the most up-to-date build and full control, let a CLI coding agent install and deploy CatGo for you — it handles prerequisites, the Rust/WASM build, and starting the stack:
+To build and customize the **open-source 1.4.x version**, a CLI coding agent can help with prerequisites, the Rust/WASM build, and starting the stack. These instructions do not provide the newer 1.5.0+ versions; obtain those from the [download center](https://dl.catgo-ucsd.org/).
 
 1. Install a CLI coding agent: [Codex CLI](https://github.com/openai/codex) or [Claude Code](https://www.anthropic.com/claude-code).
 2. Open it in an empty working directory and run its **`/goal`** command with the prompt below.
@@ -310,7 +317,7 @@ For the most up-to-date build and full control, let a CLI coding agent install a
 <summary><b>/goal prompt — copy & paste</b></summary>
 
 ```text
-Install and deploy CatGo from source on this machine, end to end, and leave it running.
+Install and deploy the open-source CatGo 1.4.x version from this public repository on this machine, end to end, and leave it running.
 
 1. Prerequisites: detect the OS, then install whatever is missing — git, Node.js 20+, pnpm,
    Python 3.11 (prefer a fresh conda or uv environment), the stable Rust toolchain, and
@@ -334,7 +341,7 @@ app is actually serving.
 
 </details>
 
-### Run from source (developers)
+### Run the open-source 1.4.x version from source (developers)
 
 Install Node.js 20 or newer, pnpm, Python 3.11, and the stable Rust toolchain. The WASM build also requires `wasm-pack`. Then use the following sequence:
 
