@@ -69,6 +69,6 @@ CatBot 会从环境变量或 *Settings* 对话框读取 provider API key。密�
 
 ## 故障排查
 
-- **"native binary not found"** - Claude SDK 找不到 `claude` CLI。安装它（`npm i -g @anthropic-ai/claude-cli`），或切换到 Gemini / Codex。v1.0.1 已修复该问题，`resolveClaudeExecutable()` 现在会回退到 `PATH` 查找。
+- **"native binary not found"** - Claude SDK 找不到 `claude` CLI。安装它（`npm i -g @anthropic-ai/claude-code`），或切换到 Gemini / Codex。v1.0.1 已修复该问题，`resolveClaudeExecutable()` 现在会回退到 `PATH` 查找。
 - **Stream stalls mid-response** - sidecar 的 SSE 连接中断。可从聊天面板重启 CatBot；transcript 会保留在 `~/.catgo/agents/<provider>/` 下。
 - **Tool call returns wrong panel** - CatBot 默认使用 `panel_id=default`。请在工具调用中传入 `panel_id=structure-1`（或当前活动面板），也可以在 prompt 中指定面板。
