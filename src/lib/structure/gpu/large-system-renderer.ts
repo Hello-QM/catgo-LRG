@@ -34,6 +34,7 @@ import {
   MAX_DIRECT_ATOMS,
   plan_bond_dispatch,
 } from '$lib/structure/workers/bond-backend-policy'
+import type { Pbc } from '$lib/structure'
 import { diff_render_packet } from '$lib/structure/scene/render-packet'
 import type {
   BaseBondGraph,
@@ -2090,10 +2091,14 @@ export type ReplicaRendererDiagnostics = {
   /** Bond count of the ACTIVE draw graph (packet-, GPU-, or wasm-produced). */
   active_bond_count: number
   /** Non-null while the dispatch policy refuses the GPU compute path
-   *  (periodic thin cell / grid storage budget). Bonds are then routed
-   *  through the rust-wasm worker (Bonds T6); the reason persists so hosts
-   *  can surface the backend in diagnostics. */
-  required_backend: 'periodic-thin-cell' | 'grid-storage-limit' | null
+   *  (partial periodicity / periodic thin cell / grid storage budget). Bonds
+   *  are then routed through the rust-wasm worker (Bonds T6); the reason
+   *  persists so hosts can surface the backend in diagnostics. */
+  required_backend:
+    | 'partial-periodic-cell'
+    | 'periodic-thin-cell'
+    | 'grid-storage-limit'
+    | null
   /** Active writer of shared GPU state; legacy writes invalidate packet cache. */
   ownership: 'legacy' | 'packet'
   /** Base-cell atom count (CPU stays at exactly N sites). */
@@ -2186,13 +2191,15 @@ export type LargeSystemRenderer = {
    *  used for sphere size). `lattice` is the 9-float row-major detector matrix
    *  (rows a,b,c). In legacy mode it also owns the bond-render lattice; packet
    *  mode keeps render geometry owned by `frame.lattice`. `options` carries the
-   *  bond cutoffs; `periodic` toggles min-image PBC. Marks bonds dirty so the
+   *  bond cutoffs; `pbc` preserves per-axis minimum-image periodicity. A
+   *  boolean remains accepted for compatibility with older direct callers.
+   *  Marks bonds dirty so the
    *  next render re-runs the compute dispatch — NOT every frame. */
   set_bond_data(
     covalent_radii: Float32Array,
     lattice: Float32Array,
     options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
-    periodic: boolean,
+    pbc: Pbc | boolean | null,
   ): void
   /** Mirror the viewer's bond visual settings without changing packet/legacy
    *  ownership or invalidating the scientific bond graph. Repeated equal style
@@ -2642,6 +2649,7 @@ export function create_large_system_renderer(
   let bond_render_lattice = new Float32Array(9)
   let bond_style = normalize_bond_style()
   let bond_options = { tolerance: 0, max_bond_dist: 0, min_bond_dist: 0 }
+  let bond_pbc: Pbc | null = null
   let bond_periodic = false
   let bond_n = 0 // atom count the detection should range over
   // ── Dirty-kind split (design §8.2 items 4-6). `graph_dirty`: the base bond
@@ -2671,7 +2679,11 @@ export function create_large_system_renderer(
   // budget): Bonds T6 routes those graphs through the Rust-WASM worker
   // (compute_bonds_typed). While set, the GPU compute never dispatches; the
   // ACTIVE graph stays on screen until the typed result uploads over it.
-  let required_backend: 'periodic-thin-cell' | 'grid-storage-limit' | null = null
+  let required_backend:
+    | 'partial-periodic-cell'
+    | 'periodic-thin-cell'
+    | 'grid-storage-limit'
+    | null = null
   // One typed rust-wasm request in flight at a time (latest wins): while set,
   // a still-dirty graph waits — completion wakes the host, whose next render
   // re-dispatches against the newest inputs.
@@ -4349,7 +4361,7 @@ export function create_large_system_renderer(
           [L[6], L[7], L[8]],
         ]
         : null,
-      pbc: bond_periodic ? [true, true, true] : null,
+      pbc: bond_pbc ? [bond_pbc[0], bond_pbc[1], bond_pbc[2]] : null,
       options: { ...bond_options },
     }
     // The injected seam is called synchronously (deterministic tests); the
@@ -4537,7 +4549,7 @@ export function create_large_system_renderer(
       covalent_radii: Float32Array,
       lattice: Float32Array,
       options: { tolerance: number; max_bond_dist: number; min_bond_dist: number },
-      periodic: boolean,
+      pbc: Pbc | boolean | null,
     ): void {
       if (destroyed || device_lost) return
       bonds_configured = true
@@ -4548,7 +4560,10 @@ export function create_large_system_renderer(
       // detector refreshes must not mutate the displayed periodic shift.
       if (ownership === `legacy`) bond_render_lattice = lattice.slice(0, 9)
       bond_options = { ...options }
-      bond_periodic = periodic
+      bond_pbc = typeof pbc === `boolean`
+        ? pbc ? [true, true, true] : null
+        : pbc ? [!!pbc[0], !!pbc[1], !!pbc[2]] : null
+      bond_periodic = bond_pbc?.some(Boolean) ?? false
 
       // Capacity heuristic: max(1024, n_atoms * 16). The controller's capacity
       // floor rises with the atom count; never shrinks (avoids churn on tweaks).
@@ -5066,17 +5081,27 @@ export function create_large_system_renderer(
         // over the storage budget ⇒ REFUSE — those must go to the Rust-WASM
         // worker (wired in Task 6), never to an all-pairs GPU fallback. The
         // active graph stays on screen while refused.
-        const plan = plan_bond_dispatch({
-          periodic: bond_periodic,
-          lattice: bond_detector_lattice,
-          max_bond_dist: bond_options.max_bond_dist,
-          positions: last_positions ?? new Float32Array(0),
-          n: bond_n,
-          atom_count: bond_n,
-          direct_limit: MAX_DIRECT_ATOMS,
-          max_storage_bytes: device.limits?.maxStorageBufferBindingSize ??
-            (1 << 27),
-        })
+        // The WebGPU grid/direct shaders currently support either no PBC or
+        // all-axis PBC. A slab's mixed mask (typically [true,true,false]) must
+        // not be widened to [true,true,true]: doing so searches through the
+        // vacuum axis and turns ordinary layer bonds into incorrect boundary
+        // jimages. Route mixed-PBC cells through the existing typed Rust/WASM
+        // detector, which consumes the exact three-axis mask used by WebGL.
+        const partial_periodic = bond_pbc !== null &&
+          bond_pbc.some(Boolean) && !bond_pbc.every(Boolean)
+        const plan = partial_periodic
+          ? { kind: `rust-wasm`, reason: `partial-periodic-cell` } as const
+          : plan_bond_dispatch({
+            periodic: bond_periodic,
+            lattice: bond_detector_lattice,
+            max_bond_dist: bond_options.max_bond_dist,
+            positions: last_positions ?? new Float32Array(0),
+            n: bond_n,
+            atom_count: bond_n,
+            direct_limit: MAX_DIRECT_ATOMS,
+            max_storage_bytes: device.limits?.maxStorageBufferBindingSize ??
+              (1 << 27),
+          })
         if (plan.kind === `rust-wasm`) {
           if (required_backend !== plan.reason) {
             console.warn(

@@ -1297,4 +1297,81 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     renderer.destroy()
     warn.mockRestore()
   })
+
+  it(`routes mixed-PBC slabs through the typed detector with the exact axis mask`, async () => {
+    const warn = vi.spyOn(console, `warn`).mockImplementation(() => {})
+    const raw = make_mock_device()
+    const fake = vi.fn((_input: TypedBondInput) =>
+      Promise.resolve({
+        backend: `rust-wasm-scalar` as const,
+        elapsed_ms: 1,
+        table: {
+          pairs: Uint32Array.from([0, 1]),
+          images: Int8Array.from([0, 0, 0]),
+          lengths: Float32Array.from([2.4]),
+          strengths: Float32Array.from([1]),
+        },
+      })
+    )
+    const renderer = create_large_system_renderer(
+      raw as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+      { compute_bonds_typed: fake },
+    )
+
+    const positions = Float32Array.from([0, 0, 0, 2.4, 0, 0])
+    const slab = new Float32Array([10, 0, 0, 0, 10, 0, 0, 0, 25])
+    const topology = {
+      version: 1,
+      atom_count: 2,
+      site_ids: Uint32Array.from([0, 1]),
+      atomic_numbers: Uint8Array.from([14, 14]),
+      radii: new Float32Array(2).fill(0.5),
+      colors: new Float32Array(6).fill(0.5),
+    }
+    renderer.set_packet({
+      topology,
+      frame: {
+        owner: { tag: `slab` },
+        frame_idx: 0,
+        positions_version: 0,
+        positions,
+        lattice: slab,
+      },
+      replicas: {
+        version: 1,
+        dims: [1, 1, 1] as const,
+        boundary_policy: `stub` as const,
+        semantics: `visual-shared-base` as const,
+      },
+    }, {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    })
+    renderer.set_bond_data(
+      new Float32Array(2).fill(1.11),
+      slab,
+      { tolerance: 0.45, max_bond_dist: 3, min_bond_dist: 0.1 },
+      [true, true, false],
+    )
+    renderer.render()
+
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(0)
+    expect(renderer.get_diagnostics().required_backend).toBe(
+      `partial-periodic-cell`,
+    )
+    expect(fake).toHaveBeenCalledTimes(1)
+    const input = fake.mock.calls[0][0]
+    expect(input.atomic_numbers).toBe(topology.atomic_numbers)
+    expect(input.pbc).toEqual([true, true, false])
+    expect(input.lattice_matrix).toEqual([[10, 0, 0], [0, 10, 0], [0, 0, 25]])
+
+    await flush()
+    expect(renderer.get_diagnostics().active_bond_count).toBe(1)
+    expect(renderer.get_diagnostics().ownership).toBe(`packet`)
+
+    renderer.destroy()
+    warn.mockRestore()
+  })
 })
