@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> **[下载最新版 CatGo → 官方下载中心](https://dl.catgo-ucsd.org/)**
+>
+> **开源版本仅更新至 1.4.x 系列。** CatGo **1.5.0 及后续版本**请到官方下载中心下载安装包，后续版本源码不在本仓库公开。
+>
+> **本仓库 GitHub Releases 中的“Latest release”仅对应旧版开源发布，不代表 CatGo 客户端的最新版本。**
+
 <p align="center">
   <img src="image/64f79bb3-7077-4e7b-a006-30632f0c3849.png" alt="CatGo AI 计算材料工作台首图，展示晶体结构与分析图表" width="100%">
 </p>
@@ -286,7 +293,7 @@ catgo --help
 
 ### 下载
 
-下表所有链接都指向专用 [CatGo 下载中心](https://dl.catgo-ucsd.org/)的**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://dl.catgo-ucsd.org/)。历史版本与发布记录见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
+**CatGo 1.5.0 及后续版本**请前往 [官方下载中心](https://dl.catgo-ucsd.org/)下载安装包；可用版本与各平台安装包以下载中心为准。本仓库的 [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases) **仅对应 1.4.x 及更早的开源版本**，不代表 CatGo 客户端的最新版本。
 
 > **中国大陆直连：** [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 通过 Cloudflare 直接提供完整安装包，无需登录或访问 GitHub。备选方案：通过 PyPI 镜像安装浏览器版（功能子集，不含 CatBot 聊天与桌面集成）：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
 
@@ -300,9 +307,9 @@ catgo --help
 | **VS Code**              | 在扩展市场搜索 **CatGo**                                             | 或发布页的 `catgo-<ver>.vsix`                                  |
 | **Web**（免安装）             | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)              | —                                                         |
 
-### 推荐：用 AI 编码 Agent 从源码构建
+### 用 AI 编码 Agent 构建开源 1.4.x 版本
 
-想要最新版和完全可控，可以让 CLI 编码 Agent 帮你安装并部署 CatGo —— 它会处理依赖、Rust/WASM 构建并启动整个栈：
+如果希望自行构建和修改**开源 1.4.x 版本**，可以让 CLI 编码 Agent 帮你处理依赖、Rust/WASM 构建并启动整个栈。以下步骤不会获得 1.5.0 及后续版本；新版请从 [下载中心](https://dl.catgo-ucsd.org/)获取。
 
 1. 安装一个 CLI 编码 Agent：[Codex CLI](https://github.com/openai/codex) 或 [Claude Code](https://www.anthropic.com/claude-code)。
 2. 在一个空目录里打开它，运行 **`/goal`** 命令并粘贴下面的 prompt。
@@ -311,7 +318,7 @@ catgo --help
 <summary><b>/goal prompt —— 复制粘贴</b></summary>
 
 ```text
-Install and deploy CatGo from source on this machine, end to end, and leave it running.
+Install and deploy the open-source CatGo 1.4.x version from this public repository on this machine, end to end, and leave it running.
 
 1. Prerequisites: detect the OS, then install whatever is missing — git, Node.js 20+, pnpm,
    Python 3.11 (prefer a fresh conda or uv environment), the stable Rust toolchain, and
@@ -335,7 +342,7 @@ app is actually serving.
 
 </details>
 
-### 从源码运行（开发者）
+### 从源码运行开源 1.4.x 版本（开发者）
 
 请先安装 Node.js 20 或更高版本、pnpm、Python 3.11 和稳定版 Rust 工具链；构建 WASM 还需要 `wasm-pack`。然后按以下顺序运行：
 
