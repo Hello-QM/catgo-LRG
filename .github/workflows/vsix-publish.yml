@@ -16,6 +16,14 @@ on:
         description: 'Required for a manual marketplace publish (for example, v1.4.6)'
         type: string
         default: ''
+      publish_target:
+        description: 'Marketplace target for a manual publish or retry'
+        type: choice
+        default: all
+        options:
+          - all
+          - vscode
+          - open-vsx
 
 env:
   CARGO_NET_RETRY: "10"
@@ -154,7 +162,7 @@ jobs:
       # Duplicate versions are release errors: v1.4.6 must produce a new
       # marketplace version, not pass as an idempotent no-op.
       - name: Publish to VS Code Marketplace
-        if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}
+        if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false && inputs.publish_target != 'open-vsx') }}
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -168,7 +176,7 @@ jobs:
       # the one-time ownership transfer must be requested manually — see
       # deploy/vscode/OPEN-VSX-NAMESPACE.md.
       - name: Ensure Open VSX namespace ownership
-        if: ${{ (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)) && env.OVSX_PAT != '' }}
+        if: ${{ (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false && inputs.publish_target != 'vscode')) && env.OVSX_PAT != '' }}
         working-directory: extensions/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
@@ -183,10 +191,28 @@ jobs:
           fi
 
       - name: Publish to Open VSX (Cursor / VSCodium / Theia)
-        if: ${{ (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)) && env.OVSX_PAT != '' }}
+        if: ${{ (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false && inputs.publish_target != 'vscode')) && env.OVSX_PAT != '' }}
         working-directory: extensions/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
+          set -euo pipefail
           vsix=$(ls catgo-*.vsix | head -1)
-          pnpm dlx ovsx publish "$vsix" --no-dependencies
+          for attempt in 1 2 3 4 5; do
+            if out=$(pnpm dlx ovsx publish "$vsix" --no-dependencies 2>&1); then
+              echo "$out"
+              exit 0
+            else
+              code=$?
+            fi
+            echo "$out"
+            if ! echo "$out" | grep -qiE '(status|HTTP)[[:space:]]+5[0-9]{2}|Service Unavailable|Bad Gateway|Gateway Timeout|ECONNRESET|ETIMEDOUT'; then
+              exit "$code"
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit "$code"
+            fi
+            delay=$((attempt * 30))
+            echo "Open VSX is temporarily unavailable; retrying in ${delay}s (attempt $((attempt + 1))/5)."
+            sleep "$delay"
+          done
