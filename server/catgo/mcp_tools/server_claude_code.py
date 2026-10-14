@@ -514,12 +514,15 @@ TOOLS = [
                     "enum": [
                         "oer", "co2rr", "nrr", "free_energy",
                         "volcano", "d_band_center", "adsorption_energy",
+                        "energetic_span", "distortion_interaction",
                     ],
                     "description": (
                         "oer: OER 4-step overpotential. co2rr: CO2RR limiting potential. "
                         "nrr: NRR overpotential. free_energy: Gibbs G=E+ZPE-TS. "
                         "volcano: generate volcano plot data. d_band_center: compute from DOS. "
-                        "adsorption_energy: ΔG_ads calculation."
+                        "adsorption_energy: ΔG_ads calculation. "
+                        "energetic_span: TDI/TDTS, δE and TOF of a catalytic cycle. "
+                        "distortion_interaction: activation strain decomposition."
                     ),
                 },
                 "params": {
@@ -532,7 +535,13 @@ TOOLS = [
                         "free_energy: {e_dft, frequencies_cm, temperature}. "
                         "volcano: {results, reaction, descriptor_x}. "
                         "d_band_center: {energies, dos_d, e_fermi}. "
-                        "adsorption_energy: {e_slab_ads, e_slab, e_ref_molecule, zpe_correction, ts_correction}."
+                        "adsorption_energy: {e_slab_ads, e_slab, e_ref_molecule, zpe_correction, ts_correction}. "
+                        "energetic_span: {steps: [{label, energy, is_ts}], reaction_energy?, "
+                        "temperature?, unit? (eV|kcal/mol|kJ/mol)} — steps start at catalyst + "
+                        "reactants and, without reaction_energy, end at regenerated catalyst + products. "
+                        "distortion_interaction: {entries: [{label, complex_energy, coordinate?, "
+                        "fragments: [{name, energy_in_complex, energy_relaxed?}]}], "
+                        "fragment_references?, input_unit? (default hartree), output_unit? (default kcal/mol)}."
                     ),
                 },
             },
@@ -2275,8 +2284,20 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
         elif action == "adsorption_energy":
             from workflow.catalysis.oer import compute_adsorption_free_energy
             result = {"dG_ads": compute_adsorption_free_energy(**params)}
+        elif action == "energetic_span":
+            from workflow.catalysis.energetic_span import compute_energetic_span
+            result = compute_energetic_span(**params)
+            result.pop("plotly_data", None)
+        elif action == "distortion_interaction":
+            from workflow.catalysis.distortion_interaction import compute_distortion_interaction
+            result = compute_distortion_interaction(**params)
+            result.pop("plotly_data", None)
+            result.pop("profile_plotly_data", None)
         else:
-            valid = "oer, co2rr, nrr, free_energy, volcano, d_band_center, adsorption_energy"
+            valid = (
+                "oer, co2rr, nrr, free_energy, volcano, d_band_center, adsorption_energy, "
+                "energetic_span, distortion_interaction"
+            )
             return [T(type="text", text=f"Unknown catalysis action '{action}'. Valid: {valid}")]
 
         # Wrap the numbers so they stay checkable: what produced them, from which
@@ -2295,6 +2316,10 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
             "volcano": "workflow.catalysis.volcano.generate_volcano_data",
             "d_band_center": "workflow.catalysis.descriptors.compute_d_band_center",
             "adsorption_energy": "workflow.catalysis.oer.compute_adsorption_free_energy",
+            "energetic_span": "workflow.catalysis.energetic_span.compute_energetic_span",
+            "distortion_interaction": (
+                "workflow.catalysis.distortion_interaction.compute_distortion_interaction"
+            ),
         }
         # Producer-owned U_L provenance: these are properties of the compute
         # module itself (CHE free-energy ladder, potentials vs RHE, reaction =

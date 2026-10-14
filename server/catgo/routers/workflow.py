@@ -565,6 +565,36 @@ def api_energy_diagram(body: dict):
     return generate_energy_diagram(pathways, config)
 
 
+@router.post("/catalysis/energetic-span")
+def api_energetic_span(body: dict):
+    """Energetic span model: TDI, TDTS, δE and TOF of a catalytic cycle."""
+    from workflow.catalysis.energetic_span import compute_energetic_span
+    try:
+        return compute_energetic_span(
+            steps=body.get("steps", []),
+            reaction_energy=body.get("reaction_energy"),
+            temperature=body.get("temperature", 298.15),
+            unit=body.get("unit", "eV"),
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/catalysis/distortion-interaction")
+def api_distortion_interaction(body: dict):
+    """Distortion–interaction (activation strain) energy decomposition."""
+    from workflow.catalysis.distortion_interaction import compute_distortion_interaction
+    try:
+        return compute_distortion_interaction(
+            entries=body.get("entries", []),
+            fragment_references=body.get("fragment_references"),
+            input_unit=body.get("input_unit", "hartree"),
+            output_unit=body.get("output_unit", "kcal/mol"),
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/catalysis/descriptors")
 def api_descriptors(body: dict):
     """Compute catalytic descriptors (d-band center, coordination, strain)."""

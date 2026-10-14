@@ -541,6 +541,19 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
             result = generate_energy_diagram(pathways=pathways, config=config)
             return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
 
+        elif tool_name == "catgo_catalysis_energetic_span":
+            from workflow.catalysis.energetic_span import compute_energetic_span
+            result = compute_energetic_span(**arguments)
+            result.pop("plotly_data", None)  # numbers only; plot via the UI or energy_diagram
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "catgo_catalysis_distortion_interaction":
+            from workflow.catalysis.distortion_interaction import compute_distortion_interaction
+            result = compute_distortion_interaction(**arguments)
+            result.pop("plotly_data", None)
+            result.pop("profile_plotly_data", None)
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
         elif tool_name == "catgo_vasp_presets":
             from workflow.presets.vasp import get_preset
             result = get_preset(arguments["preset_name"])

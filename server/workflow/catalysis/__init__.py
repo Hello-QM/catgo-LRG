@@ -18,3 +18,5 @@ from workflow.catalysis.descriptors import (
     compute_coordination_number,
     compute_surface_strain,
 )
+from workflow.catalysis.energetic_span import compute_energetic_span
+from workflow.catalysis.distortion_interaction import compute_distortion_interaction
