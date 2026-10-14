@@ -155,6 +155,7 @@ class TestClaudeCodeToolDefinitions:
         expected = {
             "oer", "co2rr", "nrr", "free_energy",
             "volcano", "d_band_center", "adsorption_energy",
+            "energetic_span", "distortion_interaction",
         }
         assert set(actions) == expected
 

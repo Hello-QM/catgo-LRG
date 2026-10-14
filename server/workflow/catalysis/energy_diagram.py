@@ -76,6 +76,35 @@ def _resolve_config(config: dict | None) -> dict[str, Any]:
     return merged
 
 
+def step_x_ranges(steps: list[dict], config: dict | None = None) -> list[tuple[float, float]]:
+    """Return the (x_start, x_end) span of every step as laid out by
+    :func:`generate_energy_diagram` (same ``config``)."""
+    cfg = _resolve_config(config)
+    base_spacing: float = cfg["base_spacing"]
+    hline_len = base_spacing * cfg["hline_ratio"]
+    ts_space = base_spacing * cfg["ts_spacing_ratio"]
+    vline_len = base_spacing * cfg["vline_ratio"]
+
+    n_hline = 0
+    n_ts = 0
+    n_vline = 0
+    x_ranges: list[tuple[float, float]] = []
+    for i, step in enumerate(steps):
+        is_ts = step.get("is_ts", False)
+        x_start = n_hline * hline_len + n_vline * vline_len + n_ts * ts_space
+        if is_ts:
+            x_end = x_start + ts_space
+            n_ts += 1
+        else:
+            x_end = x_start + hline_len
+            n_hline += 1
+            # Decide whether a vline follows this step.
+            if i + 1 < len(steps) and not steps[i + 1].get("is_ts", False):
+                n_vline += 1
+        x_ranges.append((x_start, x_end))
+    return x_ranges
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -103,17 +132,9 @@ def generate_energy_diagram(
 
     cfg = _resolve_config(config)
 
-    base_spacing: float = cfg["base_spacing"]
-    hline_ratio: float = cfg["hline_ratio"]
-    ts_spacing_ratio: float = cfg["ts_spacing_ratio"]
-    vline_ratio: float = cfg["vline_ratio"]
     line_width: float = cfg["line_width"]
     energy_fmt: str = cfg["energy_format"]
     height: int = cfg["height"]
-
-    hline_len = base_spacing * hline_ratio
-    ts_space = base_spacing * ts_spacing_ratio
-    vline_len = base_spacing * vline_ratio
 
     traces: list[dict] = []
     annotations: list[dict] = []
@@ -127,26 +148,8 @@ def generate_energy_diagram(
         color = pathway.get("color", "#000000")
         name = pathway.get("name", f"Path {p_idx + 1}")
 
-        # --- bookkeeping for x positions ---
-        n_hline = 0
-        n_ts = 0
-        n_vline = 0
-
         # Pre-compute x-ranges for every step so we can look ahead / behind.
-        x_ranges: list[tuple[float, float]] = []  # (x_start, x_end) per step
-        for i, step in enumerate(steps):
-            is_ts = step.get("is_ts", False)
-            x_start = n_hline * hline_len + n_vline * vline_len + n_ts * ts_space
-            if is_ts:
-                x_end = x_start + ts_space
-                n_ts += 1
-            else:
-                x_end = x_start + hline_len
-                n_hline += 1
-                # Decide whether a vline follows this step.
-                if i + 1 < len(steps) and not steps[i + 1].get("is_ts", False):
-                    n_vline += 1
-            x_ranges.append((x_start, x_end))
+        x_ranges = step_x_ranges(steps, cfg)
 
         # --- 1. Horizontal segments (one trace, null-gap separated) ---
         hline_xs: list[float | None] = []

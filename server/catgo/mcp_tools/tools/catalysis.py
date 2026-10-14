@@ -209,6 +209,106 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "catgo_catalysis_energetic_span",
+        "description": (
+            "Energetic span model (Kozuch-Shaik) for a catalytic cycle: finds the "
+            "TOF-determining intermediate (TDI) and transition state (TDTS), the "
+            "energetic span dE, the TOF and each state's degree of TOF control. "
+            "Input: ordered states of one turnover starting from catalyst + "
+            "reactants. Either end with the regenerated catalyst + products "
+            "(its energy sets the reaction energy) or pass reaction_energy. "
+            "Use Gibbs free energies for physically meaningful TOFs."
+        ),
+        "endpoint": "__direct__/catalysis_energetic_span",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "energy": {"type": "number"},
+                            "is_ts": {"type": "boolean", "description": "True for a transition state"},
+                        },
+                        "required": ["label", "energy"],
+                    },
+                    "description": "Intermediates and transition states of one turnover, in order",
+                },
+                "reaction_energy": {
+                    "type": "number",
+                    "description": (
+                        "Reaction energy of one turnover (negative = exergonic). Omit "
+                        "when the last step is the regenerated catalyst + products."
+                    ),
+                },
+                "temperature": {"type": "number", "description": "Temperature in K (default 298.15)"},
+                "unit": {
+                    "type": "string", "enum": ["eV", "kcal/mol", "kJ/mol"],
+                    "description": "Energy unit of the inputs (default eV)",
+                },
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "catgo_catalysis_distortion_interaction",
+        "description": (
+            "Distortion-interaction / activation strain decomposition: "
+            "dE = sum of fragment distortion energies + interaction energy. "
+            "Input: one or more complexes / transition states (optionally with a "
+            "reaction coordinate for an IRC profile), each with the complex energy "
+            "and every fragment's single-point energy at its complex geometry and "
+            "at its relaxed geometry. Energies default to Hartree in and kcal/mol out."
+        ),
+        "endpoint": "__direct__/catalysis_distortion_interaction",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "complex_energy": {"type": "number", "description": "Energy of the complex / TS"},
+                            "coordinate": {"type": "number", "description": "Optional reaction coordinate (e.g. IRC point)"},
+                            "fragments": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "energy_in_complex": {
+                                            "type": "number",
+                                            "description": "Single point of the fragment frozen at its complex geometry",
+                                        },
+                                        "energy_relaxed": {
+                                            "type": "number",
+                                            "description": "Fragment at its relaxed geometry (or use fragment_references)",
+                                        },
+                                    },
+                                    "required": ["name", "energy_in_complex"],
+                                },
+                            },
+                        },
+                        "required": ["complex_energy", "fragments"],
+                    },
+                },
+                "fragment_references": {
+                    "type": "object",
+                    "description": "Relaxed fragment energies shared by all entries, keyed by fragment name",
+                },
+                "input_unit": {"type": "string", "enum": ["hartree", "eV", "kcal/mol", "kJ/mol"]},
+                "output_unit": {"type": "string", "enum": ["hartree", "eV", "kcal/mol", "kJ/mol"]},
+            },
+            "required": ["entries"],
+        },
+    },
+    {
         "name": "catgo_vasp_presets",
         "description": "Get VASP INCAR preset parameters for common calculation types: relax, static, slab_relax, freq, band, md.",
         "endpoint": "__direct__/vasp_presets",
