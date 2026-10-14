@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { AnyStructure, ElementSymbol, PymatgenMolecule, Site, Vec3 } from '$lib'
   import { AtomManager, type AtomFastOps } from './atoms/atom-manager.svelte'
+  import OrbitalPanel from './OrbitalPanel.svelte'
+  import type { WavefunctionInfo } from '$lib/wavefunction/api'
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
   import { type ColorSchemeName, element_color_schemes } from '$lib/colors'
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
@@ -2000,6 +2002,10 @@
     visible_charge_labels: charge_state.visible_charge_labels,
   }))
 
+  // Wavefunction file (.fchk/.molden/.wfn/.wfx) shown in the orbital panel
+  let wavefunction_info = $state.raw<WavefunctionInfo | null>(null)
+  let orbital_pane_open = $state(false)
+
   // Cube file isosurface state
   let cube_positive_mesh = $state<import('$lib/cube').CubeMesh | null>(null)
   let cube_negative_mesh = $state<import('$lib/cube').CubeMesh | null>(null)
@@ -2991,6 +2997,10 @@
     get_on_file_load: () => on_file_load as any,
     get_on_error: () => on_error as any,
     apply_charges: (content, filename) => apply_charges_to_structure(content, filename),
+    set_wavefunction: (w) => {
+      wavefunction_info = w
+      orbital_pane_open = !!w
+    },
   })
 
   function undo() {
@@ -4673,7 +4683,21 @@
           <PluginHubPane bind:show={plugin_hub_open} />
         {/if}
 
+        {#if wavefunction_info}
+          <OrbitalPanel
+            bind:pane_open={orbital_pane_open}
+            wavefunction={wavefunction_info}
+            on_cube={(file) => {
+              // New orbital: drop the previous server-side cube so the panel reloads
+              cube_state_data.filepath = ``
+              cube_file = file
+              cube_pane_open = true
+            }}
+          />
+        {/if}
+
         {#if cube_file || cube_state_data.filepath}
+          {#key cube_file}
           <CubePanel
             bind:pane_open={cube_pane_open}
             {cube_file}
@@ -4687,6 +4711,7 @@
             bind:cube_state={cube_state_data}
             onslice_data={(result, atoms) => { slice_result = result; slice_atoms_info = atoms }}
           />
+          {/key}
         {/if}
 
         <!-- === Info / Export / Settings === -->
