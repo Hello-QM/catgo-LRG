@@ -187,6 +187,14 @@
                 class:frontier={label === `HOMO` || label === `LUMO`}
                 class:active={active_index === o.index}
                 onclick={() => show_orbital(o)}
+                onkeydown={(e) => {
+                  if (e.key === `Enter` || e.key === ` `) {
+                    e.preventDefault()
+                    show_orbital(o)
+                  }
+                }}
+                tabindex="0"
+                role="button"
                 title={t('structure.orbital_click_hint')}
               >
                 <td class="lbl">{busy_index === o.index ? `…` : label}</td>
@@ -263,6 +271,7 @@
   td { padding: 2px 6px; }
   .num { text-align: right; font-family: 'SF Mono', 'Cascadia Code', monospace; }
   tbody tr { cursor: pointer; }
+  tbody tr:focus-visible { outline: 2px solid var(--accent-color, #3b82f6); outline-offset: -2px; }
   tbody tr:hover { background: light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.06)); }
   tr.occupied td.num:nth-child(3) { color: var(--accent-color, #3b82f6); }
   tr.frontier td { font-weight: 600; }

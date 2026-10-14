@@ -68,7 +68,7 @@ export async function load_wavefunction(
   filename: string,
 ): Promise<WavefunctionInfo> {
   const form = new FormData()
-  form.append(`file`, new Blob([content]), filename)
+  form.append(`file`, new File([content], filename))
   const res = await fetch(`${API_BASE}/wavefunction/load`, { method: `POST`, body: form })
   if (!res.ok) throw new Error(await error_detail(res))
   return res.json()
