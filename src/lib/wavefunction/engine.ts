@@ -10,12 +10,13 @@
 import {
   type CoreRequest,
   type CoreResponse,
+  type GridArgs,
   type GridKind,
   type GridSpec,
   run_core,
 } from "./wfn-core";
 
-export type { GridKind, GridSpec };
+export type { GridArgs, GridKind, GridSpec };
 
 interface Slot {
   worker: Worker;
@@ -135,20 +136,24 @@ export async function grid_for(
   return res.grid;
 }
 
+function n_workers(): number {
+  return pool?.length ?? worker_count();
+}
+
 /**
- * Evaluate a grid function. Returns one Float64Array per block (iri_sl2r has
- * two: IRI and sign(λ2)ρ), each in cube order (x slowest, z fastest).
+ * Evaluate a grid function. Returns one Float64Array per block (iri_sl2r and
+ * igmh_sl2r have two, the second being sign(λ2)ρ), each in cube order
+ * (x slowest, z fastest).
  */
 export async function evaluate_grid(
   key: string,
   kind: GridKind,
   grid: GridSpec,
-  orbital = 0,
+  args: GridArgs = {},
 ): Promise<Float64Array[]> {
   const [nx, ny, nz] = grid.dims;
-  const n_workers = pool?.length ?? worker_count();
   // A few slabs per worker keeps them busy when slab costs differ
-  const n_slabs = Math.max(1, Math.min(nx, n_workers * 3));
+  const n_slabs = Math.max(1, Math.min(nx, n_workers() * 3));
   const bounds = Array.from(
     { length: n_slabs + 1 },
     (_, k) => Math.round((k * nx) / n_slabs),
@@ -159,7 +164,7 @@ export async function evaluate_grid(
         op: `evaluate`,
         key,
         kind,
-        orbital,
+        args,
         grid,
         ix0,
         ix1: bounds[k + 1],
@@ -169,7 +174,7 @@ export async function evaluate_grid(
     }),
   );
   const n = nx * ny * nz;
-  const n_blocks = kind === `iri_sl2r` ? 2 : 1;
+  const n_blocks = kind === `iri_sl2r` || kind === `igmh_sl2r` ? 2 : 1;
   const blocks = Array.from({ length: n_blocks }, () => new Float64Array(n));
   for (const { ix0, ix1, data } of parts) {
     const m = (ix1 - ix0) * ny * nz;
@@ -178,6 +183,51 @@ export async function evaluate_grid(
     }
   }
   return blocks;
+}
+
+/** Electrostatic potential (a.u.) at the listed flat grid indices. */
+export async function esp_at(
+  key: string,
+  grid: GridSpec,
+  indices: Uint32Array,
+): Promise<Float64Array> {
+  const n_chunks = Math.max(1, Math.min(indices.length, n_workers() * 3));
+  const bounds = Array.from(
+    { length: n_chunks + 1 },
+    (_, k) => Math.round((k * indices.length) / n_chunks),
+  );
+  const out = new Float64Array(indices.length);
+  await Promise.all(
+    bounds.slice(0, -1).map(async (start, k) => {
+      const res = await run_on(k, key, {
+        op: `esp_points`,
+        key,
+        grid,
+        indices: indices.slice(start, bounds[k + 1]),
+      });
+      if (!(`data` in res)) throw new Error(`unexpected worker reply`);
+      out.set(res.data, start);
+    }),
+  );
+  return out;
+}
+
+/** Electrostatic potential (a.u.) at arbitrary points given in Å. */
+export async function esp_at_points(
+  key: string,
+  points: [number, number, number][],
+): Promise<Float64Array> {
+  const xyz = Float64Array.from(points.flat().map((c) => c * ANGSTROM_TO_BOHR));
+  const res = await run_on(0, key, { op: `esp_xyz`, key, xyz });
+  if (!(`data` in res)) throw new Error(`unexpected worker reply`);
+  return res.data;
+}
+
+/** QTAIM critical points and bond paths (JSON from the engine). */
+export async function aim_json(key: string): Promise<string> {
+  const res = await run_on(0, key, { op: `aim`, key });
+  if (!(`json` in res)) throw new Error(`unexpected worker reply`);
+  return res.json;
 }
 
 export interface CubeAtom {

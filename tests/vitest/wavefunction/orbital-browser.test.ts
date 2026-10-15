@@ -4,24 +4,24 @@ import {
   type FileHandlerDeps,
 } from "$lib/structure/controllers/file-handlers";
 import {
-  fetch_orbital_cube,
   frontier_label,
   is_wavefunction_file,
   type Orbital,
   type WavefunctionInfo,
 } from "$lib/wavefunction/api";
 import { flushSync, mount, tick } from "svelte";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 // The built-in engine is exercised in engine.test.ts; here it is a stub
-const engine = vi.hoisted(() => ({
-  open_wavefunction: vi.fn(async (): Promise<unknown> => {
-    throw new Error(`engine unavailable`);
-  }),
-}));
+const engine = vi.hoisted(() => ({ open_wavefunction: vi.fn() }));
 vi.mock(`$lib/wavefunction/engine`, async (importOriginal) => ({
   ...(await importOriginal<object>()),
   open_wavefunction: engine.open_wavefunction,
+}));
+const analyses = vi.hoisted(() => ({ local_orbital_cube: vi.fn() }));
+vi.mock(`$lib/wavefunction/local-analyses`, async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  local_orbital_cube: analyses.local_orbital_cube,
 }));
 
 function orbital(index: number, occupation: number, energy: number): Orbital {
@@ -36,7 +36,7 @@ function orbital(index: number, occupation: number, energy: number): Orbital {
 }
 
 const WATER: WavefunctionInfo = {
-  session_id: `a`.repeat(32),
+  key: `wfn1`,
   format: `fchk`,
   filename: `water.fchk`,
   title: `water`,
@@ -60,37 +60,15 @@ const WATER: WavefunctionInfo = {
     orbital(7, 0, 0.69),
   ],
   frontier: { restricted: { homo: 5, lumo: 6, gap: 0.97, gap_ev: 26.4 } },
+  n_electrons: 10,
+  trace_ps: 10,
 };
-
-type Route = (url: string, init?: RequestInit) => Response | undefined;
-
-function stub_fetch(route: Route) {
-  const fetch_mock = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const res = route(String(input), init);
-      if (!res) throw new Error(`unexpected fetch ${input}`);
-      return res;
-    },
-  );
-  vi.stubGlobal(`fetch`, fetch_mock);
-  return fetch_mock;
-}
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": `application/json` },
-  });
 
 async function settle() {
   for (let i = 0; i < 5; i++) await tick();
   await new Promise((r) => setTimeout(r, 0));
   flushSync();
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe(`wavefunction api helpers`, () => {
   test(`recognises wavefunction file names`, () => {
@@ -119,40 +97,19 @@ describe(`wavefunction api helpers`, () => {
     expect(frontier_label(WATER.orbitals[6], frontier)).toBe(`LUMO+1`);
     expect(frontier_label(WATER.orbitals[0], undefined)).toBe(``);
   });
-
-  test(`surfaces the backend error detail`, async () => {
-    stub_fetch(() => json({ detail: `Multiwfn not found` }, 424));
-    await expect(fetch_orbital_cube(`x`, 1, `low`)).rejects.toThrow(
-      `Multiwfn not found`,
-    );
-  });
 });
 
 describe(`OrbitalPanel`, () => {
   beforeEach(() => {
     document.body.innerHTML = ``;
-    try {
-      localStorage.clear();
-    } catch {
-      // storage unavailable in this environment
-    }
+    analyses.local_orbital_cube.mockReset();
   });
 
-  test(`lists orbitals highest first and sends the clicked one to Multiwfn`, async () => {
-    const fetch_mock = stub_fetch((url, init) => {
-      if (url.includes(`/wavefunction/multiwfn-status`)) {
-        return json({
-          found: true,
-          path: `/opt/Multiwfn/Multiwfn`,
-          source: `PATH`,
-        });
-      }
-      if (url.endsWith(`/wavefunction/orbital-cube`)) {
-        const body = JSON.parse(String(init?.body));
-        return new Response(`cube for ${body.orbital_index} at ${body.grid}`);
-      }
-      return undefined;
-    });
+  test(`lists orbitals highest first and computes the clicked one`, async () => {
+    analyses.local_orbital_cube.mockImplementation(
+      async (_wf: WavefunctionInfo, index: number, grid: string) =>
+        `cube for ${index} at ${grid}`,
+    );
     const on_cube = vi.fn();
     mount(OrbitalPanel, {
       target: document.body,
@@ -173,22 +130,20 @@ describe(`OrbitalPanel`, () => {
       `1`,
     ]);
     expect(rows[2].cells[0].textContent).toBe(`HOMO`);
-    expect(document.querySelector(`.orb-status`)?.textContent).toContain(
-      `/opt/Multiwfn/Multiwfn`,
+    // no external program to configure any more
+    expect(document.body.textContent).not.toContain(`Multiwfn path`);
+    expect(document.querySelector(`.orb-cite`)?.textContent).toContain(
+      `J. Comput. Chem. 33, 580`,
     );
 
     rows[2].click();
     await settle();
 
-    const cube_call = fetch_mock.mock.calls.find(([u]) =>
-      String(u).endsWith(`/orbital-cube`)
+    expect(analyses.local_orbital_cube).toHaveBeenCalledWith(
+      WATER,
+      5,
+      `medium`,
     );
-    expect(JSON.parse(String(cube_call?.[1]?.body))).toEqual({
-      session_id: WATER.session_id,
-      orbital_index: 5,
-      grid: `medium`,
-      multiwfn_path: null,
-    });
     expect(on_cube).toHaveBeenCalledOnce();
     const [file, options] = on_cube.mock.calls[0] as [File, object];
     expect(file.name).toBe(`water_MO5.cub`);
@@ -196,13 +151,10 @@ describe(`OrbitalPanel`, () => {
     expect(options).toEqual({}); // plain orbital: no colouring grid
   });
 
-  test(`shows the Multiwfn error instead of calling on_cube`, async () => {
-    stub_fetch((url) => {
-      if (url.includes(`multiwfn-status`)) {
-        return json({ found: false, path: null, source: null });
-      }
-      return json({ detail: `Multiwfn not found. Set its path` }, 424);
-    });
+  test(`shows the engine error instead of calling on_cube`, async () => {
+    analyses.local_orbital_cube.mockRejectedValue(
+      new Error(`orbital 99 does not exist`),
+    );
     const on_cube = vi.fn();
     mount(OrbitalPanel, {
       target: document.body,
@@ -213,7 +165,22 @@ describe(`OrbitalPanel`, () => {
     await settle();
     expect(on_cube).not.toHaveBeenCalled();
     expect(document.querySelector(`.orb-error`)?.textContent).toContain(
-      `Multiwfn not found`,
+      `does not exist`,
+    );
+  });
+
+  test(`warns when Tr(P·S) does not match the electron count`, async () => {
+    mount(OrbitalPanel, {
+      target: document.body,
+      props: {
+        pane_open: true,
+        wavefunction: { ...WATER, trace_ps: 7.9976 },
+        on_cube: vi.fn(),
+      },
+    });
+    await settle();
+    expect(document.querySelector(`.orb-error`)?.textContent).toContain(
+      `7.9976`,
     );
   });
 });
@@ -246,10 +213,13 @@ describe(`file handlers`, () => {
     return deps;
   }
 
-  test(`loads a wavefunction file: geometry into the viewer, orbitals to the panel`, async () => {
-    const fetch_mock = stub_fetch((url) =>
-      url.endsWith(`/wavefunction/load`) ? json(WATER) : undefined
-    );
+  test(`loads a wavefunction file in the engine: geometry to the viewer, orbitals to the panel`, async () => {
+    const { key: _k, filename: _f, trace_ps: _t, ...info } = WATER;
+    engine.open_wavefunction.mockResolvedValueOnce({
+      key: `wfn7`,
+      info,
+      trace_ps: 10,
+    });
     const deps = make_deps();
     const handlers = create_file_handlers(deps);
     expect(handlers.process_parsed_content(`fchk text`, `water.fchk`)).toBe(
@@ -257,49 +227,32 @@ describe(`file handlers`, () => {
     );
     await settle();
 
-    expect(fetch_mock).toHaveBeenCalledOnce();
-    const form = fetch_mock.mock.calls[0][1]?.body as FormData;
-    expect((form.get(`file`) as File).name).toBe(`water.fchk`);
-    expect(deps.set_wavefunction).toHaveBeenCalledWith(WATER);
+    expect(engine.open_wavefunction).toHaveBeenCalledWith(
+      `fchk text`,
+      `water.fchk`,
+    );
+    expect(deps.set_wavefunction).toHaveBeenCalledWith({
+      ...WATER,
+      key: `wfn7`,
+    });
     const structure = deps.set_structure.mock.calls[0][0];
     expect(structure.sites).toHaveLength(3);
     expect(structure._aligned).toBe(true);
   });
 
-  test(`the built-in engine supplies the orbitals; the backend only a Multiwfn session`, async () => {
-    const { session_id: _, ...local_info } = WATER;
-    engine.open_wavefunction.mockResolvedValueOnce({
-      key: `wfn7`,
-      info: { ...local_info, filename: undefined },
-      trace_ps: 10,
-    });
-    stub_fetch((url) =>
-      url.endsWith(`/wavefunction/load`) ? json({ ...WATER, session_id: `b`.repeat(32) }) : undefined
+  test(`a file the engine rejects reports the error`, async () => {
+    engine.open_wavefunction.mockRejectedValueOnce(
+      new Error(`x.fchk: missing 'Atomic numbers'`),
     );
     const deps = make_deps();
-    create_file_handlers(deps).process_parsed_content(`fchk text`, `water.fchk`);
+    create_file_handlers(deps).process_parsed_content(`junk`, `x.fchk`);
     await settle();
-    expect(deps.set_wavefunction).toHaveBeenCalledWith({
-      ...WATER,
-      session_id: `b`.repeat(32),
-      local_key: `wfn7`,
-      trace_ps: 10,
-    });
-  });
-
-  test(`without a backend the file still loads, with no Multiwfn session`, async () => {
-    const { session_id: _, ...local_info } = WATER;
-    engine.open_wavefunction.mockResolvedValueOnce({ key: `wfn8`, info: local_info, trace_ps: 10 });
-    stub_fetch(() => {
-      throw new TypeError(`Failed to fetch`);
-    });
-    const deps = make_deps();
-    create_file_handlers(deps).process_parsed_content(`fchk text`, `water.fchk`);
-    await settle();
-    const info = deps.set_wavefunction.mock.calls.at(-1)?.[0] as WavefunctionInfo;
-    expect(info.session_id).toBeNull();
-    expect(info.local_key).toBe(`wfn8`);
-    expect(deps.set_structure).toHaveBeenCalledOnce();
+    expect(deps.set_error_msg).toHaveBeenCalledWith(
+      expect.stringContaining(`missing 'Atomic numbers'`),
+    );
+    expect(deps.set_wavefunction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: expect.any(String) }),
+    );
   });
 
   test(`a regular structure file clears the orbital panel`, () => {

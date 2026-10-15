@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::esp::{EspEngine, EspScratch};
 use crate::eval::{iri, rdg, sign_lambda2_rho, BasisValues, Order};
+use crate::igmh::IgmhScratch;
 use crate::wavefunction::Wavefunction;
 
 const EXTENSION: f64 = 6.0;
@@ -65,7 +67,7 @@ impl Wavefunction {
 }
 
 /// What to evaluate on a grid.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Function {
     /// Orbital wavefunction (0-based orbital index)
     Orbital(usize),
@@ -76,31 +78,70 @@ pub enum Function {
     Rdg,
     /// Two blocks: IRI, then sign(λ2)ρ
     IriSl2r,
+    /// Two blocks: IGMH δg_inter between the fragments (0-based atom
+    /// indices), then sign(λ2)ρ
+    IgmhSl2r(Vec<Vec<usize>>),
 }
 
 impl Function {
-    pub fn parse(kind: &str, orbital: usize) -> Result<Self, String> {
+    /// `args`: {"orbital": n} (1-based) for orbitals, {"fragments": [[1, 2], [3]]}
+    /// (1-based atom indices, at least two fragments) for IGMH.
+    pub fn parse(kind: &str, args: &serde_json::Value, n_atoms: usize) -> Result<Self, String> {
         Ok(match kind {
-            "orbital" => Function::Orbital(orbital),
+            "orbital" => {
+                let n = args
+                    .get("orbital")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("missing orbital")?;
+                Function::Orbital(
+                    (n as usize)
+                        .checked_sub(1)
+                        .ok_or("orbitals are numbered from 1")?,
+                )
+            }
             "density" => Function::Density,
             "gradient" => Function::GradientNorm,
             "laplacian" => Function::Laplacian,
             "sl2r" => Function::SignLambda2Rho,
             "rdg" => Function::Rdg,
             "iri_sl2r" => Function::IriSl2r,
+            "igmh_sl2r" => {
+                let frags: Vec<Vec<usize>> = args
+                    .get("fragments")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .ok_or("missing fragments")?;
+                if frags.len() < 2 || frags.iter().any(|f| f.is_empty()) {
+                    return Err("IGMH needs at least two non-empty fragments".into());
+                }
+                let mut seen = vec![false; n_atoms];
+                let mut out = Vec::new();
+                for f in frags {
+                    let mut g = Vec::new();
+                    for a in f {
+                        if a == 0 || a > n_atoms {
+                            return Err(format!("atom {a} does not exist"));
+                        }
+                        if std::mem::replace(&mut seen[a - 1], true) {
+                            return Err(format!("atom {a} is in more than one fragment"));
+                        }
+                        g.push(a - 1);
+                    }
+                    out.push(g);
+                }
+                Function::IgmhSl2r(out)
+            }
             _ => return Err(format!("unknown grid function '{kind}'")),
         })
     }
 
-    pub fn n_blocks(self) -> usize {
-        if self == Function::IriSl2r {
-            2
-        } else {
-            1
+    pub fn n_blocks(&self) -> usize {
+        match self {
+            Function::IriSl2r | Function::IgmhSl2r(_) => 2,
+            _ => 1,
         }
     }
 
-    fn order(self) -> Order {
+    fn order(&self) -> Order {
         match self {
             Function::Orbital(_) | Function::Density => Order::Value,
             Function::GradientNorm | Function::Rdg => Order::Gradient,
@@ -114,7 +155,7 @@ impl Wavefunction {
     /// z fastest). Multi-block functions return their blocks one after the other.
     pub fn evaluate_slab(
         &self,
-        func: Function,
+        func: &Function,
         spec: &GridSpec,
         ix0: usize,
         ix1: usize,
@@ -123,7 +164,7 @@ impl Wavefunction {
         if ix0 > ix1 {
             return Err("empty slab".into());
         }
-        if let Function::Orbital(mo) = func {
+        if let Function::Orbital(mo) = *func {
             if mo >= self.orbitals.len() {
                 return Err(format!("orbital {} does not exist", mo + 1));
             }
@@ -134,6 +175,7 @@ impl Wavefunction {
         let mut out = vec![0.0; n * blocks];
         let occupied = self.occupied_set();
         let mut buf = BasisValues::new(self.n_functions);
+        let mut igmh = IgmhScratch::new(self.atoms.len());
         let order = func.order();
         let mut p = 0;
         for i in ix0..ix1 {
@@ -141,7 +183,7 @@ impl Wavefunction {
                 for k in 0..nz {
                     let r = spec.point(i, j, k);
                     match func {
-                        Function::Orbital(mo) => out[p] = self.orbital_at(mo, r, &mut buf),
+                        Function::Orbital(mo) => out[p] = self.orbital_at(*mo, r, &mut buf),
                         _ => {
                             let (rho, g, h) = self.density_at(r, order, &occupied, &mut buf);
                             match func {
@@ -156,6 +198,10 @@ impl Wavefunction {
                                     out[p] = iri(rho, &g);
                                     out[n + p] = sign_lambda2_rho(rho, &h);
                                 }
+                                Function::IgmhSl2r(frags) => {
+                                    out[p] = self.delta_g_inter(r, rho, &g, frags, &mut igmh);
+                                    out[n + p] = sign_lambda2_rho(rho, &h);
+                                }
                                 Function::Orbital(_) => unreachable!(),
                             }
                         }
@@ -166,4 +212,21 @@ impl Wavefunction {
         }
         Ok(out)
     }
+}
+
+impl GridSpec {
+    /// Coordinates of a flat cube-order index.
+    pub fn point_at(&self, index: usize) -> [f64; 3] {
+        let [_, ny, nz] = self.dims;
+        self.point(index / (ny * nz), (index / nz) % ny, index % nz)
+    }
+}
+
+/// Total ESP at the listed grid points (flat cube-order indices).
+pub fn esp_points(engine: &EspEngine, spec: &GridSpec, indices: &[u32]) -> Vec<f64> {
+    let mut s = EspScratch::new();
+    indices
+        .iter()
+        .map(|&i| engine.total(spec.point_at(i as usize), &mut s))
+        .collect()
 }

@@ -19,7 +19,14 @@ export type GridKind =
   | `laplacian`
   | `sl2r`
   | `rdg`
-  | `iri_sl2r`;
+  | `iri_sl2r`
+  | `igmh_sl2r`;
+
+/** Extra arguments of a grid function: {orbital} (1-based) or {fragments} (1-based atoms) */
+export interface GridArgs {
+  orbital?: number;
+  fragments?: number[][];
+}
 
 export type CoreRequest =
   | { op: `load`; key: string; text: string; filename: string }
@@ -28,17 +35,21 @@ export type CoreRequest =
     op: `evaluate`;
     key: string;
     kind: GridKind;
-    orbital: number;
+    args: GridArgs;
     grid: GridSpec;
     ix0: number;
     ix1: number;
   }
+  | { op: `esp_points`; key: string; grid: GridSpec; indices: Uint32Array }
+  | { op: `esp_xyz`; key: string; xyz: Float64Array }
+  | { op: `aim`; key: string }
   | { op: `drop`; key: string };
 
 export type CoreResponse =
   | { info_json: string; trace_ps: number }
   | { grid: GridSpec }
   | { data: Float64Array }
+  | { json: string }
   | { ok: true };
 
 interface WfnHandle {
@@ -47,11 +58,14 @@ interface WfnHandle {
   grid_json(quality: string): string;
   evaluate(
     kind: string,
-    orbital: number,
+    args_json: string,
     grid_json: string,
     ix0: number,
     ix1: number,
   ): Float64Array;
+  esp_points(grid_json: string, indices: Uint32Array): Float64Array;
+  esp_xyz(xyz: Float64Array): Float64Array;
+  aim_json(): string;
   free(): void;
 }
 
@@ -107,10 +121,15 @@ export async function run_core(req: CoreRequest): Promise<CoreResponse> {
   }
   const h = handle_for(req.key);
   if (req.op === `grid`) return { grid: JSON.parse(h.grid_json(req.quality)) };
+  if (req.op === `esp_points`) {
+    return { data: h.esp_points(JSON.stringify(req.grid), req.indices) };
+  }
+  if (req.op === `esp_xyz`) return { data: h.esp_xyz(req.xyz) };
+  if (req.op === `aim`) return { json: h.aim_json() };
   return {
     data: h.evaluate(
       req.kind,
-      req.orbital,
+      JSON.stringify(req.args),
       JSON.stringify(req.grid),
       req.ix0,
       req.ix1,

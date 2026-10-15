@@ -1,16 +1,16 @@
 /**
- * Wavefunction files (.fchk/.molden/.wfn/.wfx). Loading, orbitals and IRI run
- * in the browser (engine.ts); ESP, IGMH and AIM still call Multiwfn through
- * the backend.
+ * Wavefunction files (.fchk/.molden/.wfn/.wfx) and NBO output. Everything
+ * runs in the browser: wavefunctions in the built-in engine (engine.ts, a
+ * Rust/WASM port of parts of Multiwfn), NBO output in nbo.ts.
  */
 
-import { API_BASE } from "$lib/api/config";
 import { open_wavefunction } from "./engine";
+import { parse_nbo } from "./nbo";
 
 export type OrbitalSpin = `restricted` | `alpha` | `beta`;
 
 export interface Orbital {
-  /** 1-based index as Multiwfn numbers it (beta follows all alpha). */
+  /** 1-based index in the file's orbital list (beta follows all alpha). */
   index: number;
   /** 1-based index within its spin set. */
   number: number;
@@ -29,13 +29,8 @@ export interface FrontierInfo {
 }
 
 export interface WavefunctionInfo {
-  /** Backend session for the analyses that still need Multiwfn; null without a backend */
-  session_id: string | null;
-  /** Handle in the built-in engine */
-  local_key?: string;
-  /** Tr(P·S) from the built-in engine; differs from n_electrons for a broken file */
-  trace_ps?: number;
-  n_electrons?: number;
+  /** Handle of the file in the built-in engine */
+  key: string;
   format: `fchk` | `molden` | `wfn` | `wfx`;
   filename: string;
   title: string;
@@ -49,116 +44,34 @@ export interface WavefunctionInfo {
   unrestricted: boolean;
   orbitals: Orbital[];
   frontier: Partial<Record<OrbitalSpin, FrontierInfo>>;
-}
-
-export interface MultiwfnStatus {
-  found: boolean;
-  path: string | null;
-  source: string | null;
+  n_electrons: number;
+  /** Tr(P·S); differs from n_electrons for an inconsistent file */
+  trace_ps: number;
 }
 
 export type GridQuality = `low` | `medium` | `high`;
 
 const WAVEFUNCTION_RE = /\.(fchk|fch|molden|molden\.input|wfn|wfx)$/i;
-const MULTIWFN_PATH_KEY = `catgo.multiwfn_path`;
-export const BACKEND_NEEDED =
-  `This analysis still runs Multiwfn on the CatGo backend, which is not available`;
 
 export function is_wavefunction_file(filename: string): boolean {
   return WAVEFUNCTION_RE.test(filename);
 }
 
-async function error_detail(res: Response): Promise<string> {
-  const body = await res.json().catch(() => null);
-  return body?.detail ?? `${res.status} ${res.statusText}`;
-}
-
-/**
- * Load a wavefunction file: parsed by the built-in engine, and also handed to
- * the backend (when there is one) for the analyses that still use Multiwfn.
- */
+/** Parse a wavefunction file in the built-in engine. */
 export async function load_wavefunction(
   content: string | ArrayBuffer,
   filename: string,
 ): Promise<WavefunctionInfo> {
-  const text = typeof content === `string` ? content : new TextDecoder().decode(content);
-  const [local, remote] = await Promise.allSettled([
-    open_wavefunction(text, filename),
-    load_wavefunction_backend(content, filename),
-  ]);
-  if (local.status === `fulfilled`) {
-    const { key, info, trace_ps } = local.value;
-    return {
-      ...(info as Omit<WavefunctionInfo, `session_id` | `filename`>),
-      filename,
-      session_id: remote.status === `fulfilled` ? remote.value.session_id : null,
-      local_key: key,
-      trace_ps,
-    };
-  }
-  if (remote.status === `fulfilled`) return remote.value;
-  throw local.reason;
-}
-
-/** Upload to the backend parser (Multiwfn session). */
-export async function load_wavefunction_backend(
-  content: string | ArrayBuffer,
-  filename: string,
-): Promise<WavefunctionInfo> {
-  const form = new FormData();
-  form.append(`file`, new File([content], filename));
-  const res = await fetch(`${API_BASE}/wavefunction/load`, {
-    method: `POST`,
-    body: form,
-  });
-  if (!res.ok) throw new Error(await error_detail(res));
-  return res.json();
-}
-
-export async function multiwfn_status(path?: string): Promise<MultiwfnStatus> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : ``;
-  const res = await fetch(`${API_BASE}/wavefunction/multiwfn-status${query}`);
-  if (!res.ok) throw new Error(await error_detail(res));
-  return res.json();
-}
-
-/** Run Multiwfn on the server and return the orbital's cube file text. */
-export async function fetch_orbital_cube(
-  session_id: string,
-  orbital_index: number,
-  grid: GridQuality,
-  multiwfn_path?: string,
-): Promise<string> {
-  const res = await fetch(`${API_BASE}/wavefunction/orbital-cube`, {
-    method: `POST`,
-    headers: { "Content-Type": `application/json` },
-    body: JSON.stringify({
-      session_id,
-      orbital_index,
-      grid,
-      multiwfn_path: multiwfn_path || null,
-    }),
-  });
-  if (!res.ok) throw new Error(await error_detail(res));
-  return res.text();
-}
-
-/** Saved Multiwfn path (per browser); empty when unset or storage is blocked. */
-export function get_saved_multiwfn_path(): string {
-  try {
-    return localStorage.getItem(MULTIWFN_PATH_KEY) ?? ``;
-  } catch {
-    return ``;
-  }
-}
-
-export function save_multiwfn_path(path: string): void {
-  try {
-    if (path) localStorage.setItem(MULTIWFN_PATH_KEY, path);
-    else localStorage.removeItem(MULTIWFN_PATH_KEY);
-  } catch {
-    // storage unavailable: the path just isn't remembered
-  }
+  const text = typeof content === `string`
+    ? content
+    : new TextDecoder().decode(content);
+  const { key, info, trace_ps } = await open_wavefunction(text, filename);
+  return {
+    ...(info as Omit<WavefunctionInfo, `key` | `filename` | `trace_ps`>),
+    key,
+    filename,
+    trace_ps,
+  };
 }
 
 /** "HOMO", "HOMO-2", "LUMO+1" … relative to the frontier orbitals of a spin set. */
@@ -179,7 +92,7 @@ export function frontier_label(
   return ``;
 }
 
-// ── analyses (step 3/4) ──
+// ── analyses ──
 
 export interface PlotlyData {
   traces: unknown[];
@@ -211,15 +124,16 @@ export interface CriticalPoint {
   index: number;
   type: string;
   kind: CpKind;
+  /** Å */
   position: [number, number, number];
-  rho?: number;
-  laplacian?: number;
-  G?: number;
-  V?: number;
-  H?: number;
-  ELF?: number;
-  ellipticity?: number;
-  eta?: number;
+  rho: number;
+  laplacian: number;
+  G: number;
+  V: number;
+  H: number;
+  ELF: number;
+  ellipticity: number;
+  eta: number;
   nucleus?: number;
   element?: string;
   /** 1-based atoms a BCP links */
@@ -234,6 +148,8 @@ export interface AimResult {
     points: [number, number, number][];
   }[];
   counts: Partial<Record<CpKind, number>>;
+  /** n(NCP) − n(BCP) + n(RCP) − n(CCP); 1 when the search is complete */
+  poincare_hopf: number;
 }
 
 export interface NboCharge {
@@ -266,48 +182,15 @@ export interface NboResult {
   n_e2: number;
 }
 
-interface AnalysisBody {
-  session_id: string | null;
-  grid?: GridQuality;
-  multiwfn_path?: string | null;
-  [key: string]: unknown;
-}
-
-async function post_json<T>(path: string, body: AnalysisBody): Promise<T> {
-  if (!body.session_id) throw new Error(BACKEND_NEEDED);
-  const res = await fetch(`${API_BASE}/wavefunction/${path}`, {
-    method: `POST`,
-    headers: { "Content-Type": `application/json` },
-    body: JSON.stringify({
-      ...body,
-      multiwfn_path: body.multiwfn_path || null,
-    }),
-  });
-  if (!res.ok) throw new Error(await error_detail(res));
-  return res.json();
-}
-
-export const run_iri = (body: AnalysisBody) =>
-  post_json<IriResult>(`iri`, body);
-export const run_igmh = (body: AnalysisBody & { fragments: number[][] }) =>
-  post_json<IgmhResult>(`igmh`, body);
-export const run_esp = (body: AnalysisBody) =>
-  post_json<EspResult>(`esp`, body);
-export const run_aim = (body: AnalysisBody) =>
-  post_json<AimResult>(`aim`, body);
-
+/** NBO results from Gaussian/ORCA output text. */
 export async function load_nbo(
   content: string | ArrayBuffer,
-  filename: string,
+  _filename = ``,
 ): Promise<NboResult> {
-  const form = new FormData();
-  form.append(`file`, new File([content], filename));
-  const res = await fetch(`${API_BASE}/wavefunction/nbo`, {
-    method: `POST`,
-    body: form,
-  });
-  if (!res.ok) throw new Error(await error_detail(res));
-  return res.json();
+  const text = typeof content === `string`
+    ? content
+    : new TextDecoder().decode(content);
+  return parse_nbo(text);
 }
 
 /** "1-3, 7" → [1, 2, 3, 7]; throws on malformed input. */
@@ -327,7 +210,5 @@ export function parse_atom_ranges(text: string): number[] {
 /** Whether text looks like Gaussian/ORCA output containing NBO results. */
 export function has_nbo_results(text: string): boolean {
   return /Summary of Natural Population Analysis|SECOND ORDER PERTURBATION THEORY ANALYSIS/
-    .test(
-      text,
-    );
+    .test(text);
 }

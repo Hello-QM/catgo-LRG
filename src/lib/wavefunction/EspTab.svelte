@@ -2,7 +2,8 @@
   import type { CubeMesh } from '$lib/cube'
   import { surface_extrema, type SurfaceExtremum } from '$lib/cube/vertex-colors'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
-  import { run_esp, type GridQuality, type WavefunctionInfo } from './api'
+  import type { GridQuality, WavefunctionInfo } from './api'
+  import { ESP_SURFACE_RHO, exact_esp, local_esp } from './local-analyses'
   import { cube_file, type AnalysisOverlayData, type CubeDisplayOptions } from './overlay'
 
   load_i18n_module('structure')
@@ -10,14 +11,12 @@
   let {
     wavefunction,
     grid,
-    multiwfn_path,
     surface_mesh = null,
     on_cube,
     on_overlay,
   }: {
     wavefunction: WavefunctionInfo
     grid: GridQuality
-    multiwfn_path: string
     /** The ESP-mapped isosurface (per-vertex ESP in `values`), when it is the one shown */
     surface_mesh?: CubeMesh | null
     on_cube: (file: File, options: CubeDisplayOptions) => void
@@ -51,12 +50,12 @@
     on_overlay(null)
     const base = wavefunction.filename.replace(/\.[^.]+$/, ``)
     try {
-      const r = await run_esp({ session_id: wavefunction.session_id, grid, multiwfn_path })
+      const r = await local_esp(wavefunction, grid)
       on_cube(cube_file(r.density_cube, `${base}_density.cub`), {
         color_file: cube_file(r.esp_cube, `${base}_ESP.cub`),
         color_scale: { name: `esp`, min: -0.05, max: 0.05 },
         color_label: `ESP (a.u.)`,
-        isovalue: 0.001,
+        isovalue: ESP_SURFACE_RHO,
       })
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
@@ -65,10 +64,17 @@
     }
   }
 
-  function find_extrema() {
+  async function find_extrema() {
     const mesh = surface_mesh
     if (!mesh?.values) return
-    extrema = surface_extrema(mesh, mesh.values)
+    const found = surface_extrema(mesh, mesh.values)
+    // the mesh colours come from an interpolated grid; report exact values
+    try {
+      const exact = await exact_esp(wavefunction, found.map((e) => e.position))
+      extrema = found.map((e, k) => ({ ...e, value: exact[k] }))
+    } catch {
+      extrema = found
+    }
     on_overlay({
       markers: extrema.map((e) => ({
         position: e.position,

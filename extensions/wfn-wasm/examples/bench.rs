@@ -6,9 +6,11 @@ fn main() {
     let spec = wf
         .grid(a.get(2).map(String::as_str).unwrap_or("medium"))
         .unwrap();
-    let func = wfn_wasm::grid::Function::parse(kind, wf.occupied().len() - 1).unwrap();
+    let n = wf.atoms.len();
+    let args = serde_json::json!({"orbital": wf.occupied().len(), "fragments": [(1..=n / 2).collect::<Vec<_>>(), (n / 2 + 1..=n).collect::<Vec<_>>()]});
+    let func = wfn_wasm::grid::Function::parse(kind, &args, n).unwrap();
     let t = std::time::Instant::now();
-    let v = wf.evaluate_slab(func, &spec, 0, spec.dims[0]).unwrap();
+    let v = wf.evaluate_slab(&func, &spec, 0, spec.dims[0]).unwrap();
     println!(
         "{kind}: {} points ({:?}) in {:.2?}, {} functions",
         spec.n_points(),

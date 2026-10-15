@@ -3025,8 +3025,8 @@
     get_on_error: () => on_error as any,
     apply_charges: (content, filename) => apply_charges_to_structure(content, filename),
     set_wavefunction: (w) => {
-      const old_key = wavefunction_info?.local_key
-      if (old_key && old_key !== w?.local_key) close_wavefunction(old_key)
+      const old_key = wavefunction_info?.key
+      if (old_key && old_key !== w?.key) close_wavefunction(old_key)
       wavefunction_info = w
       analysis_overlay = null
       if (!w) nbo_info = null
