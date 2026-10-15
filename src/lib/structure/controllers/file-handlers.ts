@@ -250,9 +250,9 @@ export function create_file_handlers(deps: FileHandlerDeps) {
   }
 
   /**
-   * Upload a wavefunction file to the backend, show its geometry and hand the
-   * orbital list to the orbital panel. Orbital cubes are produced by Multiwfn
-   * on demand, so the geometry is marked aligned to stay on the cube grid.
+   * Parse a wavefunction file in the built-in engine, show its geometry and
+   * hand the orbital list to the orbital panel. Cubes computed later share the
+   * file's coordinates, so the geometry is marked aligned to stay on them.
    */
   async function try_handle_wavefunction_file(content: string | ArrayBuffer, filename: string) {
     deps.set_loading(true)
