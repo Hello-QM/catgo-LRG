@@ -21,6 +21,13 @@
     type Vec3,
   } from '$lib/cube/slice'
   import { extract_isosurface_client, dispose_worker } from '$lib/cube/client'
+  import {
+    color_mesh,
+    colors_for,
+    scale_gradient_css,
+    type ColorScale,
+  } from '$lib/cube/vertex-colors'
+  import type { VolumetricGrid } from '$lib/cube/parse-cube'
   import { download } from '$lib/io/fetch'
   import { atomic_radii } from '$lib/structure'
   import { element_data } from '$lib/element'
@@ -68,6 +75,10 @@
       error: null,
     } as CubeState),
     onslice_data,
+    color_cube_file = null,
+    color_scale = $bindable(null),
+    color_label = ``,
+    preset_isovalue = null,
     toggle_props = {},
     pane_props = {},
     ...rest
@@ -87,6 +98,13 @@
     display_elements?: string[]
     cube_state?: CubeState
     onslice_data?: (result: SliceResult, atoms: AtomSliceInfo[]) => void
+    /** Second grid that colours the (single, positive) isosurface */
+    color_cube_file?: File | null
+    color_scale?: ColorScale | null
+    /** Shown next to the colour bar, e.g. "sign(λ2)ρ (a.u.)" */
+    color_label?: string
+    /** Isovalue to start from instead of auto-scaling (e.g. 0.001 for ρ) */
+    preset_isovalue?: number | null
     toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]
     pane_props?: ComponentProps<typeof DraggablePane>[`pane_props`]
     max_height?: string
@@ -95,6 +113,7 @@
   let auto_uploaded = $state(false)
   let file_input: HTMLInputElement = $state(undefined as any)
   let parsed_cube: ParsedCubeData | null = $state(null)
+  let color_grid: VolumetricGrid | null = null
 
   /** Upload current cube file to server if not yet uploaded (needed for export). */
   async function ensure_server_file(): Promise<boolean> {
@@ -140,6 +159,14 @@
         iso_max = abs_max
         cube_state.isovalue = Math.min(cube_state.isovalue, abs_max * 0.1)
         iso_step = abs_max * 0.001
+      }
+      if (preset_isovalue !== null && preset_isovalue > 0) {
+        cube_state.isovalue = preset_isovalue
+        iso_step = Math.min(iso_step, preset_isovalue / 10)
+      }
+      if (color_cube_file) {
+        color_grid = parse_cube_full(await color_cube_file.text()).grid
+        cube_state.dual = false
       }
 
       await extract_isosurface_local()
@@ -203,13 +230,24 @@
         cube_state.isovalue,
         cube_state.dual,
       )
-      positive_mesh = result.positive
-      negative_mesh = result.negative
+      if (color_grid && color_scale && result.positive) {
+        positive_mesh = color_mesh(result.positive, color_grid, color_scale)
+        negative_mesh = null
+      } else {
+        positive_mesh = result.positive
+        negative_mesh = result.negative
+      }
     } catch (err) {
       cube_state.error = `Extraction failed: ${(err as Error).message}`
     } finally {
       cube_state.loading = false
     }
+  }
+
+  /** Re-apply the colour scale to the current surface without re-extracting it. */
+  function recolor() {
+    if (!color_scale || !positive_mesh?.values) return
+    positive_mesh = { ...positive_mesh, colors: colors_for(positive_mesh.values, color_scale) }
   }
 
   /**
@@ -499,10 +537,23 @@
           />
         </label>
 
-        <label>
-          <input type="checkbox" bind:checked={cube_state.dual} />
-          Show +/- isosurfaces
-        </label>
+        {#if color_scale}
+          <div class="color-scale">
+            <span class="color-scale-label">{color_label}</span>
+            <div class="color-bar" style:background={scale_gradient_css(color_scale)}></div>
+            <div class="color-scale-range">
+              <input type="number" step="any" class="num-input" bind:value={color_scale.min}
+                onchange={recolor} aria-label="min" />
+              <input type="number" step="any" class="num-input" bind:value={color_scale.max}
+                onchange={recolor} aria-label="max" />
+            </div>
+          </div>
+        {:else}
+          <label>
+            <input type="checkbox" bind:checked={cube_state.dual} />
+            Show +/- isosurfaces
+          </label>
+        {/if}
 
         <label>
           Opacity
@@ -861,4 +912,8 @@
   input[type='file'] {
     font-size: 0.7rem;
   }
+  .color-scale { display: flex; flex-direction: column; gap: 3px; margin: 4px 0; }
+  .color-scale-label { font-size: 11px; opacity: 0.8; }
+  .color-bar { height: 10px; border-radius: 3px; border: 1px solid light-dark(rgba(0,0,0,0.2), rgba(255,255,255,0.2)); }
+  .color-scale-range { display: flex; justify-content: space-between; gap: 6px; }
 </style>
