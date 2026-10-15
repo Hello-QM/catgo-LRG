@@ -13,6 +13,17 @@ import {
 import { flushSync, mount, tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+// The built-in engine is exercised in engine.test.ts; here it is a stub
+const engine = vi.hoisted(() => ({
+  open_wavefunction: vi.fn(async (): Promise<unknown> => {
+    throw new Error(`engine unavailable`);
+  }),
+}));
+vi.mock(`$lib/wavefunction/engine`, async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  open_wavefunction: engine.open_wavefunction,
+}));
+
 function orbital(index: number, occupation: number, energy: number): Orbital {
   return {
     index,
@@ -253,6 +264,42 @@ describe(`file handlers`, () => {
     const structure = deps.set_structure.mock.calls[0][0];
     expect(structure.sites).toHaveLength(3);
     expect(structure._aligned).toBe(true);
+  });
+
+  test(`the built-in engine supplies the orbitals; the backend only a Multiwfn session`, async () => {
+    const { session_id: _, ...local_info } = WATER;
+    engine.open_wavefunction.mockResolvedValueOnce({
+      key: `wfn7`,
+      info: { ...local_info, filename: undefined },
+      trace_ps: 10,
+    });
+    stub_fetch((url) =>
+      url.endsWith(`/wavefunction/load`) ? json({ ...WATER, session_id: `b`.repeat(32) }) : undefined
+    );
+    const deps = make_deps();
+    create_file_handlers(deps).process_parsed_content(`fchk text`, `water.fchk`);
+    await settle();
+    expect(deps.set_wavefunction).toHaveBeenCalledWith({
+      ...WATER,
+      session_id: `b`.repeat(32),
+      local_key: `wfn7`,
+      trace_ps: 10,
+    });
+  });
+
+  test(`without a backend the file still loads, with no Multiwfn session`, async () => {
+    const { session_id: _, ...local_info } = WATER;
+    engine.open_wavefunction.mockResolvedValueOnce({ key: `wfn8`, info: local_info, trace_ps: 10 });
+    stub_fetch(() => {
+      throw new TypeError(`Failed to fetch`);
+    });
+    const deps = make_deps();
+    create_file_handlers(deps).process_parsed_content(`fchk text`, `water.fchk`);
+    await settle();
+    const info = deps.set_wavefunction.mock.calls.at(-1)?.[0] as WavefunctionInfo;
+    expect(info.session_id).toBeNull();
+    expect(info.local_key).toBe(`wfn8`);
+    expect(deps.set_structure).toHaveBeenCalledOnce();
   });
 
   test(`a regular structure file clears the orbital panel`, () => {

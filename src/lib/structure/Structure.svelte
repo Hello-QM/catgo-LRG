@@ -3,6 +3,7 @@
   import { AtomManager, type AtomFastOps } from './atoms/atom-manager.svelte'
   import OrbitalPanel from './OrbitalPanel.svelte'
   import type { NboResult, WavefunctionInfo } from '$lib/wavefunction/api'
+  import { close_wavefunction } from '$lib/wavefunction/engine'
   import type { AnalysisOverlayData, CubeDisplayOptions } from '$lib/wavefunction/overlay'
   import type { ColorScale } from '$lib/cube/vertex-colors'
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
@@ -3024,6 +3025,8 @@
     get_on_error: () => on_error as any,
     apply_charges: (content, filename) => apply_charges_to_structure(content, filename),
     set_wavefunction: (w) => {
+      const old_key = wavefunction_info?.local_key
+      if (old_key && old_key !== w?.local_key) close_wavefunction(old_key)
       wavefunction_info = w
       analysis_overlay = null
       if (!w) nbo_info = null

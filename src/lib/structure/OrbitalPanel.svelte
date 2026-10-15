@@ -21,6 +21,7 @@
     type OrbitalSpin,
     type WavefunctionInfo,
   } from '$lib/wavefunction/api'
+  import { local_orbital_cube } from '$lib/wavefunction/local-analyses'
   import type { AnalysisOverlayData, CubeDisplayOptions } from '$lib/wavefunction/overlay'
 
   load_i18n_module('structure')
@@ -111,9 +112,16 @@
     }
   }
 
+  // Multiwfn is only needed by the ESP / IGMH / AIM analyses
   $effect(() => {
-    if (pane_open && wavefunction && status === null && !status_error) check_status()
+    if (pane_open && wavefunction?.session_id && status === null && !status_error) check_status()
   })
+
+  // Multiwfn's load-time check: Tr(P·S) should equal the electron count
+  let inconsistent = $derived(
+    wavefunction?.trace_ps != null && wavefunction.n_electrons != null &&
+      Math.abs(wavefunction.trace_ps - wavefunction.n_electrons) > 0.01,
+  )
 
   function on_path_change() {
     const path = multiwfn_path.trim()
@@ -134,12 +142,14 @@
     busy_index = orbital.index
     error = ``
     try {
-      const text = await fetch_orbital_cube(
-        wavefunction.session_id,
-        orbital.index,
-        grid,
-        multiwfn_path.trim() || undefined,
-      )
+      const text = wavefunction.local_key
+        ? await local_orbital_cube(wavefunction, orbital.index, grid)
+        : await fetch_orbital_cube(
+          wavefunction.session_id ?? ``,
+          orbital.index,
+          grid,
+          multiwfn_path.trim() || undefined,
+        )
       const base = wavefunction.filename.replace(/\.[^.]+$/, ``)
       const tag = orbital.spin === `restricted` ? `` : orbital.spin === `alpha` ? `a` : `b`
       const file = new File([text], `${base}_MO${orbital.number}${tag}.cub`, {
@@ -206,6 +216,14 @@
         <span>E = {wavefunction.energy.toFixed(6)} Ha</span>
       {/if}
     </div>
+    {#if inconsistent}
+      <div class="orb-error">
+        {t('structure.wfa_inconsistent', {
+          trace: wavefunction.trace_ps?.toFixed(4) ?? ``,
+          n: wavefunction.n_electrons ?? ``,
+        })}
+      </div>
+    {/if}
 
     {/if}
 
@@ -313,6 +331,7 @@
           <option value="high">{t('structure.orbital_grid_high')}</option>
         </select>
       </label>
+      {#if wavefunction.session_id}
       <label>
         <span>{t('structure.orbital_multiwfn_path')}</span>
         <input
@@ -332,6 +351,8 @@
           <span class="bad">{t('structure.orbital_multiwfn_missing')}</span>
         {/if}
       </div>
+      {/if}
+      <div class="orb-cite">{t('structure.wfa_engine_cite')}</div>
     </section>
     {/if}
   </div>
@@ -382,6 +403,7 @@
     background: var(--input-bg, light-dark(rgba(0,0,0,0.03), rgba(255,255,255,0.05))); color: inherit;
   }
   .orb-status { font-size: 10px; overflow-wrap: anywhere; }
+  .orb-cite { font-size: 9px; line-height: 1.35; color: var(--text-color-dim, #999); }
   .good { color: #16a34a; }
   .bad { color: #ef4444; }
 </style>

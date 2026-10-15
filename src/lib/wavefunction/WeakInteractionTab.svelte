@@ -9,6 +9,7 @@
     type PlotlyData,
     type WavefunctionInfo,
   } from './api'
+  import { local_iri } from './local-analyses'
   import { cube_file, type CubeDisplayOptions } from './overlay'
 
   load_i18n_module('structure')
@@ -40,7 +41,7 @@
     try {
       const body = { session_id: wavefunction.session_id, grid, multiwfn_path }
       if (method === `iri`) {
-        const r = await run_iri(body)
+        const r = wavefunction.local_key ? await local_iri(wavefunction, grid) : await run_iri(body)
         scatter = r.scatter
         on_cube(cube_file(r.iri_cube, `${base}_IRI.cub`), {
           color_file: cube_file(r.sl2r_cube, `${base}_sl2r.cub`),

@@ -15,6 +15,7 @@ on:
       - "extensions/rust/**"
       - "extensions/chgdiff-wasm/**"
       - "extensions/catrender-wasm/**"
+      - "extensions/wfn-wasm/**"
       - "extensions/rust-wasm/**"
       - "static/**"
       - "license"
@@ -140,6 +141,7 @@ jobs:
           workspaces: |
             extensions/rust -> target
             extensions/chgdiff-wasm -> target
+            extensions/wfn-wasm -> target
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh

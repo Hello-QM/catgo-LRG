@@ -1,9 +1,11 @@
 /**
- * Wavefunction files (.fchk/.molden/.wfn/.wfx): orbital list from the backend
- * and Multiwfn-generated orbital cubes.
+ * Wavefunction files (.fchk/.molden/.wfn/.wfx). Loading, orbitals and IRI run
+ * in the browser (engine.ts); ESP, IGMH and AIM still call Multiwfn through
+ * the backend.
  */
 
 import { API_BASE } from "$lib/api/config";
+import { open_wavefunction } from "./engine";
 
 export type OrbitalSpin = `restricted` | `alpha` | `beta`;
 
@@ -27,7 +29,13 @@ export interface FrontierInfo {
 }
 
 export interface WavefunctionInfo {
-  session_id: string;
+  /** Backend session for the analyses that still need Multiwfn; null without a backend */
+  session_id: string | null;
+  /** Handle in the built-in engine */
+  local_key?: string;
+  /** Tr(P·S) from the built-in engine; differs from n_electrons for a broken file */
+  trace_ps?: number;
+  n_electrons?: number;
   format: `fchk` | `molden` | `wfn` | `wfx`;
   filename: string;
   title: string;
@@ -53,6 +61,8 @@ export type GridQuality = `low` | `medium` | `high`;
 
 const WAVEFUNCTION_RE = /\.(fchk|fch|molden|molden\.input|wfn|wfx)$/i;
 const MULTIWFN_PATH_KEY = `catgo.multiwfn_path`;
+export const BACKEND_NEEDED =
+  `This analysis still runs Multiwfn on the CatGo backend, which is not available`;
 
 export function is_wavefunction_file(filename: string): boolean {
   return WAVEFUNCTION_RE.test(filename);
@@ -63,7 +73,35 @@ async function error_detail(res: Response): Promise<string> {
   return body?.detail ?? `${res.status} ${res.statusText}`;
 }
 
+/**
+ * Load a wavefunction file: parsed by the built-in engine, and also handed to
+ * the backend (when there is one) for the analyses that still use Multiwfn.
+ */
 export async function load_wavefunction(
+  content: string | ArrayBuffer,
+  filename: string,
+): Promise<WavefunctionInfo> {
+  const text = typeof content === `string` ? content : new TextDecoder().decode(content);
+  const [local, remote] = await Promise.allSettled([
+    open_wavefunction(text, filename),
+    load_wavefunction_backend(content, filename),
+  ]);
+  if (local.status === `fulfilled`) {
+    const { key, info, trace_ps } = local.value;
+    return {
+      ...(info as Omit<WavefunctionInfo, `session_id` | `filename`>),
+      filename,
+      session_id: remote.status === `fulfilled` ? remote.value.session_id : null,
+      local_key: key,
+      trace_ps,
+    };
+  }
+  if (remote.status === `fulfilled`) return remote.value;
+  throw local.reason;
+}
+
+/** Upload to the backend parser (Multiwfn session). */
+export async function load_wavefunction_backend(
   content: string | ArrayBuffer,
   filename: string,
 ): Promise<WavefunctionInfo> {
@@ -229,13 +267,14 @@ export interface NboResult {
 }
 
 interface AnalysisBody {
-  session_id: string;
+  session_id: string | null;
   grid?: GridQuality;
   multiwfn_path?: string | null;
   [key: string]: unknown;
 }
 
 async function post_json<T>(path: string, body: AnalysisBody): Promise<T> {
+  if (!body.session_id) throw new Error(BACKEND_NEEDED);
   const res = await fetch(`${API_BASE}/wavefunction/${path}`, {
     method: `POST`,
     headers: { "Content-Type": `application/json` },

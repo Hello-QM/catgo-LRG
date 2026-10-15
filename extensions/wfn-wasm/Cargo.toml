@@ -1,0 +1,22 @@
+[package]
+name = "wfn-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Wavefunction analysis (orbitals, electron density, IRI) for .fchk/.molden/.wfn/.wfx — Rust port of parts of Multiwfn, compiled to WebAssembly"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
