@@ -21,8 +21,11 @@ import { decompress_file, handle_url_drop, open_file, check_tauri } from '$lib/i
 import { parse_any_structure } from '$lib/structure/parse'
 import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube/parse-cube'
 import {
+  has_nbo_results,
   is_wavefunction_file,
+  load_nbo,
   load_wavefunction,
+  type NboResult,
   type WavefunctionInfo,
 } from '$lib/wavefunction/api'
 import { upload_h5 } from '$lib/api/dos'
@@ -83,6 +86,8 @@ export interface FileHandlerDeps {
   apply_charges: (content: string, filename: string) => void
   /** Wavefunction file (.fchk/.molden/.wfn/.wfx) loaded, or null when another file replaces it */
   set_wavefunction?: (w: WavefunctionInfo | null) => void
+  /** NBO results found in a loaded Gaussian/ORCA output */
+  set_nbo?: (n: NboResult | null) => void
 }
 
 // ─── 工具函数 ───
@@ -165,6 +170,10 @@ export function create_file_handlers(deps: FileHandlerDeps) {
 
     // 解析结构
     const parsed = parse_any_structure(text, filename)
+    if (parsed && deps.set_nbo && has_nbo_results(text)) {
+      // Gaussian/ORCA output with NBO sections: also open the NBO tab
+      load_nbo(text, filename).then((n) => deps.set_nbo?.(n)).catch(() => {})
+    }
     if (parsed) {
       deps.set_structure(parsed)
       deps.inc_center_camera()

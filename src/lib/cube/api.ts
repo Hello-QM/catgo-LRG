@@ -31,6 +31,10 @@ export interface CubeMesh {
   positions: number[] | Float32Array
   normals: number[] | Float32Array
   indices: number[] | Uint32Array
+  /** Optional per-vertex RGB (0–1) colours, e.g. from a second grid */
+  colors?: Float32Array
+  /** Per-vertex values of the colouring grid */
+  values?: Float32Array
 }
 
 export interface IsosurfaceResult {
