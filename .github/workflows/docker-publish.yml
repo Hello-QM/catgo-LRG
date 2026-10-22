@@ -19,19 +19,6 @@ on:
       - 'scripts/verify-release-rights.mjs'
       - 'package.json'
       - 'pnpm-lock.yaml'
-  pull_request:
-    paths:
-      - 'Dockerfile'
-      - 'docker/**'
-      - 'server/**'
-      - 'license'
-      - 'CITATION.cff'
-      - 'THIRD_PARTY_NOTICES.md'
-      - 'third_party/licenses/**'
-      - 'third_party/provenance/**'
-      - 'scripts/sync-legal-bundle.mjs'
-      - 'scripts/verify-legal-distributions.mjs'
-      - 'scripts/verify-release-rights.mjs'
   workflow_dispatch:
 
 env:
