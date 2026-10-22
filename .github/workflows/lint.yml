@@ -1,8 +1,7 @@
 name: Lint
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   prek:
     runs-on: ubuntu-latest

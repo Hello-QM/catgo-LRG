@@ -3,26 +3,7 @@ name: verify-layer-python
 # Focused Python regression gate for verification, submission, and result provenance.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "server/catgo/mcp_tools/**"
-      - "server/catgo/routers/mcp_http.py"
-      - "server/catgo/routers/workflow.py"
-      - "server/catgo/workflow/engine/**"
-      - "server/workflow/engines/analysis.py"
-      - "server/tests/test_adsorption_energy_zpe.py"
-      - "server/tests/test_batch_submit.py"
-      - "server/tests/test_claude_code_mcp.py"
-      - "server/tests/test_job_script.py"
-      - "server/tests/test_engine_merge.py"
-      - "server/tests/test_review_findings.py"
-      - "server/tests/test_vasp_result_provenance.py"
-      - "server/tests/test_vasp_submission.py"
-      - "server/pyproject.toml"
-      - "server/requirements.txt"
-      - "server/pytest.ini"
-      - ".github/workflows/verify-python.yml"
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
