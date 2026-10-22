@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Build the WASM extensions the frontend imports — ferrox
- * (`@catgo/ferrox-wasm`, TWO artifacts: scalar + threaded), chgdiff, and
- * catrender. Their outputs are gitignored, so a fresh clone must build them
+ * (`@catgo/ferrox-wasm`, TWO artifacts: scalar + threaded), chgdiff,
+ * catrender and wfn. Their outputs are gitignored, so a fresh clone must build them
  * before Vite can resolve the imports (otherwise: "Failed to resolve import
  * @catgo/ferrox-wasm").
  *
@@ -189,6 +189,18 @@ const TARGETS = [
         'catrender_wasm_bg.wasm',
       ),
     ],
+  },
+  {
+    key: 'wfn',
+    name: 'wfn (wavefunction analysis)',
+    cwd: join(ROOT, 'extensions', 'wfn-wasm'),
+    outDir: '../../src/lib/wavefunction/wfn-wasm-pkg',
+    extra: [],
+    sentinels: [
+      join(ROOT, 'src', 'lib', 'wavefunction', 'wfn-wasm-pkg', 'wfn_wasm_bg.wasm'),
+    ],
+    // `--no-simd`: a set RUSTFLAGS overrides .cargo/config.toml's +simd128
+    env: NO_SIMD ? { ...process.env, RUSTFLAGS: '' } : undefined,
   },
 ]
 

@@ -156,7 +156,6 @@ if not CATGO_THIN:
         paper_router,
         freq_analysis_router,
         kmc_router,
-        wavefunction_router,
     )
 
 # ============================================================================
@@ -611,7 +610,6 @@ if not CATGO_THIN:
     app.include_router(paper_router, prefix="/api")
     app.include_router(freq_analysis_router, prefix="/api")
     app.include_router(kmc_router, prefix="/api")
-    app.include_router(wavefunction_router, prefix="/api")
 
 from catgo.routers.tools import router as tools_router
 app.include_router(tools_router, prefix="/api")

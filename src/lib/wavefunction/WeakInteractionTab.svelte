@@ -3,12 +3,11 @@
   import EnergyDiagramPlot from '$lib/workflow/EnergyDiagramPlot.svelte'
   import {
     parse_atom_ranges,
-    run_igmh,
-    run_iri,
     type GridQuality,
     type PlotlyData,
     type WavefunctionInfo,
   } from './api'
+  import { local_igmh, local_iri } from './local-analyses'
   import { cube_file, type CubeDisplayOptions } from './overlay'
 
   load_i18n_module('structure')
@@ -16,12 +15,10 @@
   let {
     wavefunction,
     grid,
-    multiwfn_path,
     on_cube,
   }: {
     wavefunction: WavefunctionInfo
     grid: GridQuality
-    multiwfn_path: string
     on_cube: (file: File, options: CubeDisplayOptions) => void
   } = $props()
 
@@ -38,9 +35,8 @@
     error = ``
     const base = wavefunction.filename.replace(/\.[^.]+$/, ``)
     try {
-      const body = { session_id: wavefunction.session_id, grid, multiwfn_path }
       if (method === `iri`) {
-        const r = await run_iri(body)
+        const r = await local_iri(wavefunction, grid)
         scatter = r.scatter
         on_cube(cube_file(r.iri_cube, `${base}_IRI.cub`), {
           color_file: cube_file(r.sl2r_cube, `${base}_sl2r.cub`),
@@ -51,7 +47,7 @@
       } else {
         const frags = fragments.filter((f) => f.trim()).map(parse_atom_ranges)
         if (frags.length < 2) throw new Error(t('structure.wfa_igmh_need_fragments'))
-        const r = await run_igmh({ ...body, fragments: frags })
+        const r = await local_igmh(wavefunction, grid, frags)
         scatter = r.scatter
         on_cube(cube_file(r.dg_inter_cube, `${base}_dg_inter.cub`), {
           color_file: cube_file(r.sl2r_cube, `${base}_sl2r.cub`),

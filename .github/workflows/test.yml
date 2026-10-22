@@ -76,6 +76,10 @@ jobs:
       - name: Verify WASM artifacts (scalar + threaded ferrox)
         run: node scripts/verify-wasm-artifacts.mjs
 
+      # Built-in wavefunction engine (Multiwfn port) vs PySCF reference values
+      - name: Test wavefunction engine (Rust)
+        run: cargo test --release --manifest-path extensions/wfn-wasm/Cargo.toml
+
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 

@@ -1,0 +1,4 @@
+# WASM SIMD128 (all engines since 2023) lets LLVM vectorise the orbital sums.
+# `node scripts/build-wasm.mjs --no-simd` clears RUSTFLAGS for ancient WebKit.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

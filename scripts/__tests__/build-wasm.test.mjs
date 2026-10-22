@@ -21,7 +21,7 @@ import test, { after } from 'node:test'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const SCRIPT = resolve(ROOT, 'scripts/build-wasm.mjs')
-const VALID_LINE = '             valid targets: ferrox, chgdiff, catrender'
+const VALID_LINE = '             valid targets: ferrox, chgdiff, catrender, wfn'
 const GENERATED_OUTPUTS = [
   resolve(ROOT, 'extensions/rust-wasm/pkg-scalar'),
   resolve(ROOT, 'extensions/rust-wasm/pkg'),
@@ -29,6 +29,7 @@ const GENERATED_OUTPUTS = [
   resolve(ROOT, 'extensions/rust-wasm/pkg-threaded'),
   resolve(ROOT, 'src/lib/electronic/chgdiff-wasm-pkg'),
   resolve(ROOT, 'src/lib/structure/catrender/catrender-wasm-pkg'),
+  resolve(ROOT, 'src/lib/wavefunction/wfn-wasm-pkg'),
 ]
 const REPO_MUTATED_PATHS = [
   ...GENERATED_OUTPUTS,
@@ -239,6 +240,7 @@ const routedTargets = [
   ],
   ['chgdiff', 'chgdiff'],
   ['catrender', 'catrender'],
+  ['wfn', 'wfn (wavefunction analysis)'],
 ]
 
 for (const [target, pendingNames] of routedTargets) {
@@ -294,10 +296,11 @@ test('removes the license artifact emitted by wasm-pack outside its output direc
   assert.equal(existsSync(artifact), false)
 })
 
-test('marks generated chgdiff and catrender npm manifests private', (t) => {
+test('marks generated chgdiff, catrender and wfn npm manifests private', (t) => {
   const generated = [
     ['chgdiff', resolve(ROOT, 'src/lib/electronic/chgdiff-wasm-pkg')],
     ['catrender', resolve(ROOT, 'src/lib/structure/catrender/catrender-wasm-pkg')],
+    ['wfn', resolve(ROOT, 'src/lib/wavefunction/wfn-wasm-pkg')],
   ]
   t.after(() => {
     for (const [, dir] of generated) rmSync(dir, { recursive: true, force: true })

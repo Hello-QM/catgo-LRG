@@ -1,23 +1,21 @@
 <script lang="ts">
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
-    run_aim,
     type AimResult,
     type CpKind,
     type CriticalPoint,
     type WavefunctionInfo,
   } from './api'
+  import { local_aim } from './local-analyses'
   import { CP_COLORS, type AnalysisOverlayData } from './overlay'
 
   load_i18n_module('structure')
 
   let {
     wavefunction,
-    multiwfn_path,
     on_overlay,
   }: {
     wavefunction: WavefunctionInfo
-    multiwfn_path: string
     on_overlay: (overlay: AnalysisOverlayData | null) => void
   } = $props()
 
@@ -59,7 +57,7 @@
     loading = true
     error = ``
     try {
-      result = await run_aim({ session_id: wavefunction.session_id, multiwfn_path })
+      result = await local_aim(wavefunction)
       publish()
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)

@@ -69,7 +69,6 @@ _ROUTERS: dict[str, str] = {
     "quacc_router": "quacc",
     "file_sandbox_router": "file_sandbox",
     "kmc_router": "kmc",
-    "wavefunction_router": "wavefunction",
     "skills_router": "skills",
     "campaign_router": "campaign",
     "terminal_bridge_router": "terminal_bridge",

@@ -9,18 +9,14 @@
   import NboTab from '$lib/wavefunction/NboTab.svelte'
   import WeakInteractionTab from '$lib/wavefunction/WeakInteractionTab.svelte'
   import {
-    fetch_orbital_cube,
     frontier_label,
-    get_saved_multiwfn_path,
-    multiwfn_status,
-    save_multiwfn_path,
     type GridQuality,
-    type MultiwfnStatus,
     type NboResult,
     type Orbital,
     type OrbitalSpin,
     type WavefunctionInfo,
   } from '$lib/wavefunction/api'
+  import { local_orbital_cube } from '$lib/wavefunction/local-analyses'
   import type { AnalysisOverlayData, CubeDisplayOptions } from '$lib/wavefunction/overlay'
 
   load_i18n_module('structure')
@@ -59,9 +55,6 @@
   let spin = $state<OrbitalSpin>(`restricted`)
   let show_all = $state(false)
   let grid = $state<GridQuality>(`medium`)
-  let multiwfn_path = $state(get_saved_multiwfn_path())
-  let status = $state<MultiwfnStatus | null>(null)
-  let status_error = $state(``)
   let busy_index = $state<number | null>(null)
   let active_index = $state<number | null>(null)
   let error = $state(``)
@@ -101,25 +94,10 @@
     { id: `nbo`, label: `structure.wfa_tab_nbo`, needs_wavefunction: false },
   ]
 
-  async function check_status() {
-    status_error = ``
-    try {
-      status = await multiwfn_status(multiwfn_path.trim() || undefined)
-    } catch (err) {
-      status = null
-      status_error = err instanceof Error ? err.message : String(err)
-    }
-  }
-
-  $effect(() => {
-    if (pane_open && wavefunction && status === null && !status_error) check_status()
-  })
-
-  function on_path_change() {
-    const path = multiwfn_path.trim()
-    save_multiwfn_path(path)
-    check_status()
-  }
+  // Multiwfn's load-time check: Tr(P·S) should equal the electron count
+  let inconsistent = $derived(
+    !!wavefunction && Math.abs(wavefunction.trace_ps - wavefunction.n_electrons) > 0.01,
+  )
 
   function cube_for(kind: Tab) {
     return (file: File, options: CubeDisplayOptions) => {
@@ -134,12 +112,7 @@
     busy_index = orbital.index
     error = ``
     try {
-      const text = await fetch_orbital_cube(
-        wavefunction.session_id,
-        orbital.index,
-        grid,
-        multiwfn_path.trim() || undefined,
-      )
+      const text = await local_orbital_cube(wavefunction, orbital.index, grid)
       const base = wavefunction.filename.replace(/\.[^.]+$/, ``)
       const tag = orbital.spin === `restricted` ? `` : orbital.spin === `alpha` ? `a` : `b`
       const file = new File([text], `${base}_MO${orbital.number}${tag}.cub`, {
@@ -206,6 +179,14 @@
         <span>E = {wavefunction.energy.toFixed(6)} Ha</span>
       {/if}
     </div>
+    {#if inconsistent}
+      <div class="orb-error">
+        {t('structure.wfa_inconsistent', {
+          trace: wavefunction.trace_ps.toFixed(4),
+          n: wavefunction.n_electrons ?? ``,
+        })}
+      </div>
+    {/if}
 
     {/if}
 
@@ -283,20 +264,19 @@
 
     {#if wavefunction}
       <div class="orb-pane" class:hidden={tab !== `weak`}>
-        <WeakInteractionTab {wavefunction} {grid} {multiwfn_path} on_cube={cube_for(`weak`)} />
+        <WeakInteractionTab {wavefunction} {grid} on_cube={cube_for(`weak`)} />
       </div>
       <div class="orb-pane" class:hidden={tab !== `esp`}>
         <EspTab
           {wavefunction}
           {grid}
-          {multiwfn_path}
           surface_mesh={surface_kind === `esp` ? surface_mesh : null}
           on_cube={cube_for(`esp`)}
           {on_overlay}
         />
       </div>
       <div class="orb-pane" class:hidden={tab !== `aim`}>
-        <AimTab {wavefunction} {multiwfn_path} {on_overlay} />
+        <AimTab {wavefunction} {on_overlay} />
       </div>
     {/if}
     <div class="orb-pane" class:hidden={tab !== `nbo`}>
@@ -313,25 +293,7 @@
           <option value="high">{t('structure.orbital_grid_high')}</option>
         </select>
       </label>
-      <label>
-        <span>{t('structure.orbital_multiwfn_path')}</span>
-        <input
-          type="text"
-          bind:value={multiwfn_path}
-          onchange={on_path_change}
-          placeholder={t('structure.orbital_multiwfn_placeholder')}
-          spellcheck="false"
-        />
-      </label>
-      <div class="orb-status">
-        {#if status_error}
-          <span class="bad">{status_error}</span>
-        {:else if status?.found}
-          <span class="good">✓ {status.path}</span>
-        {:else if status}
-          <span class="bad">{t('structure.orbital_multiwfn_missing')}</span>
-        {/if}
-      </div>
+      <div class="orb-cite">{t('structure.wfa_engine_cite')}</div>
     </section>
     {/if}
   </div>
@@ -381,7 +343,5 @@
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
     background: var(--input-bg, light-dark(rgba(0,0,0,0.03), rgba(255,255,255,0.05))); color: inherit;
   }
-  .orb-status { font-size: 10px; overflow-wrap: anywhere; }
-  .good { color: #16a34a; }
-  .bad { color: #ef4444; }
+  .orb-cite { font-size: 9px; line-height: 1.35; color: var(--text-color-dim, #999); }
 </style>
