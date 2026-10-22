@@ -1,24 +1,6 @@
 name: Docker Build & Publish
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Dockerfile'
-      - 'docker/**'
-      - 'server/**'
-      - 'src/**'
-      - 'extensions/**'
-      - 'license'
-      - 'CITATION.cff'
-      - 'THIRD_PARTY_NOTICES.md'
-      - 'third_party/licenses/**'
-      - 'third_party/provenance/**'
-      - 'scripts/sync-legal-bundle.mjs'
-      - 'scripts/verify-legal-distributions.mjs'
-      - 'scripts/verify-release-rights.mjs'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
   workflow_dispatch:
 
 env:
