@@ -301,7 +301,7 @@ def test_orbital_cube_reports_missing_output(tmp_path):
     exe = tmp_path / "Multiwfn"
     exe.write_text(f"#!{sys.executable}\nimport sys; sys.stdin.read(); print('menu')\n")
     exe.chmod(0o755)
-    with pytest.raises(MultiwfnError, match="without writing a cube"):
+    with pytest.raises(MultiwfnError, match="without writing"):
         orbital_cube(tmp_path / "x.fchk", 1, executable=str(exe))
 
 

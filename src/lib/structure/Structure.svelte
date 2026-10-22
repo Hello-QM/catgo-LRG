@@ -2,7 +2,9 @@
   import type { AnyStructure, ElementSymbol, PymatgenMolecule, Site, Vec3 } from '$lib'
   import { AtomManager, type AtomFastOps } from './atoms/atom-manager.svelte'
   import OrbitalPanel from './OrbitalPanel.svelte'
-  import type { WavefunctionInfo } from '$lib/wavefunction/api'
+  import type { NboResult, WavefunctionInfo } from '$lib/wavefunction/api'
+  import type { AnalysisOverlayData, CubeDisplayOptions } from '$lib/wavefunction/overlay'
+  import type { ColorScale } from '$lib/cube/vertex-colors'
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
   import { type ColorSchemeName, element_color_schemes } from '$lib/colors'
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
@@ -2004,7 +2006,26 @@
 
   // Wavefunction file (.fchk/.molden/.wfn/.wfx) shown in the orbital panel
   let wavefunction_info = $state.raw<WavefunctionInfo | null>(null)
+  let nbo_info = $state.raw<NboResult | null>(null)
   let orbital_pane_open = $state(false)
+  // Critical points / surface extrema / bond paths drawn over the structure
+  let analysis_overlay = $state.raw<AnalysisOverlayData | null>(null)
+  // Second grid colouring the cube isosurface (IRI/IGMH by sign(λ2)ρ, ESP maps)
+  let cube_color_file = $state<File | null>(null)
+  let cube_color_scale = $state<ColorScale | null>(null)
+  let cube_color_label = $state(``)
+  let cube_preset_isovalue = $state<number | null>(null)
+
+  function show_analysis_cube(file: File, options: CubeDisplayOptions) {
+    cube_color_file = options.color_file ?? null
+    cube_color_scale = options.color_scale ?? null
+    cube_color_label = options.color_label ?? ``
+    cube_preset_isovalue = options.isovalue ?? null
+    // New cube: drop the previous server-side copy so the panel reloads
+    cube_state_data.filepath = ``
+    cube_file = file
+    cube_pane_open = true
+  }
 
   // Cube file isosurface state
   let cube_positive_mesh = $state<import('$lib/cube').CubeMesh | null>(null)
@@ -2985,7 +3006,12 @@
     get_error_msg: () => error_msg,
     set_error_msg: (v) => { error_msg = v },
     inc_center_camera: () => { center_camera_trigger++ },
-    set_cube_file: (f) => { cube_file = f },
+    set_cube_file: (f) => {
+      cube_file = f
+      cube_color_file = null
+      cube_color_scale = null
+      cube_preset_isovalue = null
+    },
     set_cube_pane_open: (v) => { cube_pane_open = v },
     set_dos_session: (s) => { dos_session = s },
     set_analysis_open: (v) => { analysis.analysis_pane_open = v },
@@ -2999,7 +3025,13 @@
     apply_charges: (content, filename) => apply_charges_to_structure(content, filename),
     set_wavefunction: (w) => {
       wavefunction_info = w
-      orbital_pane_open = !!w
+      analysis_overlay = null
+      if (!w) nbo_info = null
+      orbital_pane_open = !!(w || nbo_info)
+    },
+    set_nbo: (n) => {
+      nbo_info = n
+      if (n) orbital_pane_open = true
     },
   })
 
@@ -4683,15 +4715,21 @@
           <PluginHubPane bind:show={plugin_hub_open} />
         {/if}
 
-        {#if wavefunction_info}
+        {#if wavefunction_info || nbo_info}
           <OrbitalPanel
             bind:pane_open={orbital_pane_open}
             wavefunction={wavefunction_info}
-            on_cube={(file) => {
-              // New orbital: drop the previous server-side cube so the panel reloads
-              cube_state_data.filepath = ``
-              cube_file = file
-              cube_pane_open = true
+            bind:nbo={nbo_info}
+            surface_mesh={cube_positive_mesh}
+            on_cube={show_analysis_cube}
+            on_overlay={(o) => { analysis_overlay = o }}
+            on_charges={(charges) => {
+              if (!structure || charges.length !== structure.sites.length) {
+                error_msg = `Charge count (${charges.length}) doesn't match atom count (${structure?.sites.length ?? 0})`
+                return
+              }
+              structure = apply_charges(structure, charges) as typeof structure
+              atom_color_config = { ...atom_color_config, mode: `charge`, scale_type: `continuous` }
             }}
           />
         {/if}
@@ -4710,6 +4748,10 @@
               (s as any).species?.[0]?.element ?? (s as any).label ?? `?`)}
             bind:cube_state={cube_state_data}
             onslice_data={(result, atoms) => { slice_result = result; slice_atoms_info = atoms }}
+            color_cube_file={cube_color_file}
+            bind:color_scale={cube_color_scale}
+            color_label={cube_color_label}
+            preset_isovalue={cube_preset_isovalue}
           />
           {/key}
         {/if}
@@ -4995,6 +5037,7 @@
               charge_state.charge_color_menu = { idx, x, y }
             }}
             {vibration_data}
+            {analysis_overlay}
             cube_positive_mesh={cube_positive_mesh}
             cube_negative_mesh={cube_negative_mesh}
             cube_show_positive={cube_state_data.show_positive}

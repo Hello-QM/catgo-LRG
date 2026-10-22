@@ -36,6 +36,7 @@
   function setup_geometry(geo: any, m: CubeMesh) {
     geo.setAttribute(`position`, new Float32BufferAttribute(m.positions, 3))
     geo.setAttribute(`normal`, new Float32BufferAttribute(m.normals, 3))
+    if (m.colors) geo.setAttribute(`color`, new Float32BufferAttribute(m.colors, 3))
     geo.setIndex(ArrayBuffer.isView(m.indices)
       ? new BufferAttribute(new Uint32Array(m.indices), 1)
       : m.indices)
@@ -49,14 +50,19 @@
     {#if wireframe}
       <T.Mesh raycast={null} frustumCulled={false}>
         <T.BufferGeometry oncreate={(geo) => setup_geometry(geo, positive_mesh!)} />
-        <T.MeshBasicMaterial color={positive_color} wireframe={true} />
+        <T.MeshBasicMaterial
+          color={positive_mesh.colors ? `#ffffff` : positive_color}
+          vertexColors={!!positive_mesh.colors}
+          wireframe={true}
+        />
       </T.Mesh>
     {:else if opacity < 1}
       <!-- Two-pass transparency: back faces first, then front faces -->
       <T.Mesh raycast={null} frustumCulled={false} renderOrder={1}>
         <T.BufferGeometry oncreate={(geo) => setup_geometry(geo, positive_mesh!)} />
         <T.MeshStandardMaterial
-          color={positive_color}
+          color={positive_mesh.colors ? `#ffffff` : positive_color}
+          vertexColors={!!positive_mesh.colors}
           transparent
           {opacity}
           side={1}
@@ -68,7 +74,8 @@
       <T.Mesh raycast={null} frustumCulled={false} renderOrder={2}>
         <T.BufferGeometry oncreate={(geo) => setup_geometry(geo, positive_mesh!)} />
         <T.MeshStandardMaterial
-          color={positive_color}
+          color={positive_mesh.colors ? `#ffffff` : positive_color}
+          vertexColors={!!positive_mesh.colors}
           transparent
           {opacity}
           side={0}
@@ -81,7 +88,8 @@
       <T.Mesh raycast={null} frustumCulled={false}>
         <T.BufferGeometry oncreate={(geo) => setup_geometry(geo, positive_mesh!)} />
         <T.MeshStandardMaterial
-          color={positive_color}
+          color={positive_mesh.colors ? `#ffffff` : positive_color}
+          vertexColors={!!positive_mesh.colors}
           side={2}
           metalness={0.1}
           roughness={0.6}

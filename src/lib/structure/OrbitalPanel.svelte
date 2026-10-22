@@ -1,8 +1,13 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
+  import type { CubeMesh } from '$lib/cube'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
+  import AimTab from '$lib/wavefunction/AimTab.svelte'
+  import EspTab from '$lib/wavefunction/EspTab.svelte'
+  import NboTab from '$lib/wavefunction/NboTab.svelte'
+  import WeakInteractionTab from '$lib/wavefunction/WeakInteractionTab.svelte'
   import {
     fetch_orbital_cube,
     frontier_label,
@@ -11,31 +16,46 @@
     save_multiwfn_path,
     type GridQuality,
     type MultiwfnStatus,
+    type NboResult,
     type Orbital,
     type OrbitalSpin,
     type WavefunctionInfo,
   } from '$lib/wavefunction/api'
+  import type { AnalysisOverlayData, CubeDisplayOptions } from '$lib/wavefunction/overlay'
 
   load_i18n_module('structure')
 
+  type Tab = `orbitals` | `weak` | `esp` | `aim` | `nbo`
+
   let {
     pane_open = $bindable(false),
-    wavefunction,
+    wavefunction = null,
+    nbo = $bindable(null),
+    surface_mesh = null,
     on_cube,
+    on_overlay = () => {},
+    on_charges = () => {},
     toggle_props = {},
     pane_props = {},
     ...rest
   }: Omit<HTMLAttributes<HTMLDivElement>, `onclose`> & {
     pane_open?: boolean
-    wavefunction: WavefunctionInfo
-    /** Receives the generated cube file of the clicked orbital. */
-    on_cube: (file: File, orbital: Orbital) => void
+    /** Loaded wavefunction file; null when only NBO results are shown */
+    wavefunction?: WavefunctionInfo | null
+    nbo?: NboResult | null
+    /** The isosurface currently shown by the cube panel */
+    surface_mesh?: CubeMesh | null
+    /** Receives a generated cube file and how to display it. */
+    on_cube: (file: File, options: CubeDisplayOptions) => void
+    on_overlay?: (overlay: AnalysisOverlayData | null) => void
+    on_charges?: (charges: number[]) => void
     toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]
     pane_props?: ComponentProps<typeof DraggablePane>[`pane_props`]
   } = $props()
 
   const WINDOW = 10
 
+  let tab = $state<Tab>(`orbitals`)
   let spin = $state<OrbitalSpin>(`restricted`)
   let show_all = $state(false)
   let grid = $state<GridQuality>(`medium`)
@@ -45,21 +65,25 @@
   let busy_index = $state<number | null>(null)
   let active_index = $state<number | null>(null)
   let error = $state(``)
+  // Which analysis produced the surface on screen (ESP stats only apply to its own map)
+  let surface_kind = $state<Tab | null>(null)
 
   // Reset view state whenever a new file is loaded
   $effect(() => {
     const wf = wavefunction
-    spin = wf.unrestricted ? `alpha` : `restricted`
+    spin = wf?.unrestricted ? `alpha` : `restricted`
     show_all = false
     active_index = null
     error = ``
+    surface_kind = null
+    tab = wf ? `orbitals` : `nbo`
   })
 
   let spins = $derived(
-    wavefunction.unrestricted ? ([`alpha`, `beta`] as OrbitalSpin[]) : ([`restricted`] as OrbitalSpin[]),
+    wavefunction?.unrestricted ? ([`alpha`, `beta`] as OrbitalSpin[]) : ([`restricted`] as OrbitalSpin[]),
   )
-  let frontier = $derived(wavefunction.frontier[spin])
-  let spin_orbitals = $derived(wavefunction.orbitals.filter((o) => o.spin === spin))
+  let frontier = $derived(wavefunction?.frontier[spin])
+  let spin_orbitals = $derived(wavefunction?.orbitals.filter((o) => o.spin === spin) ?? [])
   let visible = $derived.by(() => {
     if (show_all || !frontier || frontier.homo === null) return spin_orbitals
     const homo = frontier.homo
@@ -68,6 +92,14 @@
   })
   // Highest energy first, like an MO diagram
   let rows = $derived([...visible].reverse())
+
+  const TABS: { id: Tab; label: string; needs_wavefunction: boolean }[] = [
+    { id: `orbitals`, label: `structure.wfa_tab_orbitals`, needs_wavefunction: true },
+    { id: `weak`, label: `structure.wfa_tab_weak`, needs_wavefunction: true },
+    { id: `esp`, label: `structure.wfa_tab_esp`, needs_wavefunction: true },
+    { id: `aim`, label: `structure.wfa_tab_aim`, needs_wavefunction: true },
+    { id: `nbo`, label: `structure.wfa_tab_nbo`, needs_wavefunction: false },
+  ]
 
   async function check_status() {
     status_error = ``
@@ -80,7 +112,7 @@
   }
 
   $effect(() => {
-    if (pane_open && status === null && !status_error) check_status()
+    if (pane_open && wavefunction && status === null && !status_error) check_status()
   })
 
   function on_path_change() {
@@ -89,8 +121,16 @@
     check_status()
   }
 
+  function cube_for(kind: Tab) {
+    return (file: File, options: CubeDisplayOptions) => {
+      surface_kind = kind
+      on_overlay(null)
+      on_cube(file, options)
+    }
+  }
+
   async function show_orbital(orbital: Orbital) {
-    if (busy_index !== null) return
+    if (busy_index !== null || !wavefunction) return
     busy_index = orbital.index
     error = ``
     try {
@@ -106,7 +146,7 @@
         type: `chemical/x-cube`,
       })
       active_index = orbital.index
-      on_cube(file, orbital)
+      cube_for(`orbitals`)(file, {})
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -138,7 +178,22 @@
   {...rest}
 >
   <div class="orb">
-    <h4>{t('structure.orbital_title')}</h4>
+    <h4>{t('structure.wfa_title')}</h4>
+    <div class="orb-tabs" role="tablist">
+      {#each TABS as tb (tb.id)}
+        <button
+          role="tab"
+          class:active={tab === tb.id}
+          aria-selected={tab === tb.id}
+          disabled={tb.needs_wavefunction && !wavefunction}
+          onclick={() => (tab = tb.id)}
+        >
+          {t(tb.label)}
+        </button>
+      {/each}
+    </div>
+
+    {#if wavefunction}
     <div class="orb-file" title={wavefunction.title}>{wavefunction.filename}</div>
     <div class="orb-meta">
       {#if wavefunction.charge !== null}
@@ -152,6 +207,10 @@
       {/if}
     </div>
 
+    {/if}
+
+    <!-- Tabs stay mounted so their results survive switching -->
+    <div class="orb-pane" class:hidden={tab !== `orbitals`}>
     {#if spins.length > 1}
       <div class="orb-spins" role="tablist">
         {#each spins as s}
@@ -220,7 +279,31 @@
     {#if error}
       <div class="orb-error">{error}</div>
     {/if}
+    </div>
 
+    {#if wavefunction}
+      <div class="orb-pane" class:hidden={tab !== `weak`}>
+        <WeakInteractionTab {wavefunction} {grid} {multiwfn_path} on_cube={cube_for(`weak`)} />
+      </div>
+      <div class="orb-pane" class:hidden={tab !== `esp`}>
+        <EspTab
+          {wavefunction}
+          {grid}
+          {multiwfn_path}
+          surface_mesh={surface_kind === `esp` ? surface_mesh : null}
+          on_cube={cube_for(`esp`)}
+          {on_overlay}
+        />
+      </div>
+      <div class="orb-pane" class:hidden={tab !== `aim`}>
+        <AimTab {wavefunction} {multiwfn_path} {on_overlay} />
+      </div>
+    {/if}
+    <div class="orb-pane" class:hidden={tab !== `nbo`}>
+      <NboTab bind:nbo {on_charges} />
+    </div>
+
+    {#if wavefunction && tab !== `nbo`}
     <section class="orb-settings">
       <label>
         <span>{t('structure.orbital_grid')}</span>
@@ -250,6 +333,7 @@
         {/if}
       </div>
     </section>
+    {/if}
   </div>
 </DraggablePane>
 
@@ -258,6 +342,15 @@
   h4 { margin: 0; font-size: 13px; }
   .orb-file { font-weight: 600; overflow-wrap: anywhere; }
   .orb-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-color-muted, #94a3b8); font-size: 11px; }
+  .orb-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040)); }
+  .orb-tabs button {
+    padding: 4px 7px; font-size: 11px; font-family: inherit; background: none; border: none; cursor: pointer;
+    border-bottom: 2px solid transparent; color: var(--text-color-muted, #94a3b8);
+  }
+  .orb-tabs button.active { color: var(--text-color, #eee); border-bottom-color: var(--accent-color, #3b82f6); font-weight: 600; }
+  .orb-tabs button:disabled { opacity: 0.4; cursor: default; }
+  .orb-pane { display: flex; flex-direction: column; gap: 6px; }
+  .orb-pane.hidden { display: none; }
   .orb-spins { display: flex; gap: 4px; }
   .orb-spins button {
     flex: 1; padding: 3px 0; font-size: 12px; cursor: pointer; border-radius: 4px; font-family: inherit;

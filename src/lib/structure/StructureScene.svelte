@@ -35,6 +35,7 @@
   import DashedBond from './DashedBond.svelte'
   import BondEditingIndicators from './BondEditingIndicators.svelte'
   import CubeIsosurface from './CubeIsosurface.svelte'
+  import AnalysisOverlay from './AnalysisOverlay.svelte'
   import FrozenAtomIndicators from './FrozenAtomIndicators.svelte'
   import PencilModeOverlay from './PencilModeOverlay.svelte'
   import AtomImpostors from './AtomImpostors.svelte'
@@ -974,6 +975,8 @@
     clip_radius = 8,
     clip_outside_mode = `transparent` as `hide` | `transparent`,
     clip_outside_opacity = 0.1,
+    // Wavefunction analysis markers (critical points, surface extrema, bond paths)
+    analysis_overlay = null,
     // Cube file isosurface overlay
     cube_positive_mesh = null,
     cube_negative_mesh = null,
@@ -1297,6 +1300,7 @@
     clip_radius?: number
     clip_outside_mode?: `hide` | `transparent`
     clip_outside_opacity?: number
+    analysis_overlay?: import('$lib/wavefunction/overlay').AnalysisOverlayData | null
     // Cube file isosurface overlay
     cube_positive_mesh?: import('$lib/cube').CubeMesh | null
     cube_negative_mesh?: import('$lib/cube').CubeMesh | null
@@ -7910,6 +7914,8 @@
         slice_plane_size={cube_slice_plane_size}
         slice_color={cube_slice_color}
       />
+
+      <AnalysisOverlay overlay={analysis_overlay} />
 
       <!-- Measurement overlays - render from measurements array (multiple independent measurements) -->
       {#if structure?.sites && measurements.length > 0}
