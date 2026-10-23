@@ -20,6 +20,11 @@ import { API_BASE } from '$lib/api/config'
 import { decompress_file, handle_url_drop, open_file, check_tauri } from '$lib/io'
 import { parse_any_structure } from '$lib/structure/parse'
 import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube/parse-cube'
+import {
+  is_wavefunction_file,
+  load_wavefunction,
+  type WavefunctionInfo,
+} from '$lib/wavefunction/api'
 import { upload_h5 } from '$lib/api/dos'
 import { is_acf_dat } from '$lib/structure/parse-charges'
 
@@ -76,6 +81,8 @@ export interface FileHandlerDeps {
   get_on_error: () => ((e: { error_msg: string; filename: string }) => void) | undefined
   /** Bader 电荷文件处理 */
   apply_charges: (content: string, filename: string) => void
+  /** Wavefunction file (.fchk/.molden/.wfn/.wfx) loaded, or null when another file replaces it */
+  set_wavefunction?: (w: WavefunctionInfo | null) => void
 }
 
 // ─── 工具函数 ───
@@ -136,6 +143,13 @@ export function create_file_handlers(deps: FileHandlerDeps) {
     content: string | ArrayBuffer,
     filename: string,
   ): boolean {
+    // Wavefunction files: geometry + orbital list from the backend (async)
+    if (is_wavefunction_file(filename)) {
+      try_handle_wavefunction_file(content, filename)
+      return true
+    }
+    deps.set_wavefunction?.(null)
+
     // CHGCAR 类文件走后端转换路径（异步）
     if (is_chgcar_file(filename)) {
       try_handle_chgcar_file(content, filename)
@@ -221,6 +235,34 @@ export function create_file_handlers(deps: FileHandlerDeps) {
       deps.set_error_msg(`Failed to convert CHGCAR to cube: ${err}`)
       deps.get_on_error()?.({ error_msg: `Failed to convert CHGCAR: ${err}`, filename })
       return true // 仍然是 CHGCAR 文件，只是转换失败
+    } finally {
+      deps.set_loading(false)
+    }
+  }
+
+  /**
+   * Upload a wavefunction file to the backend, show its geometry and hand the
+   * orbital list to the orbital panel. Orbital cubes are produced by Multiwfn
+   * on demand, so the geometry is marked aligned to stay on the cube grid.
+   */
+  async function try_handle_wavefunction_file(content: string | ArrayBuffer, filename: string) {
+    deps.set_loading(true)
+    deps.set_error_msg(undefined)
+    try {
+      const info = await load_wavefunction(content, filename)
+      const base = filename.replace(/\.[^.]+$/, ``)
+      const parsed = parse_any_structure(info.xyz, `${base}.xyz`)
+      if (parsed) {
+        const structure: AnyStructure = Object.assign({}, parsed, { _aligned: true })
+        deps.set_structure(structure)
+        deps.inc_center_camera()
+        emit_file_load(structure, filename, content)
+      }
+      deps.set_wavefunction?.(info)
+    } catch (err) {
+      const error_msg = `Failed to load wavefunction file: ${err instanceof Error ? err.message : err}`
+      deps.set_error_msg(error_msg)
+      deps.get_on_error()?.({ error_msg, filename })
     } finally {
       deps.set_loading(false)
     }
@@ -321,8 +363,12 @@ export function create_file_handlers(deps: FileHandlerDeps) {
           ? new TextDecoder().decode(content)
           : content
 
+        // Wavefunction files: orbital browser
+        if (is_wavefunction_file(filename)) {
+          await try_handle_wavefunction_file(content, filename)
         // CHGCAR 类文件走后端转换路径
-        if (is_chgcar_file(filename)) {
+        } else if (is_chgcar_file(filename)) {
+          deps.set_wavefunction?.(null)
           await try_handle_chgcar_file(content, filename)
         // Bader 电荷文件（ACF.dat）— 叠加到当前结构
         } else if (deps.get_structure() && is_acf_dat(text, filename)) {
@@ -330,6 +376,7 @@ export function create_file_handlers(deps: FileHandlerDeps) {
         } else if (on_file_drop) {
           // 如果有外部 handler，优先交给它
           // 但先尝试 cube 文件
+          deps.set_wavefunction?.(null)
           if (!try_handle_cube_file(text, filename)) {
             on_file_drop(content, filename)
           }
@@ -374,7 +421,7 @@ export function create_file_handlers(deps: FileHandlerDeps) {
       // 浏览器端: 创建隐藏的 file input
       const input = document.createElement(`input`)
       input.type = `file`
-      input.accept = `.cif,.poscar,.vasp,.xyz,.json,.yaml,.yml,.h5,.hdf5,.cube,.cub,.data,.lammps,.xml,*`
+      input.accept = `.cif,.poscar,.vasp,.xyz,.json,.yaml,.yml,.h5,.hdf5,.cube,.cub,.fchk,.fch,.molden,.wfn,.wfx,.data,.lammps,.xml,*`
       input.onchange = async () => {
         const file = input.files?.[0]
         if (!file) return
