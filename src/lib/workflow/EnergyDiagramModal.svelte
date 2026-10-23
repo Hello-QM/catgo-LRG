@@ -1,5 +1,7 @@
 <script lang="ts">
   import EnergyDiagramEditor from './EnergyDiagramEditor.svelte'
+  import EnergeticSpanPanel from './EnergeticSpanPanel.svelte'
+  import DistortionInteractionPanel from './DistortionInteractionPanel.svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('common')
@@ -16,9 +18,22 @@
   } = $props()
 
   let pending_pathways: any[] | null = null
+  // Latest pathways, so switching tabs remounts the editor with the edits intact
+  // and the energetic-span tab analyses what is on screen.
+  let current_pathways = $state.raw<any[]>([])
+  let tab = $state<'diagram' | 'span' | 'di'>('diagram')
+
+  $effect(() => {
+    if (show) {
+      current_pathways = initial_pathways
+      pending_pathways = null
+      tab = `diagram`
+    }
+  })
 
   function handle_change(p: any[]) {
     pending_pathways = p
+    current_pathways = p
   }
 
   function save_and_close() {
@@ -45,8 +60,24 @@
           <button class="ed-close-btn" onclick={close} title={t('common.close')}>&times;</button>
         </div>
       </div>
+      <div class="ed-tabs" role="tablist">
+        <button role="tab" class:active={tab === `diagram`} aria-selected={tab === `diagram`}
+          onclick={() => (tab = `diagram`)}>{t('workflow.ed_tab_diagram')}</button>
+        <button role="tab" class:active={tab === `span`} aria-selected={tab === `span`}
+          onclick={() => (tab = `span`)}>{t('workflow.ed_tab_energetic_span')}</button>
+        <button role="tab" class:active={tab === `di`} aria-selected={tab === `di`}
+          onclick={() => (tab = `di`)}>{t('workflow.ed_tab_distortion_interaction')}</button>
+      </div>
       <div class="ed-body">
-        <EnergyDiagramEditor {initial_pathways} onchange={handle_change} />
+        {#if tab === `diagram`}
+          <EnergyDiagramEditor initial_pathways={current_pathways} onchange={handle_change} />
+        {:else if tab === `span`}
+          <EnergeticSpanPanel pathways={current_pathways} />
+        {/if}
+        <!-- Kept mounted so its inputs survive tab switches -->
+        <div class:ed-hidden={tab !== `di`}>
+          <DistortionInteractionPanel />
+        </div>
       </div>
     </div>
   </div>
@@ -122,6 +153,31 @@
     padding: 4px 8px;
   }
   .ed-close-btn:hover { color: var(--text-color, #fff); }
+  .ed-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 12px;
+    border-bottom: 1px solid light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.08));
+    overflow-x: auto;
+  }
+  .ed-tabs button {
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-color-muted, #94a3b8);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ed-tabs button:hover { color: var(--text-color, #eee); }
+  .ed-tabs button.active {
+    color: var(--text-color, #eee);
+    border-bottom-color: var(--accent-color, #3b82f6);
+    font-weight: 600;
+  }
+  .ed-hidden { display: none; }
   .ed-body {
     flex: 1;
     overflow-y: auto;
